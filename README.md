@@ -39,10 +39,10 @@ docker compose up -d --build
      - /path/to/data/metadata:/erosia-metadata:ro
    ```
 
-5. 在 Emby 的 Compose 文件所在目录执行以下命令，重建容器以应用挂载并加载插件：
+5. 在 Emby 的 Compose 文件所在目录执行以下命令，应用挂载并加载插件：
 
    ```sh
-   docker compose up -d
+   docker compose down && docker compose up -d
    ```
 
 6. 在媒体库的元数据读取器中启用 **erosia**，随后刷新媒体库。
