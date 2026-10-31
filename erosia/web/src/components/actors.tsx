@@ -11,7 +11,7 @@ import {
   TableCell,
 } from "@/components/ui/table";
 import { api, categories } from "@/lib/api";
-import type { LibraryActor, Work } from "@/lib/types";
+import type { ActorLibrarySnapshot, LibraryActor, Work } from "@/lib/types";
 import {
   ArtworkImage,
   useSelection,
@@ -33,6 +33,9 @@ import {
 } from "./shared";
 
 interface Props {
+  scope: string | null;
+  cache: ActorLibrarySnapshot | null;
+  remember: (value: ActorLibrarySnapshot) => void;
   revision: string;
   busy: boolean;
   name?: string;
@@ -43,6 +46,9 @@ interface Props {
   navigate: (path: string) => void;
 }
 export function Actors({
+  scope,
+  cache,
+  remember,
   revision,
   busy,
   name,
@@ -68,12 +74,18 @@ export function Actors({
   const setPageSize = (pageSize: number) =>
     setState((s) => ({ ...s, pageSize, page: 1 }));
   const search = useDebounce(query);
-  const [actors, setActors] = useState<LibraryActor[]>([]);
+  const initial = cache?.scope === scope && cache.query === search ? cache.rows : null;
+  const [actors, setActors] = useState<LibraryActor[]>(initial ?? []);
+  const [loaded, setLoaded] = useState(initial !== null);
   const [loadState, setLoadState] = useState<"loading" | "ready" | "error">(
-    "loading",
+    initial === null ? "loading" : "ready",
   );
   const selection = useSelection();
   const selectedCount = selection.selected.size;
+  const portraitNames = new Set(actors.filter((actor) => actor.portrait_eligible).flatMap((actor) => actor.actors));
+  const portraitSelectionAvailable = selectedCount > 0 && [...selection.selected].every(
+    (name) => portraitNames.has(name),
+  );
   const [pending, setPending] = useState(false);
   useEffect(() => {
     if (name !== undefined) return;
@@ -89,6 +101,8 @@ export function Actors({
         );
         if (!controller.signal.aborted) {
           setActors(rows);
+          setLoaded(true);
+          remember({ scope, query: search, rows });
           setLoadState("ready");
         }
       } catch (error) {
@@ -97,7 +111,7 @@ export function Actors({
       }
     });
     return () => controller.abort();
-  }, [name, search, revision, run]);
+  }, [name, search, revision, run, scope, remember]);
   const rows = actors.filter(
     (a) => filter === "all" || a.portrait_status === filter,
   );
@@ -108,7 +122,7 @@ export function Actors({
     <SelectionCheckbox
       {...selection}
       keys={pageRows
-        .filter((actor) => actor.portrait_eligible && actor.count > 0)
+        .filter((actor) => actor.count > 0)
         .flatMap((actor) => actor.actors)}
       label="选择本页"
     />
@@ -116,7 +130,7 @@ export function Actors({
   const selectActor = (actor: LibraryActor) => (
     <SelectionCheckbox
       {...selection}
-      keys={actor.portrait_eligible && actor.count > 0 ? actor.actors : []}
+      keys={actor.count > 0 ? actor.actors : []}
       label={`选择 ${actor.name}`}
     />
   );
@@ -145,16 +159,28 @@ export function Actors({
         <div className="space-y-4">
           <SummaryHeader
             count={
-              loadState !== "ready" && !actors.length
-                ? undefined
-                : actors.length
+              loaded ? actors.length : undefined
             }
             unit="位演员"
             suffix={selectedCount ? ` · 已选 ${selectedCount}` : ""}
           />
           <div className="flex flex-wrap items-center gap-2">
             <Button
+              variant="outline"
               disabled={pending || !selectedCount}
+              onClick={() => run(async () => {
+                setPending(true);
+                try {
+                  await api("tasks", "POST", {
+                    type: "remap_actors", actor_names: Array.from(selection.selected),
+                  });
+                  await tasksChanged();
+                  navigate("tasks");
+                } finally { setPending(false); }
+              })}
+            >重新映射</Button>
+            <Button
+              disabled={pending || !portraitSelectionAvailable}
               onClick={() =>
                 run(async () => {
                   setPending(true);
@@ -260,9 +286,7 @@ export function Actors({
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {rows
-                    .slice((current - 1) * pageSize, current * pageSize)
-                    .map((a) => (
+                  {pageRows.map((a) => (
                       <TableRow
                         key={a.name}
                         {...rowNavigation(() =>

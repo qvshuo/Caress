@@ -92,8 +92,10 @@ class Scraper:
             report_progress("source", result.status.value, source)
             return result
 
-        # gather preserves route priority independently of completion order.
-        results = await asyncio.gather(*(fetch(source) for source in route))
+        # A failed source must finish cancelling its siblings before this work exits.
+        async with asyncio.TaskGroup() as group:
+            tasks = [group.create_task(fetch(source)) for source in route]
+        results = [task.result() for task in tasks]
         selected = next(
             (r for r in results if r.status == Status.FOUND and r.metadata is not None), None
         )

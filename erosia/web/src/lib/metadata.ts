@@ -1,8 +1,7 @@
-import type { WorkDetail } from "./types";
+import type { Variant, WorkDetail } from "./types";
 
 export const fields = [
   ["title", "标题", "textarea"],
-  ["original_title", "原标题", "textarea"],
   ["plot", "剧情", "textarea"],
   ["release_date", "日期", "text"],
   ["runtime_minutes", "时长分钟", "number"],
@@ -15,6 +14,9 @@ export const fields = [
 ] as const;
 export type FieldKey = (typeof fields)[number][0];
 export type Draft = Record<FieldKey, string>;
+export function variantMetadata(variant: Variant) {
+  return variant.metadata ? { ...variant.metadata, ...variant.processed_fields } : null;
+}
 export function metadataDraft(detail: WorkDetail): Draft {
   const metadata = detail.metadata;
   return Object.fromEntries(

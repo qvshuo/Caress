@@ -19,6 +19,7 @@ class TranslationReport(BaseModel):
     errors: list[dict] = Field(default_factory=list)
     translated_fields: list[str] = Field(default_factory=list)
     original_fields: dict[str, str] = Field(default_factory=dict)
+    title_text: str | None = None
 
 RETRIES = 1
 RETRY_DELAY_SECONDS = 5
@@ -73,6 +74,14 @@ def title_body(value: str, code: str, names: re.Pattern | None) -> str:
     return re.sub(r"\s+", " ", body).strip()
 
 
+def compose_title(code: str, actors, text: str) -> str:
+    return " ".join(part for part in [code, *(actor.name for actor in actors), text] if part)
+
+
+def variant_metadata(variant: dict) -> Metadata:
+    return Metadata.model_validate({**variant["metadata"], **variant.get("processed_fields", {})})
+
+
 class Translator:
     def __init__(self, settings: TranslationSettings, client: httpx.AsyncClient | None = None, *, actor_aliases_file: Path | None = None):
         self.settings = settings
@@ -114,7 +123,7 @@ class Translator:
         contract = {"enabled": settings.enabled, "endpoint": settings.endpoint.rstrip("/"),
                     "model": settings.model, "prompt": PROMPT, "roles": ["system", "user"],
                     "fields": ["title", "plot"], "actor_names": names_digest,
-                    "segmentation": "literal-overlap-v1", "title": "code-actors-stripped-title-v1"}
+                    "segmentation": "literal-overlap-v1", "title": "source-original-code-actors-v2"}
         return pattern, hashlib.sha256(json.dumps(contract, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
     @property
@@ -128,9 +137,13 @@ class Translator:
                 [actor.name for actor in metadata.actors]], ensure_ascii=False).encode()).hexdigest()
         return fingerprint
 
-    async def variant(self, variant: dict, *, fields=("title", "plot")) -> dict:
+    async def variant(self, variant: dict, *, fields=("title", "plot"), title_actors=None) -> dict:
         names, fingerprint = self._rules()
-        metadata = Metadata.model_validate(variant["metadata"])
+        metadata = variant_metadata(variant)
+        if title_actors is not None:
+            metadata.actors = title_actors
+        processed = dict(variant.get("processed_fields", {}))
+        title_text = variant.get("title_text")
         originals = dict(variant.get("original_fields", {}))
         fingerprints = dict(variant.get("translation_fingerprints", {}))
         translated = set(variant.get("translated_fields", []))
@@ -139,16 +152,21 @@ class Translator:
             field_fingerprint = self.field_fingerprint(field, metadata, fingerprint)
             if fingerprints.get(field) == field_fingerprint and field not in errors:
                 continue
-            original = originals.get(field, getattr(metadata, field))
+            original = (variant["metadata"].get("original_title") or variant["metadata"]["title"]) if field == "title" else variant["metadata"].get(field)
+            originals[field] = original
             if not original:
+                processed[field] = original
                 continue
             # Each field owns its source text and attempt; one failure cannot
             # invalidate a successful translation of another field.
-            originals[field] = original
-            if field == "title" and not metadata.original_title:
+            if field == "title":
                 metadata.original_title = original
+                processed["original_title"] = original
             setattr(metadata, field, original)
             report = await self.metadata(metadata, fields=(field,), names=names)
+            processed[field] = getattr(metadata, field)
+            if field == "title":
+                title_text = report.title_text
             fingerprints.pop(field, None)
             translated.discard(field)
             translated.update(report.translated_fields)
@@ -156,7 +174,7 @@ class Translator:
             errors.update({error["field"]: error for error in report.errors})
             if not report.errors:
                 fingerprints[field] = field_fingerprint
-        return {**variant, "metadata": metadata.model_dump(mode="json"),
+        return {**variant, "processed_fields": processed, "title_text": title_text,
                 "translated_fields": sorted(translated), "original_fields": originals,
                 "translation_errors": list(errors.values()), "translation_fingerprints": fingerprints}
 
@@ -239,8 +257,8 @@ class Translator:
                         report.translated_fields.append(field)
                         report.original_fields[field] = value
                     if field == "title":
-                        body = " ".join(part for part in
-                            [metadata.code, *[actor.name for actor in metadata.actors], body] if part)
+                        report.title_text = body
+                        body = compose_title(metadata.code, metadata.actors, body)
                     setattr(metadata, field, body)
                 except (ValueError, httpx.HTTPError) as exc:
                     report.errors.append({"field": field, "error": str(exc)})

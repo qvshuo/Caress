@@ -26,7 +26,7 @@ export function sourceProgress(
   now = Date.now(),
 ) {
   const process = detail.process;
-  if (process?.type === "update_portraits") return idle;
+  if (process?.type === "update_portraits" || process?.type === "remap_actors") return idle;
   const active = process?.status === "running" || process?.status === "pending";
   const current = detail.variants?.find((item) => item.source === source);
   const stored = process?.result?.sources?.find(

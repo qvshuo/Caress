@@ -283,6 +283,16 @@ def crop_poster(data: bytes, box: tuple[int, int, int, int] | None = None, cente
     }
 
 
+def actor_image_index(output: Path) -> dict[str, Path]:
+    folder = output.resolve() / "actors"
+    index = {}
+    if folder.is_dir() and not folder.is_symlink():
+        for image in folder.iterdir():
+            if image.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".gif"} and image.is_file() and not image.is_symlink():
+                index.setdefault(image.stem, image)
+    return index
+
+
 def actor_image(output: Path, name: str, *, index=None) -> Path | None:
     folder = output.resolve() / "actors"
     if (

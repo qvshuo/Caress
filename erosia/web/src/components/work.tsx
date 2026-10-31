@@ -3,12 +3,14 @@ import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Badge } from "@/components/ui/badge";
 import { errorText } from "@/lib/messages";
 import { api, sources, formatDate } from "@/lib/api";
 import {
   fields,
   metadataDraft,
   metadataForm,
+  variantMetadata,
   type Draft,
   type FieldKey,
 } from "@/lib/metadata";
@@ -16,12 +18,12 @@ import type {
   Crop,
   ImageChoice,
   Variant,
+  FieldInputs,
   WorkDetail,
   Work as WorkRecord,
 } from "@/lib/types";
 import {
   ArtworkImage,
-  TranslationOriginal,
   Empty,
   Select,
   Status,
@@ -35,6 +37,7 @@ const CropEditor = lazy(() => import("./crop-editor"));
 type Editor = {
   detail: WorkDetail;
   draft: Draft;
+  inputs: FieldInputs;
   fieldSources: Record<string, string>;
   images: Record<string, ImageChoice>;
   sampleSource?: string;
@@ -82,6 +85,15 @@ export function Work({
     setEditor({
       detail,
       draft: metadataDraft(detail),
+      inputs: {
+        original_fields: {
+          ...(detail.metadata?.original_title != null ? { title: detail.metadata.original_title } : {}),
+          ...detail.selection?.original_fields,
+        },
+        actor_mappings: detail.selection?.actor_mappings ?? [],
+        title_text: detail.selection?.title_text ?? null,
+        mapping_fingerprint: detail.selection?.mapping_fingerprint ?? "",
+      },
       fieldSources: {},
       images: {},
     });
@@ -188,12 +200,20 @@ export function Work({
       "POST",
       {},
     );
-    const next = metadataDraft({ ...detail, metadata: variant.metadata });
+    const next = metadataDraft({ ...detail, metadata: variantMetadata(variant) });
     setEditor((current) =>
       current
         ? {
             ...current,
             draft: { ...current.draft, [key]: next[key] },
+            inputs: {
+              ...current.inputs,
+              original_fields: ["title", "plot", "actors"].includes(key)
+                ? { ...current.inputs.original_fields, [key]: variant.original_fields?.[key] ?? null }
+                : current.inputs.original_fields,
+              ...(key === "title" ? { title_text: variant.title_text ?? null } : {}),
+              ...(key === "actors" ? { actor_mappings: variant.actor_mappings ?? [], mapping_fingerprint: variant.mapping_fingerprint ?? "" } : {}),
+            },
             fieldSources: { ...current.fieldSources, [key]: source },
             detail: {
               ...current.detail,
@@ -216,6 +236,7 @@ export function Work({
     const result = await api<WorkDetail>(`${base}/metadata`, "PUT", {
       ...metadataForm(draft),
       field_sources: editor!.fieldSources,
+      field_inputs: editor!.inputs,
       ...(editor!.sampleSource ? { sample_source: editor!.sampleSource } : {}),
       image_choices: editor!.images,
     });
@@ -357,30 +378,21 @@ export function Work({
   const renderField = ([key, label, type]: (typeof fields)[number]) => {
     const source = sourceOf(key);
     const options: Record<string, string> = {
-      unknown: "来源未知",
       custom: "自定义",
       ...Object.fromEntries(
         variants
-          .filter((v) => v.status === "found")
+          .filter((v) => v.status === "found" && v.processed_fields !== undefined)
           .map((v) => [v.source, sources[v.source]!]),
       ),
     };
-    if (!(source in options)) options[source] = sources[source] ?? source;
+    if (!(source in options)) options[source] = sources[source] ?? (source === "unknown" ? "来源未知" : source);
     const sourceVariant = variants.find((v) => v.source === source);
     const fieldErrors = editor.fieldSources[key]
       ? sourceVariant?.translation_errors
       : detail.last_result?.translation_errors;
-    const translated =
-      source !== "custom" &&
-      (editor.fieldSources[key]
-        ? sourceVariant?.translated_fields
-        : detail.selection?.translated_fields
-      )?.includes(key);
-    const original = (
-      editor.fieldSources[key]
-        ? sourceVariant?.original_fields
-        : detail.selection?.original_fields
-    )?.[key];
+    const tag = key === "actors" ? "主名" : ["title", "plot"].includes(key) ? "译" : null;
+    const original = editor.inputs.original_fields[key];
+    const originalText = Array.isArray(original) ? original.map((actor) => actor.name).join("\n") : original ?? "";
     const change = (value: string) =>
       setEditor({
         ...editor,
@@ -394,9 +406,7 @@ export function Work({
             <label htmlFor={`metadata-${key}`} className="text-sm font-medium">
               {label}
             </label>
-            {translated && (
-              <TranslationOriginal label={label} text={original} />
-            )}
+            {tag && <Badge variant="secondary" size="counter">{tag}</Badge>}
           </div>
           <Select
             label={`${label}来源`}
@@ -409,7 +419,7 @@ export function Work({
         {["textarea", "list"].includes(type) ? (
           <Textarea
             id={`metadata-${key}`}
-            aria-label={label}
+            aria-label={tag ? `${label}${tag}` : label}
             disabled={locked}
             required={key === "title"}
             rows={key === "plot" ? 6 : 2}
@@ -427,6 +437,28 @@ export function Work({
             placeholder={key === "release_date" ? "2026年10月24日" : undefined}
             onChange={(e) => change(e.target.value)}
           />
+        )}
+        {tag && (
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <label htmlFor={`metadata-${key}-original`} className="text-sm font-medium">{label}</label>
+              <Select
+                label={`${label}原文来源`}
+                value={source}
+                onChange={(id) => perform(() => chooseField(key, id))}
+                disabled={locked}
+                options={options}
+              />
+            </div>
+            <Textarea
+              id={`metadata-${key}-original`}
+              aria-label={label}
+              readOnly
+              rows={key === "plot" ? 6 : 2}
+              value={originalText}
+              placeholder={original === undefined ? "未保留原文" : "来源未提供"}
+            />
+          </div>
         )}
         {source !== "custom" &&
           fieldErrors
@@ -507,7 +539,6 @@ export function Work({
               title="当前文件问题"
               active={detail.status === "running" || detail.status === "queued"}
             />
-            {renderField(fields[0])}
             <section aria-label="作品图片" className="min-w-0 space-y-6">
               {imageGroups.map((group) => {
                 const current = groupSource(group);
@@ -603,7 +634,7 @@ export function Work({
               )}
 
               <div className="space-y-4">
-                {fields.slice(1).map(renderField)}
+                {fields.map(renderField)}
               </div>
               <div className="space-y-2 break-all border-t pt-4 pb-6 text-sm text-muted-foreground">
                 <p className="font-medium text-foreground">文件路径</p>

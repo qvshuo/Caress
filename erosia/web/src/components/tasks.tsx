@@ -38,6 +38,7 @@ const taskTypes: Record<string, string> = {
   fill_missing: "补齐缺失",
   refresh: "重新刮削",
   update_portraits: "更新头像",
+  remap_actors: "重新映射",
 };
 
 const portraitOutcomes: Record<string, string> = {
@@ -102,6 +103,7 @@ export function Diagnostics({
     translation: "翻译",
     images: "图片",
     portraits: "头像",
+    mapping: "演员映射",
   };
   const incomplete = (report.incomplete_stages ?? []).filter(
     (stage) => !active || report.stages?.[stage] !== "pending",
@@ -136,6 +138,7 @@ export function Diagnostics({
         ? "部分阶段未完成"
         : "",
   ].filter(Boolean);
+  const actorUpdates = taskRecord ? (report.actor_updates ?? []) : [];
   const missingPortraits = taskRecord
     ? (report.portraits ?? [])
         .filter((item) => item.status === "not_found")
@@ -152,7 +155,7 @@ export function Diagnostics({
         )
         .map((issue) => issue.name)
     : [];
-  if (!notices.length && !missingPortraits.length && !preservedNames.length)
+  if (!notices.length && !actorUpdates.length && !missingPortraits.length && !preservedNames.length)
     return null;
   return (
     <Alert
@@ -166,6 +169,9 @@ export function Diagnostics({
         {taskRecord && <p>记录当次结果，后续修复不改写</p>}
         {[...new Set(notices)].map((notice) => (
           <p key={notice}>{notice}</p>
+        ))}
+        {actorUpdates.map((item) => (
+          <p key={item.from}>演员：{item.from} → {item.to}</p>
         ))}
         {missingPortraits.length > 0 && (
           <p>未匹配头像：{[...new Set(missingPortraits)].join("、")}</p>

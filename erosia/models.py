@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 from enum import StrEnum
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -58,6 +58,13 @@ class Actor(BaseModel):
     name: str
 
 
+class ActorMapping(BaseModel):
+    original_name: str
+    name: str
+    actor_id: str | None = None
+    type: int | None = None
+
+
 class Artwork(BaseModel):
     url: str
     role: Literal["cover", "poster", "sample"]
@@ -95,7 +102,7 @@ class Candidate(BaseModel):
 
 class SourceResult(BaseModel):
     translated_fields: list[str] = Field(default_factory=list)
-    original_fields: dict[str, str] = Field(default_factory=dict)
+    original_fields: dict[str, Any] = Field(default_factory=dict)
     elapsed_seconds: float | None = None
     source: SourceId
     requested_code: str
@@ -137,3 +144,7 @@ class SourceVariant(SourceResult):
     fetched_at: datetime | None = None
     translation_fingerprints: dict[str, str] = Field(default_factory=dict)
     translation_errors: list[dict] = Field(default_factory=list)
+    processed_fields: dict[str, Any] = Field(default_factory=dict)
+    actor_mappings: list[ActorMapping] = Field(default_factory=list)
+    mapping_fingerprint: str = ""
+    title_text: str | None = None

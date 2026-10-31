@@ -16,14 +16,14 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from . import __version__
 from .contract import EDITABLE_FIELDS
 from .actors import ActorAliases, actor_type, library_actors
 from .directories import Directories
 from .images import crop_poster, actor_image, Gfriends, save_image_choices, selected_image, validate_resources
-from .models import Metadata, SourceId
+from .models import ActorMapping, Metadata, SourceId
 from .nfo import (
     existing_nfo,
     media_stems,
@@ -32,7 +32,7 @@ from .nfo import (
     target_folder,
     write_nfo_files,
 )
-from .processing import complete_report, resolve_actor_names
+from .processing import complete_report, prepare_variant, manual_fields
 from .http import FetchError
 from .scanner import Work
 from .runtime import now
@@ -40,7 +40,7 @@ from .settings import SOURCE_INTERVALS, Settings, TranslationSettings
 from .sources import SOURCES
 from .storage import atomic_write, file_transaction
 from .tasks import TaskQueue, TaskRequest
-from .translation import Translator
+from .translation import Translator, variant_metadata
 
 
 def redact(value: object) -> object:
@@ -64,6 +64,14 @@ class CropRequest(BaseModel):
     box: tuple[int, int, int, int] | None = None
     center: bool = False
     fingerprint: str | None = None
+
+
+class FieldInputs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    original_fields: dict = Field(default_factory=dict)
+    actor_mappings: list[ActorMapping] = Field(default_factory=list)
+    title_text: str | None = None
+    mapping_fingerprint: str = ""
 
 
 def create_app(
@@ -352,6 +360,8 @@ def create_app(
         if process:
             if sources := (process.get("result") or {}).get("sources"):
                 route_sources = [source["source"] for source in sources]
+            if process["type"] == "remap_actors":
+                route_sources = []
         selection = service.runtime.selection(row["code"])
         return {
             **row,
@@ -386,6 +396,9 @@ def create_app(
     @app.put("/api/works/{key}/metadata")
     async def save_metadata(key: str, value: dict):
         service = runner()
+        inputs = FieldInputs.model_validate(value.pop("field_inputs")) if "field_inputs" in value else None
+        if inputs and set(inputs.original_fields) - {"title", "plot", "actors"}:
+            raise HTTPException(422, "invalid original fields")
         fields = set(EDITABLE_FIELDS)
         field_sources = value.pop("field_sources", {})
         image_choices = value.pop("image_choices", {})
@@ -422,14 +435,25 @@ def create_app(
                     raise HTTPException(422, "剧照来源不可用")
                 image_choices = {role: choice for role, choice in image_choices.items() if not re.fullmatch(r"fanart[1-9][0-9]{0,2}", role)}
                 image_choices.update({f"fanart{i+1}": {"source": sample_source, "index": index} for i, index in enumerate(indexes)})
-            metadata = Metadata.model_validate({"code": key, "source_url": "", **value})
+            metadata = Metadata.model_validate({"code": key, "source_url": "", "original_title": previous.get("original_title"), **value})
+            if inputs:
+                validated_inputs = Metadata.model_validate({**metadata.model_dump(), **inputs.original_fields}).model_dump(mode="json")
+                inputs.original_fields = {key: validated_inputs[key] for key in inputs.original_fields}
             if not metadata.title.strip():
                 raise HTTPException(422, "title must not be empty")
             before = Metadata.model_validate(previous)
             changed = set(field_sources) | {field for field in fields if getattr(metadata, field) != getattr(before, field)}
             provenance = dict(selection.get("field_sources", {}))
             translated = set(selection.get("translated_fields", []))
-            originals = dict(selection.get("original_fields", {}))
+            pinned = inputs.model_dump(mode="json") if inputs else selection
+            originals = dict(pinned.get("original_fields", {}))
+            mappings = pinned.get("actor_mappings", [])
+            mapping_fingerprint = pinned.get("mapping_fingerprint", "")
+            title_text = pinned.get("title_text")
+            if "title" in changed and field_sources.get("title", "custom") == "custom":
+                title_text = None
+            if "title" in originals and "title" in changed:
+                metadata.original_title = originals["title"]
             fingerprints = dict(selection.get("translation_fingerprints", {}))
             errors = {error["field"]: error for error in service.runtime.results.get(key, {}).get("translation_errors", [])}
             for field in changed:
@@ -439,19 +463,22 @@ def create_app(
                     raise HTTPException(422, "字段来源不可用")
                 provenance[field] = source
                 translated.discard(field)
-                originals.pop(field, None)
                 fingerprints.pop(field, None)
                 errors.pop(field, None)
                 if source != "custom":
-                    # A newer candidate may have arrived since preview. The form
-                    # wins; only matching text can inherit that candidate's provenance.
-                    if variant["metadata"].get(field) == value[field]:
+                    # Preview inputs stay pinned when later candidates arrive.
+                    same_input = inputs is None or field not in {"title", "plot", "actors"} or inputs.original_fields.get(field) == variant.get("original_fields", {}).get(field)
+                    if same_input and variant_metadata(variant).model_dump(mode="json").get(field) == value[field]:
                         if field in variant.get("translated_fields", []):
                             translated.add(field)
-                        if field in variant.get("original_fields", {}):
-                            originals[field] = variant["original_fields"][field]
-                        elif field in ("title", "plot") and value[field]:
-                            originals[field] = value[field]
+                        if inputs is None and field in ("title", "plot", "actors"):
+                            originals[field] = variant.get("original_fields", {}).get(field)
+                        if inputs is None and field == "title":
+                            metadata.original_title = originals[field]
+                            title_text = variant.get("title_text")
+                        if inputs is None and field == "actors":
+                            mappings = variant.get("actor_mappings", [])
+                            mapping_fingerprint = variant.get("mapping_fingerprint", "")
                         if field in variant.get("translation_fingerprints", {}):
                             fingerprints[field] = variant["translation_fingerprints"][field]
                         errors.update({error["field"]: error for error in variant.get("translation_errors", []) if error["field"] == field})
@@ -470,7 +497,12 @@ def create_app(
                     selection["image_choices"] = {**selection.get("image_choices", {}), **{role: {"source": "custom"} if choice.get("box") is not None or choice.get("file") else choice for role, choice in image_choices.items()}}
                 write_nfo_files(service.output, work, serialize_nfo(metadata))
                 selection.update(field_sources=provenance,
-                    translated_fields=sorted(translated), original_fields=originals, translation_fingerprints=fingerprints)
+                    translated_fields=sorted(translated), original_fields=originals, translation_fingerprints=fingerprints,
+                    manual_fields=sorted(manual_fields(selection) | changed), actor_mappings=mappings,
+                    mapping_fingerprint=mapping_fingerprint, title_text=title_text,
+                    manual_image_roles=sorted(set(selection.get("manual_image_roles", [])) | set(image_choices)))
+                if sample_source:
+                    selection["manual_image_roles"] = sorted(set(selection["manual_image_roles"]) | {"samples"})
                 report = {**service.runtime.results.get(key, {}), "status": "found"}
                 report.pop("error", None)
                 report["stages"] = {**report.get("stages", {}), "metadata": "success"}
@@ -505,11 +537,9 @@ def create_app(
             raise ValueError("该作品正在刮削")
         async with service.task_lock, service.work_lock(key):
             variant = next((v for v in service.runtime.variants(key) if v["source"] == source), None)
-            if not variant or variant["status"] != "found" or not variant.get("metadata"):
+            if not variant or variant["status"] != "found" or not variant.get("metadata") or "processed_fields" not in variant:
                 raise HTTPException(422, "source variant unavailable")
-            metadata = Metadata.model_validate(variant["metadata"])
-            resolve_actor_names(metadata, ActorAliases.load(service.settings.actor_aliases_file), service.runtime.work(key).category)
-            variant["metadata"] = metadata.model_dump(mode="json")
+            variant, _issues = prepare_variant(variant, ActorAliases.load(service.settings.actor_aliases_file), service.runtime.work(key).category, code=key)
             await service.translator.verify()
             variant = await service.translator.variant(variant)
             service.runtime.save_variant(key, variant)

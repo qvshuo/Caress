@@ -33,6 +33,7 @@ import type {
   Settings as Preferences,
   Task,
   Work as WorkRecord,
+  ActorLibrarySnapshot,
 } from "@/lib/types";
 
 const Actors = lazy(() =>
@@ -83,6 +84,7 @@ function App() {
   const previousTasks = useRef<Task[]>([]);
   const workCursor = useRef<string | null>(null);
   const [actorRevision, setActorRevision] = useState(0);
+  const [actorCache, setActorCache] = useState<ActorLibrarySnapshot | null>(null);
   const [notice, setNotice] = useState("");
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const confirmationRef = useRef<Confirmation | null>(null);
@@ -139,19 +141,24 @@ function App() {
       return;
     }
     const next = poll ? previousTasks.current.map((task) => byId.get(task.id) ?? task) : incoming;
-    const ids = [...new Set([...previousTasks.current, ...next].filter(active).map((task) => task.id))];
+    const previousById = new Map(previousTasks.current.map((task) => [task.id, task]));
+    const changed = next.filter((task) => {
+      const before = previousById.get(task.id);
+      return task.progress !== before?.progress || task.status !== before?.status;
+    });
+    const ids = [...new Set([
+      ...[...previousTasks.current, ...next].filter(active).map((task) => task.id),
+      ...changed.filter((task) => task.progress).map((task) => task.id),
+    ])];
     if (ids.length) {
+      const cursor = ids.some((id) => !previousById.has(id)) ? null : workCursor.current;
       const updates = await api<{ time: string; works: WorkRecord[] }>(
-        `works/updates?task_ids=${ids.join(",")}${workCursor.current ? `&after=${encodeURIComponent(workCursor.current)}` : ""}`,
+        `works/updates?task_ids=${ids.join(",")}${cursor ? `&after=${encodeURIComponent(cursor)}` : ""}`,
       );
       mergeWorks(updates.works);
       workCursor.current = updates.time;
     }
-    const previousById = new Map(previousTasks.current.map((task) => [task.id, task]));
-    if (next.some((task) => {
-      const before = previousById.get(task.id);
-      return task.progress !== before?.progress || task.status !== before?.status;
-    })) setActorRevision((value) => value + 1);
+    if (changed.length) setActorRevision((value) => value + 1);
     previousTasks.current = next;
     setTasks(next);
     setTick((value) => value + 1);
@@ -301,6 +308,9 @@ function App() {
             ))}
           {tab === "actors" && (settings.configured ? (
             <Actors
+              scope={settings.metadata_directory}
+              cache={actorCache}
+              remember={setActorCache}
               revision={String(actorRevision)}
               busy={busy}
               name={

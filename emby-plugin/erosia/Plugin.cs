@@ -13,11 +13,10 @@ namespace erosia;
 
 public sealed class PluginOptions : EditableOptionsBase
 {
-    public override string EditorTitle => "erosia";
+    public override string EditorTitle => "";
     public override string EditorDescription => "";
 
     [DisplayName("元数据目录")]
-    [Description("选择 Emby 可访问的元数据目录。")]
     [EditFolderPicker]
     public string MetadataDirectory { get; set; } = "/erosia-metadata";
 

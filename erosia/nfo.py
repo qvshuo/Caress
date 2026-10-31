@@ -88,8 +88,10 @@ def target_folder(output: Path, key: str) -> Path:
 def read_nfo(path: Path, code: str) -> Metadata:
     if path.is_symlink():
         raise ValueError("NFO must not be a symlink")
-    data = path.read_bytes()
-    if len(data) > 4 * 1024 * 1024 or b"<!DOCTYPE" in data.upper() or b"<!ENTITY" in data.upper():
+    limit = 4 * 1024 * 1024
+    with path.open("rb") as stream:
+        data = stream.read(limit + 1)
+    if len(data) > limit or b"<!DOCTYPE" in data.upper() or b"<!ENTITY" in data.upper():
         raise ValueError("unsafe or oversized NFO")
     try:
         root = ET.fromstring(data)

@@ -4,7 +4,7 @@
     <AssemblyName>erosia</AssemblyName>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
-    <Version>1.4.1</Version>
+    <Version>1.5.0</Version>
     <Description>Local erosia metadata and images for Emby movies and actors</Description>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>$(NoWarn);1591</NoWarn>

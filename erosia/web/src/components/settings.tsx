@@ -65,11 +65,6 @@ export function Settings({
   const changed =
     JSON.stringify(draft) !== JSON.stringify(settingsDraft(settings));
   useEffect(() => {
-    if (!testResult) return;
-    const timer = setTimeout(() => setTestResult(null), 6000);
-    return () => clearTimeout(timer);
-  }, [testResult]);
-  useEffect(() => {
     reportEdit({ dirty: changed, saving: pending });
     return () => reportEdit({ dirty: false, saving: false });
   }, [changed, pending, reportEdit]);
@@ -258,12 +253,23 @@ export function Settings({
                 role="status"
                 className={`rounded-md border p-3 text-sm ${testResult.valid ? "border-emerald-500/30 bg-emerald-500/5" : "border-destructive/30 bg-destructive/5 text-destructive"}`}
               >
-                <p>
-                  {errorText(testResult.message)}
-                  {testResult.elapsed_seconds !== undefined
-                    ? ` · ${testResult.elapsed_seconds.toFixed(2)} 秒`
-                    : ""}
-                </p>
+                <div className="flex items-start justify-between gap-3">
+                  <p className="min-w-0 break-words">
+                    {errorText(testResult.message)}
+                    {testResult.elapsed_seconds !== undefined
+                      ? ` · ${testResult.elapsed_seconds.toFixed(2)} 秒`
+                      : ""}
+                  </p>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="关闭测试结果"
+                    onClick={() => setTestResult(null)}
+                  >
+                    <X />
+                  </Button>
+                </div>
                 {testResult.sample && (
                   <p className="mt-2 text-foreground">{testResult.sample}</p>
                 )}

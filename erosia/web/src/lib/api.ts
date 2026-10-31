@@ -77,6 +77,7 @@ export const statuses: Record<string, string> = {
   unsupported: "不支持",
 };
 export const stages: Record<string, string> = {
+  mapping: "映射演员",
   translation: "翻译文本",
   metadata: "保存元数据",
   images: "下载图片",

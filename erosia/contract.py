@@ -5,4 +5,4 @@ NFO_FIELDS = {
     "directors": "director", "studio": "studio", "series": "set",
     "genres": "genre", "tags": "tag", "code": "uniqueid",
 }
-EDITABLE_FIELDS = tuple(field for field in NFO_FIELDS if field != "code")
+EDITABLE_FIELDS = tuple(field for field in NFO_FIELDS if field not in {"code", "original_title"})

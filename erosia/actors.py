@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import unicodedata
 from functools import lru_cache
 from pathlib import Path
 
-from .models import Category
+from .models import Actor, Category
 
 
 def comparison_name(name: str) -> str:
@@ -27,6 +28,8 @@ class ActorAliases:
         self.actors = actors
         self._owners = {None: {}, 0: {}, 1: {}}
         self._records = {}
+        self._record_ids = {}
+        self.fingerprint = hashlib.sha256(json.dumps(actors, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
         self.all_names = set()
         for ident, record in actors.items():
             if (
@@ -49,6 +52,7 @@ class ActorAliases:
                 raise ValueError("actor mapping requires ID keys and type/name records with optional name_zht/other_name")
             primary = record["name"]
             self._records.setdefault(primary, []).append(record)
+            self._record_ids.setdefault(primary, []).append(ident)
             for name in self.record_names(record):
                 self.all_names.add(name)
                 for kind in (None, record["type"]):
@@ -88,6 +92,15 @@ class ActorAliases:
         matches = self.candidates(name, kind)
         return matches[0] if len(matches) == 1 else None
 
+    def resolve_id(self, name: str, kind: int | None = None) -> str | None:
+        primary = self.resolve(name, kind)
+        if primary is None:
+            return None
+        ids = self._record_ids[primary]
+        typed = [ident for ident in ids if self.actors[ident]["type"] == kind]
+        matches = typed or ids
+        return matches[0] if len(matches) == 1 else None
+
     def aliases_for(self, name: str, kind: int | None = None) -> list[str]:
         primary = self.resolve(name, kind)
         if primary is None:
@@ -107,16 +120,31 @@ class ActorAliases:
         return pending
 
 
+def map_actor_names(actors: list[Actor], names: ActorAliases, kind=None, pinned=()):
+    previous = {row["original_name"]: row for row in pinned}
+    mapped, mappings, issues, seen = [], [], [], set()
+    for actor in actors:
+        ident = previous.get(actor.name, {}).get("actor_id")
+        if ident not in names.actors:
+            ident = names.resolve_id(actor.name, kind)
+        record = names.actors.get(ident)
+        primary = record["name"] if record else names.resolve(actor.name, kind)
+        name = primary or actor.name
+        mappings.append({"original_name": actor.name, "name": name, "actor_id": ident,
+                         "type": record["type"] if record else kind})
+        if not primary and len(candidates := names.candidates(actor.name, kind)) > 1:
+            issues.append({"name": actor.name, "type": kind, "status": "ambiguous", "candidates": candidates})
+        if name not in seen:
+            mapped.append(Actor(name=name))
+            seen.add(name)
+    return mapped, mappings, issues
+
+
 def library_actors(works, output: Path, names: ActorAliases, query: str = "") -> list[dict]:
-    from .images import actor_image
+    from .images import actor_image, actor_image_index
     from .nfo import existing_nfo, read_nfo
 
-    folder = output.resolve() / "actors"
-    image_index = {}
-    if folder.is_dir() and not folder.is_symlink():
-        for image in folder.iterdir():
-            if image.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".gif"} and image.is_file() and not image.is_symlink():
-                image_index.setdefault(image.stem, image)
+    image_index = actor_image_index(output)
     invalid_names = set()
     portraits = {}
 

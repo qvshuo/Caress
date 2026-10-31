@@ -28,7 +28,6 @@ import {
 } from "@/components/ui/select";
 import {
   Dialog,
-  DialogTrigger,
   DialogContent,
   DialogHeader,
   DialogTitle,
@@ -51,10 +50,11 @@ export function SummaryHeader({
 }) {
   return (
     <div className="flex min-h-9 flex-wrap items-center justify-between gap-3">
-      <p className="text-base leading-6 font-medium tabular-nums">
-        {count ?? "—"} {unit}
-        {suffix}
-      </p>
+      {count !== undefined && (
+        <p className="text-base leading-6 font-medium tabular-nums">
+          {count} {unit}{suffix}
+        </p>
+      )}
       {children}
     </div>
   );
@@ -205,40 +205,6 @@ export function Pagination({
     </div>
   );
 }
-export function TranslationOriginal({
-  label,
-  text,
-}: {
-  label: string;
-  text?: string;
-}) {
-  return (
-    <Dialog>
-      <DialogTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="xs"
-          aria-label={`查看${label}原文`}
-        >
-          译
-        </Button>
-      </DialogTrigger>
-      <DialogContent
-        aria-describedby={undefined}
-        className="max-h-[85dvh] overflow-y-auto"
-      >
-        <DialogHeader>
-          <DialogTitle>{label}原文</DialogTitle>
-        </DialogHeader>
-        <p className="whitespace-pre-wrap break-words text-sm">
-          {text ?? "未保留原文"}
-        </p>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 export function ArtworkImage({
   src,
   alt,

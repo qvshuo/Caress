@@ -12,6 +12,23 @@ export interface Work {
 export interface Actor {
   name: string;
 }
+export interface ActorMapping {
+  original_name: string;
+  name: string;
+  actor_id: string | null;
+  type: number | null;
+}
+export interface ActorLibrarySnapshot {
+  scope: string | null;
+  query: string;
+  rows: LibraryActor[];
+}
+export interface FieldInputs {
+  original_fields: Record<string, string | Actor[] | null>;
+  actor_mappings: ActorMapping[];
+  title_text: string | null;
+  mapping_fingerprint: string;
+}
 export interface Metadata {
   source_url?: string;
   external_id?: string | null;
@@ -41,6 +58,7 @@ export interface SourceReport {
   sample_count?: number;
 }
 export interface Report {
+  actor_updates?: { from: string; to: string; actor_id: string | null }[];
   error?: string;
   warnings?: string[];
   sources?: SourceReport[];
@@ -59,18 +77,19 @@ export interface ProgressEvent {
   message?: string | null;
   status: string;
 }
-export interface Variant extends SourceReport {
+export interface Variant extends SourceReport, Partial<FieldInputs> {
   translation_errors?: { field: string; error: string }[];
   metadata: Metadata | null;
   translated_fields?: string[];
-  original_fields?: Record<string, string>;
+  processed_fields?: Partial<Metadata>;
 }
-export interface Selection {
+export interface Selection extends Partial<FieldInputs> {
   field_sources?: Record<string, string>;
   image_choices?: Record<string, ImageChoice>;
   image_source?: string;
   translated_fields?: string[];
-  original_fields?: Record<string, string>;
+  manual_fields?: string[];
+  manual_image_roles?: string[];
 }
 export interface WorkDetail extends Work {
   process?: TaskItem & {

@@ -3,6 +3,7 @@ import fcntl
 import logging
 import sqlite3
 import uuid
+from contextlib import AsyncExitStack
 from collections import Counter
 from typing import Literal
 from urllib.parse import quote
@@ -12,13 +13,13 @@ from pydantic import BaseModel, ConfigDict, Field
 from .actors import ActorAliases, actor_type, library_actors
 from .catalog import CatalogRules
 from .engine import Scraper
-from .images import Gfriends
+from .images import Gfriends, actor_image_index
 from .http import WebClient
 from .logging import progress, work_code
 from .logging import task_id as log_task_id
 from .models import Actor, Category
 from .nfo import existing_nfo, media_stems, nfo_paths, read_nfo, target_folder
-from .processing import complete_report, process_work, retry_work, retry_task_report
+from .processing import complete_report, process_work, remap_work, retry_work, retry_task_report
 from .runtime import RuntimeStore, now, runtime_directory
 from .scanner import scan, validate_roots
 from .settings import Settings
@@ -33,9 +34,11 @@ class TaskRequest(BaseModel):
         "fill_missing",
         "refresh",
         "update_portraits",
+        "remap_actors",
     ]
     codes: list[str] = Field(default_factory=list)
     actor_names: list[str] = Field(default_factory=list)
+    actor_ids: list[str] = Field(default_factory=list)
     retry_only: bool = False
 
 
@@ -219,28 +222,46 @@ class TaskQueue:
         if self.task_lock.locked() and not self.active():
             raise ValueError("cannot create tasks while metadata is being edited")
         validate_roots(self.settings.media_directories, self.output)
+        if request.actor_ids and request.type != "remap_actors":
+            raise ValueError("actor_ids is only supported for actor remapping")
         eligible = {
             m["code"]
             for m in self.runtime.works()
             if m["status"] not in ("invalid_key", "conflict")
         }
-        if request.type == "update_portraits":
+        if request.type in ("update_portraits", "remap_actors"):
+            names = ActorAliases.load(self.settings.actor_aliases_file)
             actors = library_actors([self.runtime.work(code) for code in eligible], self.output,
-                                   ActorAliases.load(self.settings.actor_aliases_file))
-            eligible_actors = {actor["name"]: actor for actor in actors if actor["portrait_eligible"]}
-            selected_names = set(request.actor_names) if request.actor_names else set(eligible_actors)
+                                   names)
+            eligible_actors = {actor["name"]: actor for actor in actors
+                               if request.type == "remap_actors" or actor["portrait_eligible"]}
+            selected_names = set(request.actor_names)
+            if request.type == "remap_actors":
+                # Pin identities across predecessor renames and partial retries.
+                selected_ids = set(request.actor_ids)
+                selected_ids.update(ident for name in selected_names if (ident := names.resolve_id(name)))
+                for code in eligible:
+                    for row in self.runtime.selection(code).get("actor_mappings", []):
+                        if row["name"] in selected_names or row.get("actor_id") in selected_ids:
+                            selected_names.add(row["name"])
+                            if row.get("actor_id"):
+                                selected_ids.add(row["actor_id"])
+                if request.retry_only:
+                    selected_names.intersection_update(eligible_actors)
             if not selected_names or selected_names - eligible_actors.keys():
                 raise ValueError("no eligible actors or requested actor is unavailable")
             eligible = {code for name in selected_names for code in eligible_actors[name]["codes"]}
         elif request.actor_names:
-            raise ValueError("actor_names is only supported for portrait updates")
+            raise ValueError("actor_names is only supported for actor tasks")
         keys = sorted(set(request.codes) if request.codes else eligible)
         if not keys or any(k not in eligible for k in keys):
             raise ValueError("no eligible works or requested directory is invalid/conflicting")
         params = request.model_dump(mode="json")
         params["codes"] = keys
-        if request.type == "update_portraits":
+        if request.type in ("update_portraits", "remap_actors"):
             params["actor_names"] = sorted(selected_names)
+        if request.type == "remap_actors":
+            params["actor_ids"] = sorted(selected_ids)
         ident = uuid.uuid4().hex
         task = {
             "id": ident,
@@ -333,13 +354,19 @@ class TaskQueue:
         try:
             async with self.task_lock:
                 await self.apply_pending_settings()
-            if request.type != "update_portraits":
+            if request.type in ("fill_missing", "refresh"):
                 await self.translator.verify(force=True)
             names = ActorAliases.load(self.settings.actor_aliases_file)
             self.runtime.save_issues(names.pending(self.runtime.issues))
-            async with self.scraper_factory(self.settings) as scraper, Gfriends(self.settings, names, self.output) as portraits:
-                if isinstance(scraper.client, WebClient):
-                    scraper.client.runtime = self.runtime
+            async with AsyncExitStack() as stack:
+                scraper = portraits = None
+                if request.type != "remap_actors":
+                    scraper = await stack.enter_async_context(self.scraper_factory(self.settings))
+                    portraits = await stack.enter_async_context(Gfriends(self.settings, names, self.output))
+                    if isinstance(scraper.client, WebClient):
+                        scraper.client.runtime = self.runtime
+                else:
+                    portraits = actor_image_index(self.output)
                 async def process_item(item):
                     async with self.work_lock(item["code"]):
                         self._running_codes.add(item["code"])
@@ -365,7 +392,7 @@ class TaskQueue:
                         self.runtime.save_task(task, item)
 
                     previous = self.runtime.results.get(item["code"], {})
-                    repairing = request.type != "update_portraits" and request.retry_only and previous.get("partial")
+                    repairing = request.type in ("fill_missing", "refresh") and request.retry_only and previous.get("partial")
                     repair_stages = previous.get("incomplete_stages", [])
                     token = progress.set(update_progress)
                     try:
@@ -378,10 +405,10 @@ class TaskQueue:
                     finally:
                         progress.reset(token)
                     task_report = retry_task_report(report, repair_stages) if repairing else report
-                    outcome = "partial" if task_report.get("partial") else "success" if task_report["status"] in ("found", "unchanged") else "failed"
+                    outcome = "skipped" if task_report["status"] == "skipped" else "partial" if task_report.get("partial") else "success" if task_report["status"] in ("found", "unchanged") else "failed"
                     item.update(status=outcome, result=task_report)
                     # A failed attempt does not replace the health of unchanged output files.
-                    if request.type != "update_portraits" and (report["status"] in ("found", "unchanged") or not self.runtime.results.get(item["code"])):
+                    if request.type in ("fill_missing", "refresh") and (report["status"] in ("found", "unchanged") or not self.runtime.results.get(item["code"])):
                         self.runtime.record_result(item["code"], report)
                     update_progress({"stage": "finished", "status": outcome, "source": None,
                                      "message": None, "time": now()})
@@ -412,6 +439,8 @@ class TaskQueue:
         self.runtime.save_task(task)
 
     async def process(self, scraper, work, names, request, portraits):
+        if request.type == "remap_actors":
+            return await remap_work(work, self.output, names, self.runtime, request.actor_names, request.actor_ids, portraits)
         if request.type == "update_portraits":
             actors = dict.fromkeys(actor.name for path in nfo_paths(self.output, work)
                                    for actor in read_nfo(path, work.code).actors
