@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head><title>Caress</title></head>
+<body>
+    <div data-role="page" class="page type-interior pluginConfigurationPage" data-title="Caress" data-controller="__plugin/caress.js">
+        <div data-role="content">
+            <div class="content-primary">
+                <form>
+                    <fieldset disabled>
+                        <div class="inputContainer">
+                            <div class="flex align-items-center">
+                                <div class="flex-grow">
+                                    <label class="inputLabel" for="caressMetadataDirectory">元数据目录</label>
+                                    <input is="emby-input" id="caressMetadataDirectory" type="text" required autocomplete="off" />
+                                </div>
+                                <button is="paper-icon-button-light" type="button" class="btnDirectoryPicker emby-input-iconbutton" title="选择目录" aria-label="选择目录"><i class="md-icon">folder</i></button>
+                            </div>
+                        </div>
+                        <button is="emby-button" type="submit" class="raised button-submit block"><span>保存</span></button>
+                    </fieldset>
+                </form>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

@@ -20,8 +20,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(ROOT))
 
-from erosia.settings import ApiSettings
-from erosia.storage import atomic_write
+from caress.settings import ApiSettings
+from caress.storage import atomic_write
 
 PAGES = range(1, 205)
 LIMIT = 50
@@ -181,7 +181,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("fetch", "build"))
     parser.add_argument("--snapshots", type=Path, required=True, help="raw snapshot directory outside the repository")
-    parser.add_argument("--output", type=Path, help="build output (default: erosia/data/actor_aliases.json)")
+    parser.add_argument("--output", type=Path, help="build output (default: caress/data/actor_aliases.json)")
     args = parser.parse_args()
     folder = args.snapshots.resolve()
     if folder.is_relative_to(ROOT):
@@ -191,7 +191,7 @@ def main() -> None:
             parser.error("--output is only available for build")
         fetch(folder)
     else:
-        output = (args.output or ROOT / "erosia/data/actor_aliases.json").resolve()
+        output = (args.output or ROOT / "caress/data/actor_aliases.json").resolve()
         if output.is_relative_to(folder):
             parser.error("output must be separate from raw snapshots")
         build(folder, output)

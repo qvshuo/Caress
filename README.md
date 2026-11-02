@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="erosia/web/assets/favicon.svg" alt="erosia" width="96" height="96" />
+  <img src="caress/web/assets/favicon.svg" alt="Caress" width="96" height="96" />
 </p>
 
-<h1 align="center">erosia <small>/ɪˈrəʊziə/</small></h1>
+<h1 align="center">Caress <small>/kəˈres/</small></h1>
 
 刮削 JAV 视频元数据。
 
@@ -15,8 +15,10 @@
 
 ## 部署
 
+下载源码，或通过 Git 克隆后进入项目目录：
+
 ```sh
-git clone --depth=1 https://github.com/qvshuo/erosia.git && cd erosia
+git clone --depth=1 https://github.com/qvshuo/Caress.git caress && cd caress
 mkdir -p data
 cp docker-compose.example.yml docker-compose.yml
 
@@ -26,17 +28,21 @@ docker compose up -d --build
 
 打开 `http://服务器IP:9307`。
 
+**补齐缺失**按当前路由更新自动字段和图片，保留手动编辑、指定来源与自定义空值；**重新刮削**替换所有字段和图片。**更新头像**重新获取所选演员头像，不改 NFO，失败保留旧图。
+
+来源按请求域名分别冷却，API 与网页使用不同域名时互不影响；请求间隔仍按来源共享。来源设置可统一解除该来源所有域名的冷却。
+
 ## 使用
 
 1. 设置作品目录和元数据目录，视频或 STRM 文件的父文件夹名称须为完整番号，且不能重复；
 2. 配置 OpenAI 兼容 API，用于翻译；
-3. 下载 [erosia.dll](emby-plugin/erosia.dll?raw=true)，放入 Emby 配置目录下的 `plugins` 文件夹，Docker 部署时，对应 Emby 容器内的 `/config/plugins`；
+3. 下载 [caress.dll](emby-plugin/caress.dll?raw=true)，放入 Emby 配置目录下的 `plugins` 文件夹，Docker 部署时，对应 Emby 容器内的 `/config/plugins`；
 
-4. 在 Emby 的 Compose 服务中挂载元数据目录，冒号左侧填写 erosia 元数据目录在宿主机上的绝对路径：
+4. 在 Emby 的 Compose 服务中挂载元数据目录，冒号左侧填写 Caress 元数据目录在宿主机上的绝对路径：
 
    ```yaml
    volumes:
-     - /path/to/data/metadata:/erosia-metadata:ro
+     - /path/to/data/metadata:/caress-metadata:ro
    ```
 
 5. 在 Emby 的 Compose 文件所在目录执行以下命令，应用挂载并加载插件：
@@ -45,6 +51,8 @@ docker compose up -d --build
    docker compose down && docker compose up -d
    ```
 
-6. 在媒体库的元数据读取器中启用 **erosia**，随后刷新媒体库。
+6. 在媒体库的元数据读取器中启用 **Caress**，随后刷新媒体库。
 
-插件直接读取本地文件，无需连接 erosia 服务。运行期间会监听元数据目录的变更并自动刷新媒体库；首次接入时仍需手动刷新媒体库。
+插件直接读取本地文件，无需连接 Caress 服务。运行期间会监听元数据目录的变更并自动刷新媒体库；首次接入时仍需手动刷新媒体库。
+
+插件设置页只配置元数据目录，设置保存在 Emby 配置目录的 `plugins/configurations/Caress.json`，Docker 中通常为 `/config/plugins/configurations/Caress.json`。

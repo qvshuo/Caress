@@ -1,7 +1,7 @@
 .DS_Store
 __pycache__/
 node_modules/
-/erosia/web/dist/
+/caress/web/dist/
 /docker-compose.yml
 /data/
 /temp/

@@ -1,6 +1,6 @@
 services:
-  erosia:
-    image: erosia:1.5.0
+  caress:
+    image: caress:1.6.0
     build: .
     restart: unless-stopped
     ports:
@@ -38,7 +38,7 @@ services:
     ports:
       - "127.0.0.1:3000:3000"
     volumes:
-      - ./erosia/web:/build:ro
+      - ./caress/web:/build:ro
       - /build/node_modules
     depends_on:
-      - erosia
+      - caress

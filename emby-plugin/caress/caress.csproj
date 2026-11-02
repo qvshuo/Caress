@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <AssemblyName>caress</AssemblyName>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <Version>1.6.0</Version>
+    <Description>Local Caress metadata and images for Emby movies and actors</Description>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);1591</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="icon.png" LogicalName="caress.icon.png" />
+    <EmbeddedResource Include="configuration.html" LogicalName="caress.configuration.html" />
+    <EmbeddedResource Include="configuration.js" LogicalName="caress.configuration.js" />
+    <PackageReference Include="MediaBrowser.Server.Core" Version="4.9.1.90" PrivateAssets="all" />
+  </ItemGroup>
+</Project>

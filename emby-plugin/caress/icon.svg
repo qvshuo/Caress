@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360" role="img" aria-label="caress">
+  <title>caress</title>
+  <defs>
+    <filter id="outline" x="-10%" y="-10%" width="120%" height="120%" color-interpolation-filters="sRGB">
+      <feMorphology in="SourceAlpha" operator="dilate" radius="6" result="expanded"/>
+      <feFlood flood-color="#fff"/>
+      <feComposite in2="expanded" operator="in"/>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <g transform="translate(96 -45) scale(.88)" filter="url(#outline)">
+    <path d="M394 102C288 54 163 96 100 196c-50 83-18 178 58 222-37-67-28-138 22-183 70 6 148-36 174-88-71 32-125 41-170 30 87-14 153-38 210-75Z" fill="#000"/>
+    <path d="M155 264c60 32 139 14 180-34-26 82-99 128-173 113 20 40 59 69 106 83-85 5-143-55-113-162Z" fill="#000"/>
+    <g fill="none" stroke="#000" stroke-width="22" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M361 150c16 26 17 45 12 63l32 36-23 10c4 32-11 62-44 64"/>
+      <path d="M316 220q17-11 32-4" stroke-width="13"/>
+    </g>
+  </g>
+</svg>

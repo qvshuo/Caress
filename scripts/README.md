@@ -1,6 +1,6 @@
 # 演员表维护
 
-`update_actor_aliases.py` 用于抓取 JavDB 演员列表，离线生成 `erosia/data/actor_aliases.json`，由开发者手动运行。
+`update_actor_aliases.py` 用于抓取 JavDB 演员列表，离线生成 `caress/data/actor_aliases.json`，由开发者手动运行。
 
 ## 抓取
 
@@ -13,7 +13,7 @@ uv run --no-project --python 3.15 --with-requirements requirements.txt scripts/u
 
 每轮更新使用新目录，中断后用原目录续抓，已校验的快照会跳过。不要混用不同批次或语言的快照；损坏文件可移走后重抓。
 
-脚本复用 `erosia/settings.py` 的 `ApiSettings`，以 `en-US` 请求 `/api/v1/actors`，仅抓取 `type=0`（有码）和 `type=1`（无码）各 204 页，每页最多 50 条。请求间隔 10 秒，正常约需 68 分钟；连接错误、429 和 5xx 最多尝试 5 次，并遵守 `Retry-After`。
+脚本复用 `caress/settings.py` 的 `ApiSettings`，以 `en-US` 请求 `/api/v1/actors`，仅抓取 `type=0`（有码）和 `type=1`（无码）各 204 页，每页最多 50 条。请求间隔 10 秒，正常约需 68 分钟；连接错误、429 和 5xx 最多尝试 5 次，并遵守 `Retry-After`。
 
 ## 构建与更新
 
@@ -30,7 +30,7 @@ uv run --no-project --python 3.15 --with-requirements requirements.txt scripts/u
 ```sh
 uv run --no-project --python 3.15 --with-requirements requirements.txt scripts/update_actor_aliases.py build \
   --snapshots /path/outside/repository/actors-2026-10-31
-git diff --stat -- erosia/data/actor_aliases.json
+git diff --stat -- caress/data/actor_aliases.json
 ```
 
 构建规则：

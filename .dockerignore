@@ -1,11 +1,11 @@
 **
 !Dockerfile
 !requirements.txt
-!erosia/
-!erosia/**
+!caress/
+!caress/**
 !emby-plugin/
 !emby-plugin/**
 **/__pycache__/
 **/.DS_Store
 **/node_modules/
-erosia/web/dist/
+caress/web/dist/
