@@ -29,7 +29,7 @@ class ActorAliases:
         self._owners = {None: {}, 0: {}, 1: {}}
         self._records = {}
         self._record_ids = {}
-        self._primary_names = {}
+        self._primary_names = {None: {}, 0: {}, 1: {}}
         self.fingerprint = hashlib.sha256(json.dumps(actors, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
         self.all_names = set()
         for ident, record in actors.items():
@@ -52,7 +52,8 @@ class ActorAliases:
             ):
                 raise ValueError("actor mapping requires ID keys and type/name records with optional name_zht/other_name")
             primary = record["name"]
-            self._primary_names.setdefault(comparison_name(primary), set()).add(primary)
+            for kind in (None, record["type"]):
+                self._primary_names[kind].setdefault(comparison_name(primary), set()).add(primary)
             self._records.setdefault(primary, []).append(record)
             self._record_ids.setdefault(primary, []).append(ident)
             for name in self.record_names(record):
@@ -79,15 +80,16 @@ class ActorAliases:
         return cls(document["actors"])
 
     def candidates(self, name: str, kind: int | None = None) -> list[str]:
-        if name in self._records:
-            return [name]
         key = comparison_name(name)
-        if primary := self._primary_names.get(key):
+        primary = self._primary_names[kind].get(key, set())
+        if name in primary:
+            return [name]
+        if primary:
             return sorted(primary)
-        matches = self._owners[kind].get(key) if kind in (0, 1) else None
-        # A typed ambiguity stays ambiguous; only a missing typed match falls back globally.
-        if not matches:
-            matches = self._owners[None].get(key, set())
+        matches = self._owners[kind].get(key, set())
+        # Cross-type fallback accepts primary names only, after exhausting the typed lookup.
+        if not matches and kind is not None:
+            matches = self._primary_names[None].get(key, set())
         if not matches and (match := re.fullmatch(r"(.+?)\(([^()]+)\)", key)):
             parts = [self.candidates(part, kind) for part in match.groups()]
             if all(parts):
