@@ -1,13 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Caress">
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="#1f1f1f" role="img" aria-label="Caress">
   <title>Caress</title>
-  <g fill="#000" stroke="#fff" stroke-width="12" stroke-linejoin="round">
-    <path d="M398 58C275 10 119 69 73 207c-39 114 18 217 148 239-51-48-68-111-42-168 25-56 82-74 130-105 42-27 71-66 89-115Z"/>
-    <path d="M382 156c49 58 64 122 34 183-29 59-87 98-157 105 37-30 56-68 57-111 18-5 31-18 35-35 5-7 6-14 5-21l15-9c7-4 8-8 2-14l-20-24c4-26-1-48-14-69 14 4 29 3 43-5Z"/>
-  </g>
-  <g fill="none" stroke="#fff" stroke-width="9" stroke-linecap="round">
-    <path d="M106 253c30-67 103-91 174-130"/>
-    <path d="M108 312c22-48 67-69 111-94"/>
-    <path d="M134 366c5-29 17-51 32-72"/>
-    <path d="M403 290c-2 42-26 77-62 102"/>
-  </g>
+  <style>@media (prefers-color-scheme: dark) { svg { fill: #f5f1e9; } }</style>
+  <path d="M70 105c81 17 149 48 175 104-43 11-75 48-79 94-5 55 23 106 69 141C135 428 77 371 65 290c-10-66 3-121 5-185Z"/>
+  <path d="M438 74c30 103 17 220-49 298-34 40-80 65-130 76 34-37 53-75 54-117 22-9 36-27 40-50l15-9c8-5 9-10 3-17l-22-25c3-23-1-44-13-62 22-40 60-73 102-94Z"/>
 </svg>
