@@ -1,19 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="caress">
-  <title>caress</title>
-  <defs>
-    <filter id="outline" x="-10%" y="-10%" width="120%" height="120%" color-interpolation-filters="sRGB">
-      <feMorphology in="SourceAlpha" operator="dilate" radius="6" result="expanded"/>
-      <feFlood flood-color="#fff"/>
-      <feComposite in2="expanded" operator="in"/>
-      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
-    </filter>
-  </defs>
-  <g transform="translate(-71 -74) scale(1.28)" filter="url(#outline)">
-  <path d="M394 102C288 54 163 96 100 196c-50 83-18 178 58 222-37-67-28-138 22-183 70 6 148-36 174-88-71 32-125 41-170 30 87-14 153-38 210-75Z" fill="#000"/>
-  <path d="M155 264c60 32 139 14 180-34-26 82-99 128-173 113 20 40 59 69 106 83-85 5-143-55-113-162Z" fill="#000"/>
-  <g fill="none" stroke="#000" stroke-width="22" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M361 150c16 26 17 45 12 63l32 36-23 10c4 32-11 62-44 64"/>
-    <path d="M316 220q17-11 32-4" stroke-width="13"/>
-  </g>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Caress">
+  <title>Caress</title>
+  <g fill="#000" stroke="#fff" stroke-width="12" stroke-linejoin="round">
+    <path d="M386 66C265 18 117 79 73 207c-39 114 18 217 148 239-51-48-68-111-42-168 25-56 82-74 130-105 37-24 62-61 77-107Z"/>
+    <path d="M382 156c49 58 64 122 34 183-29 59-87 98-157 105 37-30 56-68 57-111 23-8 38-28 38-55l24-18-27-35c5-25 0-47-12-67 14 4 29 4 43-2Z"/>
   </g>
 </svg>
