@@ -11,7 +11,7 @@ import {
   Pagination,
   Select,
   useListState,
-  type ViewMode,
+  defaultListView,
 } from "./shared";
 import { WorkFilters, WorkList, matchesWorkFilter } from "./work-list";
 
@@ -30,13 +30,13 @@ export function Library({
   run: (fn: () => Promise<void>) => void;
   navigate: (path: string) => void;
 }) {
-  const [state, setState] = useListState("library", {
+  const [state, setState] = useListState("library", () => ({
     query: "",
     filter: "all",
     page: 1,
     pageSize: 100,
-    view: "list" as ViewMode,
-  });
+    view: defaultListView(),
+  }));
   const { query, filter, page, pageSize, view } = state;
   const search = useDeferredValue(query.toLowerCase());
   const selection = useSelection();

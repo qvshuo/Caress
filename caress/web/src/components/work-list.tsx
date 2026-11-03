@@ -171,16 +171,16 @@ export function WorkList({
                   className="line-clamp-2 min-h-10"
                   title={work.title || undefined}
                 >
-                  {work.title || "—"}
+                  {work.title}
                 </p>
                 <p
                   className="truncate text-muted-foreground"
                   title={work.actors?.join("、")}
                 >
-                  {work.actors?.join("、") || "—"}
+                  {work.actors?.join("、")}
                 </p>
                 <p className="text-muted-foreground">
-                  {categories[work.category] || "—"}
+                  {categories[work.category]}
                 </p>
                 {!!work.warnings.length && (
                   <p className="break-words text-xs text-muted-foreground">
@@ -231,9 +231,9 @@ export function WorkList({
               <WorkTitle title={work.title} />
             </TableCell>
             <TableCell className="truncate" title={work.actors?.join("、")}>
-              {work.actors?.join("、") || "—"}
+              {work.actors?.join("、")}
             </TableCell>
-            <TableCell>{categories[work.category] || "—"}</TableCell>
+            <TableCell>{categories[work.category]}</TableCell>
             <TableCell>{status(work)}</TableCell>
           </TableRow>
         ))}

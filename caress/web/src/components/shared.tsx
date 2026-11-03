@@ -156,7 +156,7 @@ export function Pagination({
   onPageSizeChange: (pageSize: number) => void;
 }) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3 text-sm">
+    <div className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3 text-sm tabular-nums">
       <span className="text-muted-foreground">共 {total} 条</span>
       <div className="flex flex-wrap items-center gap-2">
         <Select
@@ -335,6 +335,9 @@ export function useDebounce<T>(value: T, delay = 250): T {
 }
 
 export type ViewMode = "list" | "grid";
+export function defaultListView(): ViewMode {
+  return window.matchMedia("(min-width: 640px)").matches ? "list" : "grid";
+}
 export function ViewToggle({
   value,
   onChange,
@@ -372,16 +375,17 @@ export function ViewToggle({
 
 export function useListState<T extends object>(
   key: string,
-  initial: T,
+  initial: () => T,
 ): [T, Dispatch<SetStateAction<T>>] {
   const [value, setValue] = useState<T>(() => {
+    const defaults = initial();
     try {
       return {
-        ...initial,
+        ...defaults,
         ...JSON.parse(sessionStorage.getItem(`caress:${key}`) ?? "{}"),
       };
     } catch {
-      return initial;
+      return defaults;
     }
   });
   useEffect(() => {
@@ -453,7 +457,7 @@ export function StickyActions({ children }: { children: ReactNode }) {
 export function WorkTitle({ title }: { title?: string | null }) {
   return (
     <span className="block truncate" title={title || undefined}>
-      {title || "—"}
+      {title}
     </span>
   );
 }

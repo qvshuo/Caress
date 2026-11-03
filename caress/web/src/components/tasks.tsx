@@ -28,7 +28,7 @@ import {
   useDebounce,
   rowNavigation,
   useListState,
-  type ViewMode,
+  defaultListView,
   type Confirm,
 } from "./shared";
 
@@ -205,13 +205,13 @@ export function Tasks({
   navigate,
   confirm,
 }: TaskProps) {
-  const [state, setState] = useListState("tasks", {
+  const [state, setState] = useListState("tasks", () => ({
     query: "",
     filter: "all",
     type: "all",
     page: 1,
     pageSize: 100,
-  });
+  }));
   const [pending, setPending] = useState(false);
   async function mutate(task: Task, action: "retry" | "cancel" | "delete") {
     if (action === "delete" && !(await confirm("删除记录", "已有元数据保留")))
@@ -390,13 +390,13 @@ function TaskWorks({
   id: string;
   cancel: (task: Task) => ReactNode;
 }) {
-  const [state, setState] = useListState(`task:${id}`, {
+  const [state, setState] = useListState(`task:${id}`, () => ({
     query: "",
     filter: "all",
     page: 1,
     pageSize: 100,
-    view: "list" as ViewMode,
-  });
+    view: defaultListView(),
+  }));
   const search = useDebounce(state.query);
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);

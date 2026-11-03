@@ -29,7 +29,7 @@ import {
   rowNavigation,
   ViewToggle,
   useListState,
-  type ViewMode,
+  defaultListView,
 } from "./shared";
 
 interface Props {
@@ -58,13 +58,13 @@ export function Actors({
   run,
   navigate,
 }: Props) {
-  const [state, setState] = useListState("actors", {
+  const [state, setState] = useListState("actors", () => ({
     query: "",
     filter: "all",
     page: 1,
     pageSize: 100,
-    view: "list" as ViewMode,
-  });
+    view: defaultListView(),
+  }));
   const { query, filter, page, pageSize, view } = state;
   const setQuery = (query: string) =>
     setState((s) => ({ ...s, query, page: 1 }));
@@ -257,7 +257,7 @@ export function Actors({
                         <p className="truncate font-medium" title={a.name}>
                           {a.name}
                         </p>
-                        <p className="text-muted-foreground">
+                        <p className="text-muted-foreground tabular-nums">
                           {a.count} 部作品
                         </p>
                         {a.status === "ambiguous" && (
@@ -323,7 +323,7 @@ export function Actors({
                             </p>
                           )}
                         </TableCell>
-                        <TableCell>{a.count}</TableCell>
+                        <TableCell className="tabular-nums">{a.count}</TableCell>
                       </TableRow>
                     ))}
                 </TableBody>
