@@ -5,11 +5,13 @@ import time
 from contextlib import nullcontext
 from typing import Any
 
-from .catalog import CatalogRules
+from .catalog import CatalogRules, catalog_prefix
 from .http import Client, WebClient
 from .logging import report_progress
 from .models import (
     ScrapeRequest,
+    Category,
+    SourceId,
     ScrapeResult,
     Status,
     SourceResult,
@@ -22,10 +24,11 @@ from .sources import SOURCES
 class Scraper:
     def __init__(self, settings: Settings | None = None, *, client: Client | None = None, runtime=None):
         self.settings = settings or Settings()
-        self.rules = CatalogRules.load(self.settings.catalog_rules_file)
+        self.rules = CatalogRules.load(self.settings.catalog_rules_file).model_copy(deep=True)
         self.client = client or WebClient(self.settings, runtime=runtime)
         self._owns_client = client is None
         self.source_locks = {}
+        self.prefix_locks = {}
         self.sources = {
             source: factory(self.client, self.settings, self.rules)
             for source, factory in SOURCES.items()
@@ -49,12 +52,12 @@ class Scraper:
         validate_code(request.code)
         if (request.external_id or request.source_url) and not request.source:
             raise ValueError("explicit movie ID or URL requires a source")
+        if self.settings.catalog_rules_file:
+            current = CatalogRules.load(self.settings.catalog_rules_file)
+            for field in type(current).model_fields:
+                setattr(self.rules, field, getattr(current, field))
+            self.rules.validate_prefixes()
         classification = self.rules.classify(request.code)
-        route = (
-            [request.source]
-            if request.source
-            else self.settings.routes.get(classification.category.value, self.settings.routes["unknown"])
-        )
         async def fetch(source):
             lock = self.source_locks.setdefault(source, asyncio.Lock())
             while lock.locked():
@@ -85,10 +88,21 @@ class Scraper:
             report_progress("source", result.status.value, source)
             return result
 
+        fetched = {}
+        if classification.category == Category.UNKNOWN and request.source is None:
+            prefix = catalog_prefix(request.code)
+            async with self.prefix_locks.setdefault(prefix, asyncio.Lock()):
+                classification = self.rules.classify(request.code)
+                if classification.category == Category.UNKNOWN:
+                    fetched[SourceId.JAVDB] = await fetch(SourceId.JAVDB)
+                    classification = self.rules.classify(request.code)
+        route = [request.source] if request.source else self.settings.routes[classification.category.value]
         # A failed source must finish cancelling its siblings before this work exits.
         async with asyncio.TaskGroup() as group:
-            tasks = [group.create_task(fetch(source)) for source in route]
-        results = [task.result() for task in tasks]
+            tasks = {source: group.create_task(fetch(source)) for source in route if source not in fetched}
+        fetched.update((source, task.result()) for source, task in tasks.items())
+        classification = self.rules.classify(request.code)
+        results = [fetched[source] for source in route]
         selected = next(
             (r for r in results if r.status == Status.FOUND and r.metadata is not None), None
         )
@@ -109,5 +123,15 @@ class Scraper:
         return ScrapeResult(
             code=request.code, status=status, classification=classification,
             metadata=metadata, selected_source=selected.source if selected else None,
-            results=results, warnings=warnings,
+            results=[*results, *(value for source, value in fetched.items() if source not in route)], warnings=warnings,
         )
+
+    async def resolve_actors(self, actors, names, category, ids):
+        lock = self.source_locks.setdefault(SourceId.JAVDB, asyncio.Lock())
+        async with lock:
+            with self.client.source_work() if isinstance(self.client, WebClient) else nullcontext():
+                try:
+                    async with asyncio.timeout(self.settings.source_timeout_seconds):
+                        return await self.sources[SourceId.JAVDB].app.resolve_actors(actors, names, category, ids)
+                except TimeoutError:
+                    return ["演员查询超时，保留原名"]

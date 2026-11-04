@@ -24,7 +24,6 @@ class Category(StrEnum):
     CENSORED = "censored"
     UNCENSORED = "uncensored"
     FC2 = "fc2"
-    OTHER = "other"
     UNKNOWN = "unknown"
 
 
@@ -102,6 +101,7 @@ class Candidate(BaseModel):
 
 
 class SourceResult(BaseModel):
+    actor_ids: dict[str, str] = Field(default_factory=dict)
     translated_fields: list[str] = Field(default_factory=list)
     original_fields: dict[str, Any] = Field(default_factory=dict)
     elapsed_seconds: float | None = None

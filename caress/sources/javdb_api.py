@@ -6,11 +6,13 @@ import time
 import uuid
 from urllib.parse import urlencode
 
+from ..actors import ActorAliases, actor_record, actor_type, comparison_name
 from ..catalog import normalize_code
 from ..http import FetchError
 from ..models import (
     Actor,
     Candidate,
+    Category,
     Metadata,
     ScrapeRequest,
     SourceId,
@@ -106,6 +108,12 @@ class JavDBApi(Source):
         if str(work.get("id")) != movie_id:
             raise FetchError(Status.IDENTITY_MISMATCH, "JavDB API returned a different movie ID")
         code = normalize_code(work["number"])
+        if not self.rules.matches(request.code, code):
+            raise FetchError(Status.IDENTITY_MISMATCH, "JavDB API returned a different catalog")
+        kind = work.get("type")
+        category = {0: Category.CENSORED, 1: Category.UNCENSORED, 3: Category.FC2}.get(kind, Category.UNKNOWN) if type(kind) is int else Category.UNKNOWN
+        if not code.startswith("FC2PPV-"):
+            self.rules.remember(code, category, self.settings.catalog_rules_file)
         classification = self.rules.classify(code)
         title = work.get("origin_title") or work["title"]
         source_url = self.base + f"/api/v4/movies/{movie_id}"
@@ -141,4 +149,44 @@ class JavDBApi(Source):
             external_id=movie_id,
             source_url=source_url,
         )
-        return self.found(request, metadata)
+        return self.found(request, metadata, actor_ids={
+            item["name"]: str(item["id"]) for item in work.get("actors") or []
+            if isinstance(item, dict) and item.get("name") and item.get("id")
+        })
+
+    async def resolve_actors(self, actors, names: ActorAliases, category, ids) -> list[str]:
+        warnings = []
+        if self.settings.actor_aliases_file:
+            names.reload(self.settings.actor_aliases_file)
+        kind = actor_type(category)
+        for actor in actors:
+            ident = ids.get(actor.name)
+            if ident in names.actors or (not ident and names.candidates(actor.name, kind)):
+                continue
+            try:
+                if ident:
+                    if not re.fullmatch(r"[A-Za-z0-9]{1,40}", ident):
+                        continue
+                    data = await self.api(f"/api/v1/actors/{ident}")
+                    row = data.get("actor")
+                    if not isinstance(row, dict) or str(row.get("id")) != ident:
+                        raise ValueError("actor detail identity mismatch")
+                    rows = [row]
+                else:
+                    data = await self.api("/api/v2/search", q=actor.name, type="actor", page=1, limit=100)
+                    rows = data.get("actors")
+                    if not isinstance(rows, list) or len(rows) >= 100:
+                        continue
+                records = {}
+                for row in rows:
+                    if not isinstance(row, dict) or not re.fullmatch(r"[A-Za-z0-9]{1,40}", str(row.get("id", ""))):
+                        continue
+                    record = actor_record(row)
+                    if record and (ident or comparison_name(actor.name) in {
+                        comparison_name(name) for name in ActorAliases.record_names(record)
+                    }):
+                        records[str(row["id"])] = record
+                names.remember(records, self.settings.actor_aliases_file)
+            except (FetchError, ValueError, TypeError) as exc:
+                warnings.append(f"{actor.name}: 演员查询失败（{exc}）")
+        return warnings

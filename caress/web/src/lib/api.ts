@@ -46,7 +46,6 @@ export const categories: Record<string, string> = {
   censored: "有码",
   uncensored: "无码",
   fc2: "FC2",
-  other: "其他",
   unknown: "未分类",
 };
 export const statuses: Record<string, string> = {

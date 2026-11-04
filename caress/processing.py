@@ -14,8 +14,12 @@ from .translation import Translator, compose_title, variant_metadata
 
 def prepare_variant(variant: dict, names: ActorAliases, category, *, code: str) -> tuple[dict, list[dict]]:
     raw = Metadata.model_validate(variant["metadata"])
+    pinned = variant.get("actor_mappings", []) or [
+        {"original_name": actor.name, "actor_id": variant.get("actor_ids", {}).get(actor.name)}
+        for actor in raw.actors
+    ]
     actors, mappings, issues = map_actor_names(raw.actors, names,
-        actor_type(category), variant.get("actor_mappings", []))
+        actor_type(category), pinned)
     return {**variant, "processed_fields": {**variant.get("processed_fields", {}), "code": code,
             "actors": [actor.model_dump() for actor in actors]},
             "original_fields": {**variant.get("original_fields", {}), "actors": [actor.model_dump() for actor in raw.actors]},
@@ -103,6 +107,8 @@ async def process_work(scraper: Scraper, work: Work, output: Path, names: ActorA
     if result.status != Status.FOUND or result.metadata is None:
         return report
     selected = next(v.model_dump(mode="json") for v in result.results if v.source == result.selected_source)
+    report["warnings"].extend(await scraper.resolve_actors(
+        result.metadata.actors, names, result.classification.category, selected.get("actor_ids", {})))
     selection = runtime.selection(work.code)
     previous = None
     path = existing_nfo(output, work)

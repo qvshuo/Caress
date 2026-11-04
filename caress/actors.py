@@ -10,6 +10,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from .models import Actor, Category
+from .storage import atomic_write
 
 
 def comparison_name(name: str) -> str:
@@ -18,6 +19,26 @@ def comparison_name(name: str) -> str:
 
 def actor_type(category: Category | str | None) -> int | None:
     return {Category.CENSORED: 0, Category.UNCENSORED: 1}.get(category)
+
+
+def actor_record(source: dict) -> dict | None:
+    name = source.get("name")
+    if type(source.get("type")) is not int or source["type"] not in (0, 1) or not isinstance(name, str) or not name.strip():
+        return None
+    record = {"type": source["type"], "name": name.strip()}
+    zht = source.get("name_zht")
+    if isinstance(zht, str) and zht.strip():
+        record["name_zht"] = zht.strip()
+    raw = source.get("other_name")
+    excluded = {comparison_name(record["name"]), comparison_name(record.get("name_zht", ""))}
+    aliases = {}
+    for alias in sorted(re.split("[,，]", raw) if isinstance(raw, str) else raw or []):
+        key = comparison_name(alias)
+        if key and key not in excluded:
+            aliases.setdefault(key, alias.strip())
+    if aliases:
+        record["other_name"] = [aliases[key] for key in sorted(aliases)]
+    return record
 
 
 class ActorAliases:
@@ -63,6 +84,24 @@ class ActorAliases:
     @staticmethod
     def record_names(record):
         return [name for name in [record["name"], record.get("name_zht"), *record.get("other_name", [])] if name]
+
+    def reload(self, path: Path) -> None:
+        self.__dict__.update(ActorAliases.load(path).__dict__)
+
+    def remember(self, records: dict[str, dict], path: Path | None) -> None:
+        if not records:
+            return
+        actors = {**(ActorAliases.load(path).actors if path else self.actors), **records}
+        updated = ActorAliases(actors)
+        if path:
+            ordered = sorted(actors, key=lambda ident: (actors[ident]["type"], ident))
+            content = '{\n  "actors": {\n' + ',\n'.join(
+                '    ' + json.dumps(ident, ensure_ascii=False) + ':'
+                + json.dumps(actors[ident], ensure_ascii=False, separators=(',', ':')) for ident in ordered
+            ) + '\n  }\n}\n'
+            atomic_write(path, content)
+        # Active field and portrait processing share this index for the task.
+        self.__dict__.update(updated.__dict__)
 
     @classmethod
     def load(cls, path: Path | None = None) -> ActorAliases:

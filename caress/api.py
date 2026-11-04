@@ -24,7 +24,7 @@ from .actors import ActorAliases, actor_type, library_actors
 from .catalog import CatalogRules
 from .directories import Directories
 from .images import crop_poster, actor_image, Gfriends, save_image_choices, selected_image, validate_resources
-from .models import ActorMapping, Metadata, SourceId
+from .models import Actor, ActorMapping, Category, Metadata, SourceId
 from .nfo import (
     existing_nfo,
     media_stems,
@@ -542,7 +542,9 @@ def create_app(
             if not variant or variant["status"] != "found" or not variant.get("metadata") or "processed_fields" not in variant:
                 raise HTTPException(422, "source variant unavailable")
             category = CatalogRules.load(service.settings.catalog_rules_file).classify(key).category
-            variant, _issues = prepare_variant(variant, ActorAliases.load(service.settings.actor_aliases_file), category, code=key)
+            names = ActorAliases.load(service.settings.actor_aliases_file)
+            await service.resolve_actors(Metadata.model_validate(variant["metadata"]).actors, names, category, variant.get("actor_ids", {}))
+            variant, _issues = prepare_variant(variant, names, category, code=key)
             await service.translator.verify()
             variant = await service.translator.variant(variant)
             service.runtime.save_variant(key, variant)
@@ -682,11 +684,12 @@ def create_app(
             row = next((r for r in rows if r["name"] == name), None)
             if not row or not row["portrait_eligible"]:
                 raise HTTPException(422, "演员身份不明确或不适用")
-            from .models import Actor
+            kinds = {actor_type(work.category) for work in works if work.code in row["codes"]}
+            kind = next(iter(kinds)) if len(kinds) == 1 else None
+            actors = [Actor(name=n) for n in (row["actors"] or [name])]
+            await service.resolve_actors(actors, names, {0: Category.CENSORED, 1: Category.UNCENSORED}.get(kind, Category.UNKNOWN), {})
             async with Gfriends(service.settings, names, service.output) as portraits:
-                kinds = {actor_type(work.category) for work in works if work.code in row["codes"]}
-                kind = next(iter(kinds)) if len(kinds) == 1 else None
-                records = await portraits.save([Actor(name=n) for n in (row["actors"] or [name])], replace=True, kind=kind)
+                records = await portraits.save(actors, replace=True, kind=kind)
             return {"portraits": records}
 
     return app

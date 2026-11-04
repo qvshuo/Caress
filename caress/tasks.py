@@ -3,6 +3,7 @@ import fcntl
 import logging
 import sqlite3
 import uuid
+from pathlib import Path
 from contextlib import AsyncExitStack
 from collections import Counter
 from typing import Literal
@@ -23,6 +24,7 @@ from .processing import complete_report, process_work, remap_work, retry_work, r
 from .runtime import RuntimeStore, now, runtime_directory
 from .scanner import scan, validate_roots
 from .settings import Settings
+from .storage import atomic_write
 from .translation import Translator
 
 logger = logging.getLogger(__name__)
@@ -50,9 +52,6 @@ class TaskQueue:
             settings.media_directories, settings.metadata_directory, require_existing=False
         )
         self.settings = settings
-        actor_file = runtime_directory(settings.metadata_directory) / "actor_aliases.json"
-        if settings.actor_aliases_file is None and actor_file.is_file():
-            settings.actor_aliases_file = actor_file
         self.output = settings.metadata_directory.resolve()
         internal = runtime_directory(self.output)
         if internal.is_symlink():
@@ -65,7 +64,17 @@ class TaskQueue:
         try:
             fcntl.flock(self.process_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             self.runtime = RuntimeStore(self.output)
+            for field, filename in (("catalog_rules_file", "catalog_rules.json"), ("actor_aliases_file", "actor_aliases.json")):
+                if getattr(settings, field) is None:
+                    target = internal / filename
+                    if not target.exists():
+                        atomic_write(target, (Path(__file__).parent / "data" / filename).read_bytes())
+                    setattr(settings, field, target)
+            CatalogRules.load(settings.catalog_rules_file)
+            ActorAliases.load(settings.actor_aliases_file)
         except OSError, ValueError, sqlite3.Error:
+            if hasattr(self, "runtime"):
+                self.runtime.close()
             self.process_lock.close()
             raise ValueError(
                 "runtime records are unreadable or another caress writer is active"
@@ -97,6 +106,10 @@ class TaskQueue:
                 await client.__aenter__()
                 self._artwork_client = client
             return self._artwork_client
+
+    async def resolve_actors(self, actors, names, category, ids):
+        async with Scraper(self.settings, client=await self.artwork_client()) as scraper:
+            return await scraper.resolve_actors(actors, names, category, ids)
 
     def work_lock(self, code):
         return self._work_locks.setdefault(code, asyncio.Lock())
@@ -443,6 +456,7 @@ class TaskQueue:
             actors = dict.fromkeys(actor.name for path in nfo_paths(self.output, work)
                                    for actor in read_nfo(path, work.code).actors
                                    if actor.name in request.actor_names)
+            await scraper.resolve_actors([Actor(name=name) for name in actors], names, work.category, {})
             records = await portraits.save([Actor(name=name) for name in actors], replace=True, kind=actor_type(work.category))
             failed = any(record["status"] == "error" for record in records)
             report = complete_report({"code": work.code, "status": "error" if failed else "found", "portraits": records,
