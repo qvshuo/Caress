@@ -24,6 +24,7 @@ class Category(StrEnum):
     CENSORED = "censored"
     UNCENSORED = "uncensored"
     FC2 = "fc2"
+    OTHER = "other"
     UNKNOWN = "unknown"
 
 

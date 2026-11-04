@@ -362,8 +362,8 @@ export function Settings({
                 </Button>
               </div>
               <div className="grid gap-3 sm:grid-cols-2">
-                {Object.entries(categories).map(([id, name]) => (
-                  <Field label={name} key={id}>
+                {Object.keys(draft.routes).map((id) => (
+                  <Field label={id === "unknown" ? "其他" : categories[id]!} key={id}>
                     <Input
                       required
                       value={draft.routes[id]}

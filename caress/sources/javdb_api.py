@@ -12,7 +12,6 @@ from ..models import (
     Actor,
     Candidate,
     Category,
-    Classification,
     Evidence,
     Metadata,
     ScrapeRequest,
@@ -111,14 +110,15 @@ class JavDBApi(Source):
         code = normalize_code(work["number"])
         category = work.get("type")
         classification = self.rules.classify(code)
-        if category in (0, 1, 3, "0", "1", "3"):
+        if category in (0, 1, 2, 3, 4, "0", "1", "2", "3", "4"):
             category = int(category)
-            classification = Classification(
-                category={0: Category.CENSORED, 1: Category.UNCENSORED, 3: Category.FC2}[category],
-                evidence=[Evidence(basis="catalog_type", value=str(category), source=self.id)],
-            )
-        if code.startswith("FC2PPV-") and classification.category != Category.FC2:
-            raise FetchError(Status.PARSE_ERROR, "API type contradicts FC2 number family")
+            native = {0: Category.CENSORED, 1: Category.UNCENSORED, 2: Category.OTHER,
+                      3: Category.FC2, 4: Category.OTHER}[category]
+            if code.startswith("FC2PPV-") and native != Category.FC2:
+                raise FetchError(Status.PARSE_ERROR, "API type contradicts FC2 number family")
+            if classification.category == Category.UNKNOWN:
+                classification.category = native
+            classification.evidence.append(Evidence(basis="catalog_type", value=str(category), source=self.id))
         title = work.get("origin_title") or work["title"]
         source_url = self.base + f"/api/v4/movies/{movie_id}"
         actors = [

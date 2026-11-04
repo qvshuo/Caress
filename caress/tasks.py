@@ -123,8 +123,11 @@ class TaskQueue:
     def active(self):
         return [t for t in self.runtime.tasks() if t["status"] in ("pending", "running")]
 
-    def _apply_result(self, work, result):
-        if result.get("category"):
+    def _apply_result(self, work, result, *, rules=None):
+        local = (rules or CatalogRules.load(self.settings.catalog_rules_file)).classify(work.code).category
+        if local != Category.UNKNOWN:
+            work.category = local
+        elif result.get("category"):
             work.category = Category(result["category"])
         work.title, work.actors = None, []
         work.poster = None
@@ -171,8 +174,7 @@ class TaskQueue:
         for work in works:
             if work.status == "pending":
                 result = results.get(work.code, {})
-                work.category = Category(result.get("category", rules.classify(work.code).category))
-                self._apply_result(work, result)
+                self._apply_result(work, result, rules=rules)
                 self._queue_status(work)
             elif persist and (str(work.path), work.code, work.status) not in previous:
                 logger.warning("跳过 %s：%s", work.code, "; ".join(work.warnings))

@@ -6,7 +6,7 @@ from .contract import EDITABLE_FIELDS
 from .engine import Scraper
 from .images import save_images, actor_image
 from .logging import report_progress
-from .models import Actor, Artwork, Metadata, ScrapeRequest, Status
+from .models import Actor, Artwork, Category, Metadata, ScrapeRequest, Status
 from .nfo import existing_nfo, media_stems, read_nfo, serialize_nfo, target_folder, write_nfo_files
 from .scanner import Work
 from .storage import atomic_write, file_transaction
@@ -14,8 +14,9 @@ from .translation import Translator, compose_title, variant_metadata
 
 def prepare_variant(variant: dict, names: ActorAliases, category=None, *, code: str) -> tuple[dict, list[dict]]:
     raw = Metadata.model_validate(variant["metadata"])
+    category = category if category not in (None, Category.UNKNOWN) else raw.classification.category
     actors, mappings, issues = map_actor_names(raw.actors, names,
-        actor_type(raw.classification.category, category), variant.get("actor_mappings", []))
+        actor_type(category), variant.get("actor_mappings", []))
     return {**variant, "processed_fields": {**variant.get("processed_fields", {}), "code": code,
             "actors": [actor.model_dump() for actor in actors]},
             "original_fields": {**variant.get("original_fields", {}), "actors": [actor.model_dump() for actor in raw.actors]},
@@ -112,7 +113,7 @@ async def process_work(scraper: Scraper, work: Work, output: Path, names: ActorA
         except ValueError:
             pass
     protected = manual_fields(selection) & set(EDITABLE_FIELDS) if missing_only and previous else set()
-    selected, report["actor_issues"] = prepare_variant(selected, names, work.category, code=work.code)
+    selected, report["actor_issues"] = prepare_variant(selected, names, result.classification.category, code=work.code)
     fields = tuple(field for field in ("title", "plot") if field not in protected)
     report_progress("translation" if translator.enabled and fields else "metadata")
     selected = await translator.variant(selected, fields=fields,
@@ -169,7 +170,7 @@ async def process_work(scraper: Scraper, work: Work, output: Path, names: ActorA
         report["images"] = await write_artwork(scraper.client, work, output, request, selection)
         report["stages"]["images"] = "failed" if any(r["status"] == "error" for r in report["images"]) else "success"
         runtime.record_result(work.code, complete_report({**report, "actor_issues": []}), selection=selection)
-    report["portraits"] = await portraits.save(metadata.actors, kind=actor_type(metadata.classification.category, work.category)) if portraits else []
+    report["portraits"] = await portraits.save(metadata.actors, kind=actor_type(result.classification.category)) if portraits else []
     report["stages"]["portraits"] = "failed" if any(r["status"] == "error" for r in report["portraits"]) else "success" if portraits else "skipped"
     return complete_report(report)
 
@@ -274,7 +275,7 @@ async def retry_work(scraper, work, output, translator, runtime, portraits, stag
         report["stages"]["images"] = "failed" if any(r["status"] == "error" for r in report["images"]) else "success"
         runtime.record_result(work.code, complete_report(report), selection=selection)
     if "portraits" in stages:
-        report["portraits"] = await portraits.save(metadata.actors, kind=actor_type(metadata.classification.category, work.category))
+        report["portraits"] = await portraits.save(metadata.actors, kind=actor_type(work.category))
         report["stages"]["portraits"] = "failed" if any(r["status"] == "error" for r in report["portraits"]) else "success"
     runtime.save_selection(work.code, selection)
     return complete_report(report)

@@ -60,7 +60,7 @@ class Scraper:
         route = (
             [request.source]
             if request.source
-            else self.settings.routes[classification.category.value]
+            else self.settings.routes.get(classification.category.value, self.settings.routes["unknown"])
         )
         async def fetch(source):
             lock = self.source_locks.setdefault(source, asyncio.Lock())
@@ -107,7 +107,7 @@ class Scraper:
         )
         metadata = selected.metadata.model_copy(deep=True, update={"code": request.code}) if selected else None
         if metadata:
-            if metadata.classification.category == Category.FC2 or (not request.category and any(e.basis == "catalog_type" for e in metadata.classification.evidence)):
+            if classification.category == Category.UNKNOWN and not request.category:
                 classification = metadata.classification
             if not metadata.plot:
                 warnings.append(f"{selected.source}: missing plot")

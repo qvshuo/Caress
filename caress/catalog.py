@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import json
 import re
 import unicodedata
-from importlib.resources import files
+from functools import lru_cache
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 from .models import Category, Classification, Evidence
 
@@ -29,26 +28,33 @@ class CatalogRules(BaseModel):
     version: int = 1
     censored_prefixes: list[str] = Field(default_factory=list)
     uncensored_prefixes: list[str] = Field(default_factory=list)
+    fc2_prefixes: list[str] = Field(default_factory=list)
+    other_prefixes: list[str] = Field(default_factory=list)
+    _categories: dict[str, Category] = PrivateAttr(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_prefixes(self) -> CatalogRules:
-        censored = {p.upper() for p in self.censored_prefixes}
-        uncensored = {p.upper() for p in self.uncensored_prefixes}
-        if censored & uncensored:
-            raise ValueError(f"conflicting prefixes: {sorted(censored & uncensored)}")
-        for prefix in [*self.censored_prefixes, *self.uncensored_prefixes]:
-            if not re.fullmatch(r"[A-Z0-9]+(?:-[A-Z]+)?", prefix):
-                raise ValueError(f"invalid prefix: {prefix!r}")
+        self._categories = {}
+        for category in (Category.CENSORED, Category.UNCENSORED, Category.FC2, Category.OTHER):
+            for value in getattr(self, f"{category.value}_prefixes"):
+                prefix = value.upper()
+                if not re.fullmatch(r"[A-Z0-9]+(?:-[A-Z0-9]+)*", prefix) or not re.search(r"[A-Z]", prefix):
+                    raise ValueError(f"invalid prefix: {value!r}")
+                if prefix in self._categories and self._categories[prefix] != category:
+                    raise ValueError(f"conflicting prefix: {prefix}")
+                self._categories[prefix] = category
         return self
 
     @classmethod
     def load(cls, path: Path | None = None) -> CatalogRules:
-        text = (
-            path.read_text(encoding="utf-8")
-            if path
-            else files("caress").joinpath("data/catalog_rules.json").read_text(encoding="utf-8")
-        )
-        return cls.model_validate(json.loads(text))
+        target = path or Path(__file__).parent / "data/catalog_rules.json"
+        stamp = target.stat()
+        return cls._load(target, (stamp.st_mtime_ns, stamp.st_ctime_ns, stamp.st_size))
+
+    @classmethod
+    @lru_cache(maxsize=4)
+    def _load(cls, path: Path, stamp) -> CatalogRules:
+        return cls.model_validate_json(path.read_bytes())
 
     def classify(self, code: str) -> Classification:
         if code.startswith("FC2PPV-"):
@@ -57,17 +63,11 @@ class CatalogRules(BaseModel):
                 evidence=[Evidence(basis="number_family", value="FC2")],
             )
         prefix = catalog_prefix(code)
-        for known in sorted([*self.uncensored_prefixes, *self.censored_prefixes], key=len, reverse=True):
-            if code.startswith(known + "-"):
-                prefix = known
-                break
-        category = Category.UNKNOWN
-        basis = "unknown_prefix"
-        if prefix in self.uncensored_prefixes:
-            category, basis = Category.UNCENSORED, "uncensored_prefix"
-        elif prefix in self.censored_prefixes:
-            category, basis = Category.CENSORED, "censored_prefix"
-        elif NUMERIC.fullmatch(code):
+        while prefix not in self._categories and "-" in prefix:
+            prefix = prefix.rsplit("-", 1)[0]
+        category = self._categories.get(prefix, Category.UNKNOWN)
+        basis = f"{category.value}_prefix"
+        if category == Category.UNKNOWN and NUMERIC.fullmatch(code):
             category, basis = Category.UNCENSORED, "numeric_catalog_family"
         return Classification(
             category=category,

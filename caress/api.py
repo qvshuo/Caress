@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from . import __version__
 from .contract import EDITABLE_FIELDS
 from .actors import ActorAliases, actor_type, library_actors
+from .catalog import CatalogRules
 from .directories import Directories
 from .images import crop_poster, actor_image, Gfriends, save_image_choices, selected_image, validate_resources
 from .models import ActorMapping, Metadata, SourceId
@@ -356,7 +357,8 @@ def create_app(
                     artwork_versions[image.name] = f"{version.st_mtime_ns}-{version.st_size}"
         tasks = ([service.runtime.task_data[task_id]] if task_id in service.runtime.task_data else []) if task_id else sorted(service.runtime.task_data.values(), key=lambda t: t["created_at"], reverse=True)
         process = next(({"task_id": t["id"], "type": t["type"], "sequence": t.get("sequence"), "created_at": t["created_at"], "finished_at": t.get("finished_at"), **item} for t in tasks for item in t["items"] if item["code"] == row["code"]), None)
-        route_sources = service.settings.routes[row["category"]]
+        route = service.settings.routes.get(row["category"], service.settings.routes["unknown"])
+        route_sources = route
         if process:
             if sources := (process.get("result") or {}).get("sources"):
                 route_sources = [source["source"] for source in sources]
@@ -366,7 +368,7 @@ def create_app(
         return {
             **row,
             "metadata": metadata,
-            "variants": sorted(service.runtime.variants(row["code"]), key=lambda v: service.settings.routes[row["category"]].index(v["source"]) if v["source"] in service.settings.routes[row["category"]] else 999),
+            "variants": sorted(service.runtime.variants(row["code"]), key=lambda v: route.index(v["source"]) if v["source"] in route else 999),
             "selection": selection,
             "route_sources": route_sources,
             "artwork": sorted(artwork),
@@ -539,7 +541,8 @@ def create_app(
             variant = next((v for v in service.runtime.variants(key) if v["source"] == source), None)
             if not variant or variant["status"] != "found" or not variant.get("metadata") or "processed_fields" not in variant:
                 raise HTTPException(422, "source variant unavailable")
-            variant, _issues = prepare_variant(variant, ActorAliases.load(service.settings.actor_aliases_file), service.runtime.work(key).category, code=key)
+            category = CatalogRules.load(service.settings.catalog_rules_file).classify(key).category
+            variant, _issues = prepare_variant(variant, ActorAliases.load(service.settings.actor_aliases_file), category, code=key)
             await service.translator.verify()
             variant = await service.translator.variant(variant)
             service.runtime.save_variant(key, variant)

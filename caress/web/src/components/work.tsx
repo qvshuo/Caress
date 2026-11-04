@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { errorText } from "@/lib/messages";
-import { api, sources, formatDate } from "@/lib/api";
+import { api, sources, categories, formatDate } from "@/lib/api";
 import {
   fields,
   metadataDraft,
@@ -478,6 +478,7 @@ export function Work({
             <ArrowLeft />
           </Button>
           <h2 className="text-xl font-semibold">{detail.code}</h2>
+          <Badge variant="secondary">{categories[detail.category]}</Badge>
           <Status
             status={processActive ? detail.process!.status : detail.status}
             label={
