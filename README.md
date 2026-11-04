@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="caress/web/assets/favicon.svg" alt="Caress" width="96" height="96" />
+  <img src="assets/branding/logo.png" alt="Caress" width="96" height="96" />
 </p>
 
 <h1 align="center">Caress <small>/kəˈres/</small></h1>
