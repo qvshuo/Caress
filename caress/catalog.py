@@ -13,7 +13,7 @@ from .storage import atomic_write
 FC2 = re.compile(r"(?i)^FC2[-_ ]*(?:PPV[-_ ]*)?(\d{5,10})$")
 STANDARD = re.compile(r"^([A-Z0-9]*[A-Z][A-Z0-9]*(?:-[A-Z]+)?)[-_](\d{2,8})$")
 CONCATENATED = re.compile(r"^([0-9]*[A-Z]{2,12})(\d{2,8})$")
-NUMERIC = re.compile(r"^\d{6}[-_]\d{2,5}$")
+NUMERIC = re.compile(r"^[0-9]+[-_][0-9]+$")
 
 
 def catalog_prefix(code: str) -> str:
@@ -61,6 +61,8 @@ class CatalogRules(BaseModel):
     def classify(self, code: str) -> Classification:
         if code.startswith("FC2PPV-"):
             return Classification(category=Category.FC2, evidence=[Evidence(basis="number_family", value="FC2")])
+        if NUMERIC.fullmatch(code):
+            return Classification(category=Category.UNCENSORED, evidence=[Evidence(basis="number_family", value="numeric")])
         prefix = catalog_prefix(self.query_code(code))
         while prefix not in self._categories and "-" in prefix:
             prefix = prefix.rsplit("-", 1)[0]
