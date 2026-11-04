@@ -112,18 +112,27 @@ class JavDBApi(Source):
             raise FetchError(Status.IDENTITY_MISMATCH, "JavDB API returned a different catalog")
         kind = work.get("type")
         category = {0: Category.CENSORED, 1: Category.UNCENSORED, 3: Category.FC2}.get(kind, Category.UNKNOWN) if type(kind) is int else Category.UNKNOWN
+        warnings = []
         if not code.startswith("FC2PPV-"):
-            self.rules.remember(code, category, self.settings.catalog_rules_file)
+            try:
+                self.rules.remember(code, category, self.settings.catalog_rules_file)
+            except OSError as exc:
+                warnings.append(f"番号规则保存失败：{exc}")
         classification = self.rules.classify(code)
         title = work.get("origin_title") or work["title"]
         source_url = self.base + f"/api/v4/movies/{movie_id}"
-        actors = [
-            Actor(
-                name=item["name"],
-            )
-            for item in work.get("actors") or []
-            if isinstance(item, dict) and item.get("name")
-        ]
+        work_actors = work.get("actors") or []
+        if not isinstance(work_actors, list):
+            raise FetchError(Status.PARSE_ERROR, "JavDB API actor list schema changed")
+        actors, actor_ids = [], {}
+        for item in work_actors:
+            if isinstance(item, dict) and item.get("name"):
+                actors.append(Actor(name=item["name"]))
+                if item.get("id"):
+                    ident = str(item["id"])
+                    if item["name"] in actor_ids and actor_ids[item["name"]] != ident:
+                        raise FetchError(Status.PARSE_ERROR, "JavDB API returned different actor IDs for the same name")
+                    actor_ids[item["name"]] = ident
         metadata = Metadata(
             code=code,
             title=title,
@@ -149,10 +158,7 @@ class JavDBApi(Source):
             external_id=movie_id,
             source_url=source_url,
         )
-        return self.found(request, metadata, actor_ids={
-            item["name"]: str(item["id"]) for item in work.get("actors") or []
-            if isinstance(item, dict) and item.get("name") and item.get("id")
-        })
+        return self.found(request, metadata, warnings=warnings, actor_ids=actor_ids)
 
     async def resolve_actors(self, actors, names: ActorAliases, category, ids) -> list[str]:
         warnings = []
@@ -161,7 +167,7 @@ class JavDBApi(Source):
         kind = actor_type(category)
         for actor in actors:
             ident = ids.get(actor.name)
-            if ident in names.actors or (not ident and names.candidates(actor.name, kind)):
+            if not names.needs_lookup(actor.name, kind, ident):
                 continue
             try:
                 if ident:
@@ -187,6 +193,6 @@ class JavDBApi(Source):
                     }):
                         records[str(row["id"])] = record
                 names.remember(records, self.settings.actor_aliases_file)
-            except (FetchError, ValueError, TypeError) as exc:
+            except (FetchError, OSError, ValueError, TypeError) as exc:
                 warnings.append(f"{actor.name}: 演员查询失败（{exc}）")
         return warnings

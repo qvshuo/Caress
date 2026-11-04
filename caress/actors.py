@@ -1,4 +1,4 @@
-"""Typed Japanese actor names with conservative alias lookup."""
+"""Typed actor names with conservative alias lookup."""
 
 from __future__ import annotations
 
@@ -30,9 +30,12 @@ def actor_record(source: dict) -> dict | None:
     if isinstance(zht, str) and zht.strip():
         record["name_zht"] = zht.strip()
     raw = source.get("other_name")
+    values = re.split("[,，]", raw) if isinstance(raw, str) else raw or []
+    if not isinstance(values, list) or any(not isinstance(alias, str) for alias in values):
+        raise ValueError("invalid actor aliases")
     excluded = {comparison_name(record["name"]), comparison_name(record.get("name_zht", ""))}
     aliases = {}
-    for alias in sorted(re.split("[,，]", raw) if isinstance(raw, str) else raw or []):
+    for alias in sorted(values):
         key = comparison_name(alias)
         if key and key not in excluded:
             aliases.setdefault(key, alias.strip())
@@ -87,6 +90,9 @@ class ActorAliases:
 
     def reload(self, path: Path) -> None:
         self.__dict__.update(ActorAliases.load(path).__dict__)
+
+    def needs_lookup(self, name: str, kind: int | None, ident: str | None = None) -> bool:
+        return ident not in self.actors if ident else not self.candidates(name, kind)
 
     def remember(self, records: dict[str, dict], path: Path | None) -> None:
         if not records:

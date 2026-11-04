@@ -5,6 +5,7 @@ import time
 from contextlib import nullcontext
 from typing import Any
 
+from .actors import actor_type
 from .catalog import CatalogRules, catalog_prefix
 from .http import Client, WebClient
 from .logging import report_progress
@@ -24,7 +25,7 @@ from .sources import SOURCES
 class Scraper:
     def __init__(self, settings: Settings | None = None, *, client: Client | None = None, runtime=None):
         self.settings = settings or Settings()
-        self.rules = CatalogRules.load(self.settings.catalog_rules_file).model_copy(deep=True)
+        self._rules = CatalogRules.load(self.settings.catalog_rules_file).model_copy(deep=True)
         self.client = client or WebClient(self.settings, runtime=runtime)
         self._owns_client = client is None
         self.source_locks = {}
@@ -33,6 +34,10 @@ class Scraper:
             source: factory(self.client, self.settings, self.rules)
             for source, factory in SOURCES.items()
         }
+
+    @property
+    def rules(self) -> CatalogRules:
+        return CatalogRules.load(self.settings.catalog_rules_file) if self.settings.catalog_rules_file else self._rules
 
     async def __aenter__(self) -> Scraper:
         if self._owns_client:
@@ -52,11 +57,6 @@ class Scraper:
         validate_code(request.code)
         if (request.external_id or request.source_url) and not request.source:
             raise ValueError("explicit movie ID or URL requires a source")
-        if self.settings.catalog_rules_file:
-            current = CatalogRules.load(self.settings.catalog_rules_file)
-            for field in type(current).model_fields:
-                setattr(self.rules, field, getattr(current, field))
-            self.rules.validate_prefixes()
         classification = self.rules.classify(request.code)
         async def fetch(source):
             lock = self.source_locks.setdefault(source, asyncio.Lock())
@@ -106,10 +106,11 @@ class Scraper:
         selected = next(
             (r for r in results if r.status == Status.FOUND and r.metadata is not None), None
         )
-        warnings = [warning for result in results for warning in result.warnings]
+        executed = [*results, *(value for source, value in fetched.items() if source not in route)]
+        warnings = [warning for result in executed for warning in result.warnings]
         warnings.extend(
             f"{result.source}: {result.status.value}: {result.message or ''}"
-            for result in results
+            for result in executed
             if result.status not in (Status.FOUND, Status.NOT_FOUND, Status.UNSUPPORTED)
         )
         metadata = selected.metadata.model_copy(deep=True, update={"code": request.code}) if selected else None
@@ -123,10 +124,15 @@ class Scraper:
         return ScrapeResult(
             code=request.code, status=status, classification=classification,
             metadata=metadata, selected_source=selected.source if selected else None,
-            results=[*results, *(value for source, value in fetched.items() if source not in route)], warnings=warnings,
+            results=executed, warnings=warnings,
         )
 
     async def resolve_actors(self, actors, names, category, ids):
+        if self.settings.actor_aliases_file:
+            names.reload(self.settings.actor_aliases_file)
+        kind = actor_type(category)
+        if not any(names.needs_lookup(actor.name, kind, ids.get(actor.name)) for actor in actors):
+            return []
         lock = self.source_locks.setdefault(SourceId.JAVDB, asyncio.Lock())
         async with lock:
             with self.client.source_work() if isinstance(self.client, WebClient) else nullcontext():

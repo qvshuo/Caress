@@ -456,10 +456,10 @@ class TaskQueue:
             actors = dict.fromkeys(actor.name for path in nfo_paths(self.output, work)
                                    for actor in read_nfo(path, work.code).actors
                                    if actor.name in request.actor_names)
-            await scraper.resolve_actors([Actor(name=name) for name in actors], names, work.category, {})
+            warnings = await scraper.resolve_actors([Actor(name=name) for name in actors], names, work.category, {})
             records = await portraits.save([Actor(name=name) for name in actors], replace=True, kind=actor_type(work.category))
             failed = any(record["status"] == "error" for record in records)
-            report = complete_report({"code": work.code, "status": "error" if failed else "found", "portraits": records,
+            report = complete_report({"code": work.code, "status": "error" if failed else "found", "portraits": records, "warnings": warnings,
                                       "stages": {"portraits": "failed" if failed else "success"}})
             report["partial"] = failed and any(record["status"] in ("saved", "existing") for record in records)
             if failed:

@@ -23,11 +23,15 @@ class Source:
     def __init__(self, client: Client, settings: Settings, rules: CatalogRules) -> None:
         self.client = client
         self.settings = settings
-        self.rules = rules
+        self._rules = rules
         settings = settings.sites.get(self.id)
         self.base = (
             settings.base_url if settings and settings.base_url else self.default_url
         ).rstrip("/")
+
+    @property
+    def rules(self) -> CatalogRules:
+        return CatalogRules.load(self.settings.catalog_rules_file) if self.settings.catalog_rules_file else self._rules
 
     def checked_url(self, value: str) -> str:
         parsed = urlparse(value)
@@ -80,7 +84,8 @@ class Source:
 
     def select(self, request: ScrapeRequest, candidates: list[Candidate]) -> Candidate | None:
         # All accepted matches identify the same catalog; retain provider ranking on ties.
-        return next((candidate for candidate in candidates if self.rules.matches(request.code, candidate.code)), None)
+        rules = self.rules
+        return next((candidate for candidate in candidates if rules.matches(request.code, candidate.code)), None)
 
     async def _fetch(self, request: ScrapeRequest) -> SourceResult:
         raise NotImplementedError
