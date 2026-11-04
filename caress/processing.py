@@ -6,15 +6,14 @@ from .contract import EDITABLE_FIELDS
 from .engine import Scraper
 from .images import save_images, actor_image
 from .logging import report_progress
-from .models import Actor, Artwork, Category, Metadata, ScrapeRequest, Status
+from .models import Actor, Artwork, Metadata, ScrapeRequest, Status
 from .nfo import existing_nfo, media_stems, read_nfo, serialize_nfo, target_folder, write_nfo_files
 from .scanner import Work
 from .storage import atomic_write, file_transaction
 from .translation import Translator, compose_title, variant_metadata
 
-def prepare_variant(variant: dict, names: ActorAliases, category=None, *, code: str) -> tuple[dict, list[dict]]:
+def prepare_variant(variant: dict, names: ActorAliases, category, *, code: str) -> tuple[dict, list[dict]]:
     raw = Metadata.model_validate(variant["metadata"])
-    category = category if category not in (None, Category.UNKNOWN) else raw.classification.category
     actors, mappings, issues = map_actor_names(raw.actors, names,
         actor_type(category), variant.get("actor_mappings", []))
     return {**variant, "processed_fields": {**variant.get("processed_fields", {}), "code": code,

@@ -9,8 +9,6 @@ from .catalog import CatalogRules
 from .http import Client, WebClient
 from .logging import report_progress
 from .models import (
-    Category,
-    Evidence,
     ScrapeRequest,
     ScrapeResult,
     Status,
@@ -52,11 +50,6 @@ class Scraper:
         if (request.external_id or request.source_url) and not request.source:
             raise ValueError("explicit movie ID or URL requires a source")
         classification = self.rules.classify(request.code)
-        if request.category:
-            if classification.category == Category.FC2 and request.category != Category.FC2:
-                raise ValueError("category contradicts FC2 number")
-            classification.category = request.category
-            classification.evidence.append(Evidence(basis="user_category", value=request.category))
         route = (
             [request.source]
             if request.source
@@ -107,8 +100,6 @@ class Scraper:
         )
         metadata = selected.metadata.model_copy(deep=True, update={"code": request.code}) if selected else None
         if metadata:
-            if classification.category == Category.UNKNOWN and not request.category:
-                classification = metadata.classification
             if not metadata.plot:
                 warnings.append(f"{selected.source}: missing plot")
             if not metadata.artwork:

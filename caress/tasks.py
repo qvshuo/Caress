@@ -124,11 +124,7 @@ class TaskQueue:
         return [t for t in self.runtime.tasks() if t["status"] in ("pending", "running")]
 
     def _apply_result(self, work, result, *, rules=None):
-        local = (rules or CatalogRules.load(self.settings.catalog_rules_file)).classify(work.code).category
-        if local != Category.UNKNOWN:
-            work.category = local
-        elif result.get("category"):
-            work.category = Category(result["category"])
+        work.category = (rules or CatalogRules.load(self.settings.catalog_rules_file)).classify(work.code).category
         work.title, work.actors = None, []
         work.poster = None
         work.warnings = [warning for warning in work.warnings if warning != "NFO 无效，等待补抓"]

@@ -8,9 +8,6 @@ from urllib.parse import urlparse
 from ..http import FetchError, Page
 from ..models import (
     Actor,
-    Category,
-    Classification,
-    Evidence,
     Metadata,
     ScrapeRequest,
     SourceId,
@@ -42,12 +39,6 @@ class Uncensored(Source):
         if urlparse(page.url).path.rstrip("/") != self.detail_path.format(identity).rstrip("/"):
             raise FetchError(Status.IDENTITY_MISMATCH, "official detail redirected to another work")
         return identity, page
-
-    def classification(self) -> Classification:
-        return Classification(
-            category=Category.UNCENSORED,
-            evidence=[Evidence(basis="catalog_type", value="uncensored", source=self.id)],
-        )
 
 
 class OnePondo(Uncensored):
@@ -117,7 +108,7 @@ class OnePondo(Uncensored):
                 ],
                 tags=data.get("UCNAME") or [],
                 artwork=images,
-                classification=self.classification(),
+                classification=self.rules.classify(request.code),
                 external_id=identity,
                 source_url=url,
             ),
@@ -186,7 +177,7 @@ class Caribbeancom(Uncensored):
                 ],
                 tags=texts(selector, row("タグ") + "//a//text()"),
                 artwork=artwork(self.id, page.url, covers, samples[:100]),
-                classification=self.classification(),
+                classification=self.rules.classify(request.code),
                 external_id=identity,
                 source_url=page.url,
             ),
@@ -259,7 +250,7 @@ class Heyzo(Uncensored):
                 actors=[Actor(name=name) for name in actors if name != "-"],
                 tags=texts(selector, '//ul[@class="tag-keyword-list"]//li/a//text()'),
                 artwork=artwork(self.id, page.url, covers, samples[:100]),
-                classification=self.classification(),
+                classification=self.rules.classify(request.code),
                 external_id=identity,
                 source_url=page.url,
             ),

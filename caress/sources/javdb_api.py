@@ -11,8 +11,6 @@ from ..http import FetchError
 from ..models import (
     Actor,
     Candidate,
-    Category,
-    Evidence,
     Metadata,
     ScrapeRequest,
     SourceId,
@@ -108,17 +106,7 @@ class JavDBApi(Source):
         if str(work.get("id")) != movie_id:
             raise FetchError(Status.IDENTITY_MISMATCH, "JavDB API returned a different movie ID")
         code = normalize_code(work["number"])
-        category = work.get("type")
         classification = self.rules.classify(code)
-        if category in (0, 1, 2, 3, 4, "0", "1", "2", "3", "4"):
-            category = int(category)
-            native = {0: Category.CENSORED, 1: Category.UNCENSORED, 2: Category.OTHER,
-                      3: Category.FC2, 4: Category.OTHER}[category]
-            if code.startswith("FC2PPV-") and native != Category.FC2:
-                raise FetchError(Status.PARSE_ERROR, "API type contradicts FC2 number family")
-            if classification.category == Category.UNKNOWN:
-                classification.category = native
-            classification.evidence.append(Evidence(basis="catalog_type", value=str(category), source=self.id))
         title = work.get("origin_title") or work["title"]
         source_url = self.base + f"/api/v4/movies/{movie_id}"
         actors = [

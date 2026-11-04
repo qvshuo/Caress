@@ -57,18 +57,11 @@ class CatalogRules(BaseModel):
         return cls.model_validate_json(path.read_bytes())
 
     def classify(self, code: str) -> Classification:
-        if code.startswith("FC2PPV-"):
-            return Classification(
-                category=Category.FC2,
-                evidence=[Evidence(basis="number_family", value="FC2")],
-            )
-        prefix = catalog_prefix(code)
+        prefix = catalog_prefix(self.query_code(code))
         while prefix not in self._categories and "-" in prefix:
             prefix = prefix.rsplit("-", 1)[0]
         category = self._categories.get(prefix, Category.UNKNOWN)
         basis = f"{category.value}_prefix"
-        if category == Category.UNKNOWN and NUMERIC.fullmatch(code):
-            category, basis = Category.UNCENSORED, "numeric_catalog_family"
         return Classification(
             category=category,
             evidence=[Evidence(basis=f"rules_v{self.version}:{basis}", value=prefix)],

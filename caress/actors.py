@@ -16,9 +16,8 @@ def comparison_name(name: str) -> str:
     return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", name).strip()).casefold()
 
 
-def actor_type(category: Category | str | None, fallback: Category | str | None = None) -> int | None:
-    kinds = {Category.CENSORED: 0, Category.UNCENSORED: 1}
-    return kinds.get(category, kinds.get(fallback))
+def actor_type(category: Category | str | None) -> int | None:
+    return {Category.CENSORED: 0, Category.UNCENSORED: 1}.get(category)
 
 
 class ActorAliases:

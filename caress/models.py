@@ -128,7 +128,6 @@ class ScrapeRequest(BaseModel):
     source: SourceId | None = None
     source_url: str | None = None
     external_id: str | None = None
-    category: Category | None = None
 
 
 class ScrapeResult(BaseModel):
