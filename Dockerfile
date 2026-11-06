@@ -9,7 +9,7 @@ FROM frontend AS backend
 COPY caress /backend/caress
 RUN rm -rf /backend/caress/web
 
-FROM python:3.15.1-slim-trixie
+FROM python:3.15.2-slim-trixie
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /app
 COPY requirements.txt .
