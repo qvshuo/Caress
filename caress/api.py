@@ -19,11 +19,12 @@ from starlette.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from . import __version__
-from .contract import EDITABLE_FIELDS
+from .metadata_fields import EDITABLE_FIELDS
 from .actors import ActorAliases, actor_type, library_actors
 from .catalog import CatalogRules
 from .directories import Directories
-from .images import crop_poster, actor_image, Gfriends, save_image_choices, selected_image, validate_resources
+from .images import crop_poster, save_image_choices, selected_image, validate_resources
+from .portraits import Gfriends, actor_image
 from .models import Actor, ActorMapping, Category, Metadata, SourceId
 from .nfo import (
     existing_nfo,

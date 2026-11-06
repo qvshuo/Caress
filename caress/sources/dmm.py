@@ -14,7 +14,7 @@ from ..models import (
     SourceResult,
     Status,
 )
-from ..parsing import artwork, parse_date
+from .parsing import artwork, parse_date
 from .base import Source
 
 QUERY = """query FetchDigitalContent($id: ID!) {

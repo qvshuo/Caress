@@ -3,17 +3,14 @@ import { FolderOpen, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { errorText } from "@/lib/messages";
-import { api, categories, sources, statuses } from "@/lib/api";
+import { api } from "@/lib/api";
+import { categories, sources, statuses } from "@/lib/labels";
 import type { Settings as Preferences } from "@/lib/types";
-import {
-  Empty,
-  Field,
-  StickyActions,
-  type Confirm,
-  type EditReporter,
-} from "./shared";
+import { Empty } from "@/components/ui/empty";
+import { Field, StickyActions, type EditReporter } from "@/components/form-controls";
+import type { Confirm } from "@/components/confirmation-dialog";
 
-const DirectoryBrowser = lazy(() => import("./directory-browser"));
+const DirectoryBrowser = lazy(() => import("@/components/directory-browser"));
 type Cooldowns = Record<string, { cooldown_until: number; cooldown_reason: string }>;
 function settingsDraft({
   configured: _configured,

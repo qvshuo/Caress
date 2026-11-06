@@ -1,6 +1,6 @@
 import type { WorkDetail } from "./types";
 import { errorText } from "./messages";
-import { statuses } from "./api";
+import { statuses } from "@/lib/labels";
 
 const phases: Record<string, string> = {
   request: "请求数据",

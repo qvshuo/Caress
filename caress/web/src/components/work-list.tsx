@@ -8,19 +8,19 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { categories, valid } from "@/lib/api";
+import { categories } from "@/lib/labels";
+import { valid } from "@/lib/utils";
 import type { Work } from "@/lib/types";
+import { ArtworkImage } from "@/components/image-viewer";
 import {
-  ArtworkImage,
   SelectionCheckbox,
   SearchInput,
-  Select,
-  Status,
   ViewToggle,
-  WorkTitle,
   rowNavigation,
   type ViewMode,
-} from "./shared";
+} from "@/components/list-controls";
+import { Select } from "@/components/form-controls";
+import { Status } from "@/components/status";
 
 export const workFilters = {
   all: "全部状态",
@@ -239,5 +239,13 @@ export function WorkList({
         ))}
       </TableBody>
     </Table>
+  );
+}
+
+export function WorkTitle({ title }: { title?: string | null }) {
+  return (
+    <span className="block truncate" title={title || undefined}>
+      {title}
+    </span>
   );
 }

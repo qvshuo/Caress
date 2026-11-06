@@ -2,7 +2,7 @@
 
 __version__ = "1.6.1"
 
-from .engine import Scraper
+from .scraper import Scraper
 from .models import ScrapeRequest, ScrapeResult
 from .settings import Settings
 

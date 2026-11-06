@@ -13,7 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { ArtworkImage } from "./shared";
+import { ArtworkImage } from "@/components/image-viewer";
 import { errorText } from "@/lib/messages";
 import { api } from "@/lib/api";
 import { cropBox, percentCrop } from "@/lib/crop";

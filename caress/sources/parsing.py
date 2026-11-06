@@ -6,7 +6,7 @@ from urllib.parse import urljoin
 
 from scrapling.parser import Selector
 
-from .models import Artwork, SourceId
+from ..models import Artwork, SourceId
 
 
 def texts(page: Selector, expression: str) -> list[str]:

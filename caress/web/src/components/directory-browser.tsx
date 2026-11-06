@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { api } from "@/lib/api";
 import type { DirectoryView } from "@/lib/types";
-import { Empty } from "./shared";
+import { Empty } from "@/components/ui/empty";
 
 export default function DirectoryBrowser({
   kind,

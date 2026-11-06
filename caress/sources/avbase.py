@@ -14,7 +14,7 @@ from ..models import (
     SourceResult,
     Status,
 )
-from ..parsing import artwork, minutes, parse_date, text
+from .parsing import artwork, minutes, parse_date, text
 from .base import Source
 
 

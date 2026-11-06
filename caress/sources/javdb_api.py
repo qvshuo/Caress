@@ -19,7 +19,7 @@ from ..models import (
     SourceResult,
     Status,
 )
-from ..parsing import artwork, minutes, parse_date
+from .parsing import artwork, minutes, parse_date
 from .base import Source
 
 

@@ -11,7 +11,7 @@ from ..models import (
     SourceResult,
     Status,
 )
-from ..parsing import artwork, first, parse_date, text, texts
+from .parsing import artwork, first, parse_date, text, texts
 from .base import Source
 
 

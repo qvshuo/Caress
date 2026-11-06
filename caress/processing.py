@@ -2,9 +2,10 @@ import asyncio
 from pathlib import Path
 
 from .actors import ActorAliases, actor_type, map_actor_names
-from .contract import EDITABLE_FIELDS
-from .engine import Scraper
-from .images import save_images, actor_image
+from .metadata_fields import EDITABLE_FIELDS
+from .scraper import Scraper
+from .images import save_images
+from .portraits import actor_image
 from .logging import report_progress
 from .models import Actor, Artwork, Metadata, ScrapeRequest, Status
 from .nfo import existing_nfo, media_stems, read_nfo, serialize_nfo, target_folder, write_nfo_files

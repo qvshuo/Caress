@@ -1,19 +1,20 @@
 import { useDeferredValue, useMemo, useState } from "react";
 import { ScanLine } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { api, valid } from "@/lib/api";
+import { api } from "@/lib/api";
+import { valid } from "@/lib/utils";
 import type { Work } from "@/lib/types";
+import { Empty } from "@/components/ui/empty";
+import { useSelection } from "@/hooks/use-selection";
 import {
-  Empty,
-  useSelection,
   ClearSelection,
   SummaryHeader,
   Pagination,
-  Select,
-  useListState,
   defaultListView,
-} from "./shared";
-import { WorkFilters, WorkList, matchesWorkFilter } from "./work-list";
+} from "@/components/list-controls";
+import { Select } from "@/components/form-controls";
+import { useListState } from "@/hooks/use-list-state";
+import { WorkFilters, WorkList, matchesWorkFilter } from "@/components/work-list";
 
 export function Library({
   works,

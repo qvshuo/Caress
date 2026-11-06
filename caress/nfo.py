@@ -4,7 +4,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from .models import Actor, Metadata
-from .contract import NFO_FIELDS
+from .metadata_fields import NFO_FIELDS
 from .scanner import Work, validate_code
 from .storage import atomic_write, file_transaction
 

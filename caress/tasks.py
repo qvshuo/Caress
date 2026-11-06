@@ -13,8 +13,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .actors import ActorAliases, actor_type, library_actors
 from .catalog import CatalogRules
-from .engine import Scraper
-from .images import Gfriends, actor_image_index
+from .scraper import Scraper
+from .portraits import Gfriends, actor_image_index
 from .http import WebClient
 from .logging import progress, work_code
 from .logging import task_id as log_task_id

@@ -10,27 +10,27 @@ import {
   TableRow,
   TableCell,
 } from "@/components/ui/table";
-import { api, categories } from "@/lib/api";
+import { api } from "@/lib/api";
+import { categories } from "@/lib/labels";
 import type { ActorLibrarySnapshot, LibraryActor, Work } from "@/lib/types";
+import { ArtworkImage, ImageViewer } from "@/components/image-viewer";
+import { useSelection } from "@/hooks/use-selection";
 import {
-  ArtworkImage,
-  useSelection,
   SelectionCheckbox,
   ClearSelection,
-  ImageViewer,
-  Empty,
   SummaryHeader,
-  WorkTitle,
   Pagination,
   SearchInput,
-  Select,
-  Status,
-  useDebounce,
   rowNavigation,
   ViewToggle,
-  useListState,
   defaultListView,
-} from "./shared";
+} from "@/components/list-controls";
+import { Empty } from "@/components/ui/empty";
+import { WorkTitle } from "@/components/work-list";
+import { Select } from "@/components/form-controls";
+import { Status } from "@/components/status";
+import { useDebounce } from "@/hooks/use-debounce";
+import { useListState } from "@/hooks/use-list-state";
 
 interface Props {
   scope: string | null;

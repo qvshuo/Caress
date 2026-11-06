@@ -194,7 +194,7 @@ def map_actor_names(actors: list[Actor], names: ActorAliases, kind=None, pinned=
 
 
 def library_actors(works, output: Path, names: ActorAliases, query: str = "") -> list[dict]:
-    from .images import actor_image, actor_image_index
+    from .portraits import actor_image, actor_image_index
     from .nfo import existing_nfo, read_nfo
 
     image_index = actor_image_index(output)

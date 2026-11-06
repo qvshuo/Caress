@@ -5,7 +5,9 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { errorText } from "@/lib/messages";
-import { api, sources, categories, formatDate } from "@/lib/api";
+import { api } from "@/lib/api";
+import { sources, categories } from "@/lib/labels";
+import { formatDate } from "@/lib/utils";
 import {
   fields,
   metadataDraft,
@@ -22,18 +24,14 @@ import type {
   WorkDetail,
   Work as WorkRecord,
 } from "@/lib/types";
-import {
-  ArtworkImage,
-  Empty,
-  Select,
-  Status,
-  StickyActions,
-  type EditReporter,
-} from "./shared";
-import { Diagnostics, Process } from "./tasks";
+import { ArtworkImage } from "@/components/image-viewer";
+import { Empty } from "@/components/ui/empty";
+import { Select, StickyActions, type EditReporter } from "@/components/form-controls";
+import { Status } from "@/components/status";
+import { Diagnostics, Process } from "@/components/work-progress";
 import { sourceProgress } from "@/lib/source-progress";
 
-const CropEditor = lazy(() => import("./crop-editor"));
+const CropEditor = lazy(() => import("@/components/crop-editor"));
 type Editor = {
   detail: WorkDetail;
   draft: Draft;
