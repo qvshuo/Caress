@@ -1,0 +1,41 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(sed -n 's/.*<Version>\(.*\)<\/Version>.*/\1/p' emby-plugin/caress/caress.csproj)
+          test "$TAG" = "v$version"
+      - name: Build plugin
+        run: |
+          cat > "$RUNNER_TEMP/compose.yml" <<EOF_COMPOSE
+          services:
+            plugin:
+              image: caress-plugin-release
+              entrypoint: /caress.dll
+              build:
+                context: $GITHUB_WORKSPACE
+                dockerfile: emby-plugin/Dockerfile
+          EOF_COMPOSE
+          docker compose -f "$RUNNER_TEMP/compose.yml" build plugin
+          docker compose -f "$RUNNER_TEMP/compose.yml" create plugin
+          docker compose -f "$RUNNER_TEMP/compose.yml" cp plugin:/caress.dll ./caress.dll
+          docker compose -f "$RUNNER_TEMP/compose.yml" down
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" caress.dll --verify-tag --generate-notes
