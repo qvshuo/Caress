@@ -17,8 +17,16 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: |
-          version=$(sed -n 's/.*<Version>\(.*\)<\/Version>.*/\1/p' emby-plugin/caress/caress.csproj)
-          test "$TAG" = "v$version"
+          python3 - <<'PYTHON'
+          import ast, json, os
+          from pathlib import Path
+          from xml.etree import ElementTree
+          plugin = ElementTree.parse("emby-plugin/caress/caress.csproj").findtext("PropertyGroup/Version")
+          web = json.loads(Path("caress/web/package.json").read_text())["version"]
+          module = ast.parse(Path("caress/__init__.py").read_text())
+          backend = next(ast.literal_eval(node.value) for node in module.body if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "__version__" for target in node.targets))
+          assert os.environ["TAG"] == f"v{plugin}" and plugin == web == backend, "Version mismatch"
+          PYTHON
       - name: Build plugin
         run: |
           cat > "$RUNNER_TEMP/compose.yml" <<EOF_COMPOSE
@@ -38,4 +46,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
-        run: gh release create "$TAG" Caress.dll --verify-tag --generate-notes
+        run: gh release create "$TAG" Caress.dll --verify-tag --title "Caress $TAG" --generate-notes
