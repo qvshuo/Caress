@@ -32,7 +32,7 @@ docker compose up -d --build
 
 1. 设置作品目录和元数据目录，视频或 STRM 文件的父文件夹名称须为完整番号，且不能重复；
 2. 配置 OpenAI 兼容 API，用于翻译；
-3. 下载 [caress.dll](https://github.com/qvshuo/Caress/releases/latest/download/caress.dll)，放入 Emby 配置目录下的 `plugins` 文件夹，Docker 部署时，对应 Emby 容器内的 `/config/plugins`；
+3. 下载 [Caress.dll](https://github.com/qvshuo/Caress/releases/latest/download/Caress.dll)，放入 Emby 配置目录下的 `plugins` 文件夹，Docker 部署时，对应 Emby 容器内的 `/config/plugins`；如有旧的 `caress.dll`，请先移除；
 
 4. 在 Emby 的 Compose 服务中挂载元数据目录，冒号左侧填写 Caress 元数据目录在宿主机上的绝对路径：
 
@@ -50,5 +50,3 @@ docker compose up -d --build
 6. 在媒体库的元数据读取器中启用 **Caress**，随后刷新媒体库。
 
 插件直接读取本地文件，无需连接 Caress 服务。运行期间会监听元数据目录的变更并自动刷新媒体库；首次接入时仍需手动刷新媒体库。
-
-插件设置页只配置元数据目录，设置保存在 Emby 配置目录的 `plugins/configurations/Caress.json`，Docker 中通常为 `/config/plugins/configurations/Caress.json`。
