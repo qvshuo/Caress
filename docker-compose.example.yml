@@ -6,8 +6,8 @@ services:
     ports:
       - "0.0.0.0:9307:9307"
     volumes:
-      - /path/to/media:/media:ro # 改为视频、STRM 所在的实际目录
-      - /path/to/data:/data # 改为数据目录，元数据默认保存在其 metadata 子目录
+      - /path/to/media:/path/to/media:ro # 改为视频、STRM 所在的实际目录
+      - /path/to/data:/data # 改为数据目录，SQLite 和图片保存在此目录
     environment:
       TZ: Asia/Shanghai
     depends_on:
@@ -29,16 +29,3 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-  web:
-    profiles: [dev]
-    build:
-      context: .
-      target: frontend
-    command: sh -c "bun install --frozen-lockfile && bun run dev"
-    ports:
-      - "127.0.0.1:3000:3000"
-    volumes:
-      - ./caress/web:/build:ro
-      - /build/node_modules
-    depends_on:
-      - caress

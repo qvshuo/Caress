@@ -8,7 +8,7 @@ export function cn(...inputs: ClassValue[]) {
 export const active = (value: { status: string }) =>
   ["pending", "running"].includes(value.status);
 export const valid = (value: { status: string }) =>
-  !["invalid_key", "conflict"].includes(value.status);
+  !["invalid_key"].includes(value.status);
 export function formatDate(value: string, progress = false): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "—";

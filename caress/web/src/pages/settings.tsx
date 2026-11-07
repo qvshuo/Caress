@@ -8,7 +8,6 @@ import { categories, sources, statuses } from "@/lib/labels";
 import type { Settings as Preferences } from "@/lib/types";
 import { Empty } from "@/components/ui/empty";
 import { Field, StickyActions, type EditReporter } from "@/components/form-controls";
-import type { Confirm } from "@/components/confirmation-dialog";
 
 const DirectoryBrowser = lazy(() => import("@/components/directory-browser"));
 type Cooldowns = Record<string, { cooldown_until: number; cooldown_reason: string }>;
@@ -33,7 +32,6 @@ export function Settings({
   settings,
   saved,
   run,
-  confirm,
   reportEdit,
   tasksActive,
 }: {
@@ -41,19 +39,15 @@ export function Settings({
   tasksActive: boolean;
   saved: (settings: Preferences) => void;
   run: (fn: () => Promise<void>) => void;
-  confirm: Confirm;
   reportEdit: EditReporter;
 }) {
   const [draft, setDraft] = useState(() => settingsDraft(settings));
   const [savedNotice, setSavedNotice] = useState(false);
   const [pending, setPending] = useState(false);
   const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{
-    valid: boolean;
-    message: string;
-    sample?: string;
-    elapsed_seconds?: number;
-  } | null>(null);
+  const [embyTesting, setEmbyTesting] = useState(false);
+  const [embyResult, setEmbyResult] = useState<TestResult | null>(null);
+  const [testResult, setTestResult] = useState<TestResult | null>(null);
   const [browser, setBrowser] = useState<{
     kind: string;
     path: string;
@@ -75,14 +69,22 @@ export function Settings({
     value: (typeof draft)[K],
   ) {
     if (key === "translation") setTestResult(null);
+    if (key === "emby") setEmbyResult(null);
     setDraft((current) => ({ ...current, [key]: value }));
   }
+  async function testEmby() {
+    setEmbyTesting(true);
+    try {
+      const started = performance.now();
+      const result = await api<{valid: boolean; server?: string; version?: string; message?: string}>("emby/test", "POST", draft.emby);
+      setEmbyResult({valid: result.valid, message: result.valid ? `测试通过 · ${result.server} ${result.version}` : (result.message ?? "测试失败"), elapsed_seconds: (performance.now() - started) / 1000});
+    } catch (error) {
+      setEmbyResult({valid: false, message: error instanceof Error ? error.message : "测试失败"});
+    } finally {
+      setEmbyTesting(false);
+    }
+  }
   async function save() {
-    if (
-      settings.metadata_directory !== draft.metadata_directory &&
-      !(await confirm("切换目录", "现有资料保留在原文件夹"))
-    )
-      return;
     setSavedNotice(false);
     setPending(true);
     try {
@@ -106,14 +108,14 @@ export function Settings({
     }
   }
   function pathInput(
-    kind: "media" | "metadata",
+    kind: "media",
     value: string,
     choose: (path: string) => void,
   ) {
     return (
       <div className="flex gap-2">
         <Input
-          aria-label={kind === "media" ? "作品目录" : "元数据目录"}
+          aria-label="作品目录"
           required
           value={value}
           onChange={(event) => choose(event.target.value)}
@@ -191,13 +193,30 @@ export function Settings({
               <Plus />
               添加目录
             </Button>
-            <Field label="元数据目录">
-              <div className="pr-11">
-                {pathInput("metadata", draft.metadata_directory ?? "", (path) =>
-                  update("metadata_directory", path),
-                )}
-              </div>
-            </Field>
+
+          </section>
+          <section className="space-y-4 rounded-lg border p-4">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-lg font-semibold">Emby</h3>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={pending || embyTesting}
+                onClick={() => run(testEmby)}
+              >
+                {embyTesting ? "测试中" : "测试"}
+              </Button>
+            </div>
+            {embyResult && <TestFeedback result={embyResult} close={() => setEmbyResult(null)} />}
+            <fieldset disabled={embyTesting} className="grid gap-4 sm:grid-cols-2">
+              <Field label="服务地址">
+                <Input value={draft.emby.url} onChange={e => update("emby", {...draft.emby, url: e.target.value})} />
+              </Field>
+              <Field label="API Key">
+                <Secret value={draft.emby.api_key} change={api_key => update("emby", {...draft.emby, api_key})} />
+              </Field>
+            </fieldset>
+
           </section>
           <section className="space-y-4 rounded-lg border p-4">
             <div className="flex items-center justify-between gap-3">
@@ -240,33 +259,7 @@ export function Settings({
                   {errorText(settings.translation_status.message)}
                 </p>
               )}
-            {testResult && (
-              <div
-                role="status"
-                className={`rounded-md border p-3 text-sm ${testResult.valid ? "border-emerald-500/30 bg-emerald-500/5" : "border-destructive/30 bg-destructive/5 text-destructive"}`}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <p className="min-w-0 break-words">
-                    {errorText(testResult.message)}
-                    {testResult.elapsed_seconds !== undefined
-                      ? ` · ${testResult.elapsed_seconds.toFixed(2)} 秒`
-                      : ""}
-                  </p>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label="关闭测试结果"
-                    onClick={() => setTestResult(null)}
-                  >
-                    <X />
-                  </Button>
-                </div>
-                {testResult.sample && (
-                  <p className="mt-2 text-foreground">{testResult.sample}</p>
-                )}
-              </div>
-            )}
+            {testResult && <TestFeedback result={testResult} close={() => setTestResult(null)} />}
             <fieldset disabled={testing} className="grid gap-4 sm:grid-cols-2">
               <Field label="接口地址">
                 <Input
@@ -598,6 +591,23 @@ function Sites({
     </div>
   );
 }
+type TestResult = { valid: boolean; message: string; sample?: string; elapsed_seconds?: number };
+
+function TestFeedback({ result, close }: { result: TestResult; close: () => void }) {
+  return (
+    <div role="status" className={`rounded-md border p-3 text-sm ${result.valid ? "border-emerald-500/30 bg-emerald-500/5" : "border-destructive/30 bg-destructive/5 text-destructive"}`}>
+      <div className="flex items-start justify-between gap-3">
+        <p className="min-w-0 break-words">
+          {errorText(result.message)}
+          {result.elapsed_seconds !== undefined ? ` · ${result.elapsed_seconds.toFixed(2)} 秒` : ""}
+        </p>
+        <Button type="button" variant="ghost" size="icon-sm" aria-label="关闭测试结果" onClick={close}><X /></Button>
+      </div>
+      {result.sample && <p className="mt-2 text-foreground">{result.sample}</p>}
+    </div>
+  );
+}
+
 function Secret({
   value,
   change,

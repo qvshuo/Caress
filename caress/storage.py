@@ -48,3 +48,17 @@ def atomic_write(path: Path, value: str | bytes) -> None:
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
+
+
+def target_folder(output: Path, code: str) -> Path:
+    from .scanner import validate_code
+    validate_code(code)
+    root = output.resolve()
+    target = root / code
+    if target.is_symlink() or not target.resolve().is_relative_to(root):
+        raise ValueError("image target escapes output root")
+    return target
+
+
+def image_stems(work) -> list[str]:
+    return [work.code]

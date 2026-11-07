@@ -25,19 +25,18 @@ from .sources import SOURCES
 class Scraper:
     def __init__(self, settings: Settings | None = None, *, client: Client | None = None, runtime=None):
         self.settings = settings or Settings()
-        self._rules = CatalogRules.load(self.settings.catalog_rules_file).model_copy(deep=True)
         self.client = client or WebClient(self.settings, runtime=runtime)
         self._owns_client = client is None
         self.source_locks = {}
         self.prefix_locks = {}
         self.sources = {
-            source: factory(self.client, self.settings, self.rules)
+            source: factory(self.client, self.settings)
             for source, factory in SOURCES.items()
         }
 
     @property
     def rules(self) -> CatalogRules:
-        return CatalogRules.load(self.settings.catalog_rules_file) if self.settings.catalog_rules_file else self._rules
+        return CatalogRules.load(self.settings.database)
 
     async def __aenter__(self) -> Scraper:
         if self._owns_client:
@@ -128,8 +127,8 @@ class Scraper:
         )
 
     async def resolve_actors(self, actors, names, category, ids):
-        if self.settings.actor_aliases_file:
-            names.reload(self.settings.actor_aliases_file)
+        if self.settings.database:
+            names.reload(self.settings.database)
         kind = actor_type(category)
         if not any(names.needs_lookup(actor.name, kind, ids.get(actor.name)) for actor in actors):
             return []

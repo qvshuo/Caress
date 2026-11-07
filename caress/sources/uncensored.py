@@ -14,7 +14,7 @@ from ..models import (
     SourceResult,
     Status,
 )
-from .parsing import artwork, first, minutes, parse_date, text, texts
+from .parsing import artwork, first, parse_date, text, texts
 from .base import Source
 
 
@@ -98,9 +98,7 @@ class OnePondo(Uncensored):
                 original_title=data["Title"],
                 plot=data.get("Desc"),
                 release_date=parse_date(data.get("Release")),
-                runtime_minutes=int(data["Duration"]) // 60 if data.get("Duration") else None,
                 studio="一本道",
-                series=data.get("Series") or None,
                 actors=[
                     Actor(name=name)
                     for name in data.get("ActressesJa", [])
@@ -108,9 +106,6 @@ class OnePondo(Uncensored):
                 ],
                 tags=data.get("UCNAME") or [],
                 artwork=images,
-                classification=self.rules.classify(request.code),
-                external_id=identity,
-                source_url=url,
             ),
             warnings=warnings,
         )
@@ -144,8 +139,6 @@ class Caribbeancom(Uncensored):
             for u in texts(selector, '//div[contains(@class,"gallery-ratio")]/a/@href')
             if "member" not in u
         ]
-        runtime = text(selector, row("再生時間") + "//text()")
-        duration = re.fullmatch(r"(\d+):(\d{2}):(\d{2})", runtime or "")
         release = parse_date(first(selector, row("配信日") + "//text()", row("販売日") + "//text()"))
         if not release:
             # Older official pages omit the date; Caribbeancom IDs encode MMDDYY.
@@ -165,11 +158,7 @@ class Caribbeancom(Uncensored):
                     '//*[@id="moviepages"]//p[1]//text()',
                 ),
                 release_date=release,
-                runtime_minutes=int(duration[1]) * 60 + int(duration[2])
-                if duration
-                else minutes(runtime),
                 studio=text(selector, row("スタジオ") + "/a//text()") or "カリビアンコム",
-                series=text(selector, row("シリーズ") + "/a//text()"),
                 actors=[
                     Actor(name=name)
                     for name in texts(selector, row("出演") + "//a//text()")
@@ -177,9 +166,6 @@ class Caribbeancom(Uncensored):
                 ],
                 tags=texts(selector, row("タグ") + "//a//text()"),
                 artwork=artwork(self.id, page.url, covers, samples[:100]),
-                classification=self.rules.classify(request.code),
-                external_id=identity,
-                source_url=page.url,
             ),
         )
 
@@ -214,17 +200,6 @@ class Heyzo(Uncensored):
         actors = texts(selector, row("出演") + "/a/span//text()")
         if not actors and isinstance(video.get("actor"), str):
             actors = [video["actor"]]
-        duration = video.get("duration") or data.get("duration") or ""
-        if match := re.search(r"\bo\s*=\s*(\{[^;]+\});", page.text):
-            try:
-                duration = json.loads(match[1]).get("full") or duration
-            except (ValueError, AttributeError):
-                pass
-        runtime = None
-        if match := re.fullmatch(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", duration):
-            runtime = int(match[1] or 0) * 60 + int(match[2] or 0)
-        elif match := re.fullmatch(r"(\d+):(\d{2}):(\d{2})", duration):
-            runtime = int(match[1]) * 60 + int(match[2])
         covers = (
             [data["image"]]
             if isinstance(data.get("image"), str)
@@ -244,14 +219,9 @@ class Heyzo(Uncensored):
                 release_date=parse_date(
                     text(selector, row("公開日") + "//text()") or release.get("startDate")
                 ),
-                runtime_minutes=runtime or None,
                 studio=video.get("provider") if isinstance(video.get("provider"), str) else "HEYZO",
-                series=(text(selector, row("シリーズ") + "//text()") or "").strip(" -") or None,
                 actors=[Actor(name=name) for name in actors if name != "-"],
                 tags=texts(selector, '//ul[@class="tag-keyword-list"]//li/a//text()'),
                 artwork=artwork(self.id, page.url, covers, samples[:100]),
-                classification=self.rules.classify(request.code),
-                external_id=identity,
-                source_url=page.url,
             ),
         )

@@ -2,13 +2,13 @@ import asyncio
 from pathlib import Path
 
 from .actors import ActorAliases, actor_type, map_actor_names
-from .metadata_fields import EDITABLE_FIELDS
+from .models import EDITABLE_FIELDS
 from .scraper import Scraper
 from .images import save_images
 from .portraits import actor_image
 from .logging import report_progress
 from .models import Actor, Artwork, Metadata, ScrapeRequest, Status
-from .nfo import existing_nfo, media_stems, read_nfo, serialize_nfo, target_folder, write_nfo_files
+from .storage import image_stems, target_folder
 from .scanner import Work
 from .storage import atomic_write, file_transaction
 from .translation import Translator, compose_title, variant_metadata
@@ -59,7 +59,7 @@ def retry_task_report(report, stages):
 def image_manifest(target, work):
     return [p.name for p in target.iterdir() if p.is_file() and not p.is_symlink()
             and p.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".gif"}
-            and any(p.stem.startswith(stem + "-") for stem in media_stems(work))] if target.is_dir() else []
+            and any(p.stem.startswith(stem + "-") for stem in image_stems(work))] if target.is_dir() else []
 
 
 async def write_artwork(client, work, output, request, selection):
@@ -67,7 +67,7 @@ async def write_artwork(client, work, output, request, selection):
     previous = image_manifest(target, work)
     image_choices = dict(selection.get("image_choices", {}))
     for name in previous:
-        for stem in media_stems(work):
+        for stem in image_stems(work):
             if Path(name).stem.startswith(stem + "-"):
                 image_choices.setdefault(Path(name).stem[len(stem) + 1:],
                                          {"source": selection.get("image_source", "unknown")})
@@ -76,13 +76,13 @@ async def write_artwork(client, work, output, request, selection):
     if not request["overwrite_custom"] and "samples" in selection.get("manual_image_roles", []):
         protected.update(f"fanart{i}" for i in range(1, 101))
     previous = [name for name in previous if not any(
-        Path(name).stem == f"{stem}-{role}" for stem in media_stems(work) for role in protected)]
+        Path(name).stem == f"{stem}-{role}" for stem in image_stems(work) for role in protected)]
     items = [Artwork.model_validate(item) for item in request["artwork"]]
-    records = await save_images(client, items, target, media_stems(work),
+    records = await save_images(client, items, target, image_stems(work),
         missing_only=request["missing_only"], previous_files=previous, protected_roles=protected)
     for record in records:
         if record["status"] == "saved":
-            for stem in media_stems(work):
+            for stem in image_stems(work):
                 name = Path(record["file"]).stem
                 if name.startswith(stem + "-"):
                     image_choices[name[len(stem) + 1:]] = {"source": request["source"]}
@@ -111,13 +111,7 @@ async def process_work(scraper: Scraper, work: Work, output: Path, names: ActorA
     report["warnings"].extend(await scraper.resolve_actors(
         result.metadata.actors, names, result.classification.category, selected.get("actor_ids", {})))
     selection = runtime.selection(work.code)
-    previous = None
-    path = existing_nfo(output, work)
-    if path.is_file():
-        try:
-            previous = read_nfo(path, work.code)
-        except ValueError:
-            pass
+    previous = runtime.metadata(work.code)
     protected = manual_fields(selection) & set(EDITABLE_FIELDS) if missing_only and previous else set()
     selected, report["actor_issues"] = prepare_variant(selected, names, result.classification.category, code=work.code)
     fields = tuple(field for field in ("title", "plot") if field not in protected)
@@ -168,8 +162,8 @@ async def process_work(scraper: Scraper, work: Work, output: Path, names: ActorA
         "success" if any(field in selected["translated_fields"] for field in fields) else "skipped",
         "images": "pending" if request else "skipped", "portraits": "pending" if portraits else "skipped"}
     report_progress("metadata")
-    with file_transaction(target_folder(output, work.code)):
-        write_nfo_files(output, work, serialize_nfo(metadata))
+    with file_transaction(target_folder(output, work.code)), runtime.transaction():
+        runtime.save_metadata(work.code, metadata)
         runtime.record_result(work.code, complete_report({**report, "actor_issues": []}), selection=selection)
     report["images"] = []
     if request:
@@ -183,7 +177,7 @@ async def process_work(scraper: Scraper, work: Work, output: Path, names: ActorA
 
 async def remap_work(work, output, names, runtime, selected_names, selected_ids, portraits):
     await asyncio.sleep(0)
-    metadata = read_nfo(existing_nfo(output, work), work.code)
+    metadata = runtime.metadata(work.code)
     selection = runtime.selection(work.code)
     report = {"code": work.code, "status": "unchanged", "sources": [],
               "stages": {"mapping": "success"}, "actor_updates": [], "warnings": []}
@@ -227,8 +221,8 @@ async def remap_work(work, output, names, runtime, selected_names, selected_ids,
             portraits[update["to"]] = target
     selection.update(actor_mappings=mappings, mapping_fingerprint=names.fingerprint)
     await asyncio.sleep(0)
-    with file_transaction(target_folder(output, work.code)):
-        write_nfo_files(output, work, serialize_nfo(metadata))
+    with file_transaction(target_folder(output, work.code)), runtime.transaction():
+        runtime.save_metadata(work.code, metadata)
         runtime.save_selection(work.code, selection)
     report["status"] = "found" if report["actor_updates"] else "unchanged"
     if report["actor_issues"]:
@@ -237,7 +231,7 @@ async def remap_work(work, output, names, runtime, selected_names, selected_ids,
 
 
 async def retry_work(scraper, work, output, translator, runtime, portraits, stages):
-    metadata = read_nfo(existing_nfo(output, work), work.code)
+    metadata = runtime.metadata(work.code)
     selection = runtime.selection(work.code)
     report = {**runtime.results.get(work.code, {}), "code": work.code, "status": "found"}
     report["stages"] = {**report.get("stages", {}), "metadata": "success"}
@@ -270,8 +264,8 @@ async def retry_work(scraper, work, output, translator, runtime, portraits, stag
                          translation_fingerprints=variant["translation_fingerprints"])
         if "title" in fields and not any(e["field"] == "title" for e in variant["translation_errors"]):
             selection["title_text"] = variant["title_text"]
-        with file_transaction(target_folder(output, work.code)):
-            write_nfo_files(output, work, serialize_nfo(metadata))
+        with file_transaction(target_folder(output, work.code)), runtime.transaction():
+            runtime.save_metadata(work.code, metadata)
             runtime.record_result(work.code, complete_report(report), selection=selection)
     if "images" in stages:
         request = selection.get("pending_images")

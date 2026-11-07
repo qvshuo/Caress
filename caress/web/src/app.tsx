@@ -115,12 +115,12 @@ export function App() {
   }, []);
   const mergeWorks = useCallback((updates: WorkRecord[]) => {
     if (!updates.length) return;
-    const byPath = new Map(updates.map((work) => [work.path, work]));
-    setWorks((current) => current.map((work) => byPath.get(work.path) ?? work));
+    const byCode = new Map(updates.map((work) => [work.code, work]));
+    setWorks((current) => current.map((work) => byCode.get(work.code) ?? work));
   }, []);
   const savedWork = useCallback((work: WorkRecord) => {
-    const { code, path, category, status, media_files, warnings, title, actors, poster } = work;
-    mergeWorks([{ code, path, category, status, media_files, warnings, title, actors, poster }]);
+    const { code, category, status, media, warnings, title, actors, poster } = work;
+    mergeWorks([{ code, category, status, media, warnings, title, actors, poster }]);
     setActorRevision((value) => value + 1);
   }, [mergeWorks]);
   const refreshTasks = useCallback(async (poll = false) => {
@@ -287,9 +287,9 @@ export function App() {
             (path ? (
               <Work
                 key={path}
-                path={path}
+                code={path}
                 taskId={route.split("/")[3]}
-                revision={works.find((work) => work.path === path)}
+                revision={works.find((work) => work.code === path)}
                 back={() => run(() => navigate(returnTo))}
                 run={run}
                 refresh={refreshTasks}
@@ -308,8 +308,7 @@ export function App() {
             ))}
           {tab === "actors" && (settings.configured ? (
             <Actors
-              key={settings.metadata_directory}
-              scope={settings.metadata_directory}
+              scope="/data/images"
               cache={actorCache}
               remember={setActorCache}
               revision={String(actorRevision)}
@@ -343,7 +342,6 @@ export function App() {
               settings={settings}
               tasksActive={busy}
               run={run}
-              confirm={confirm}
               reportEdit={reportEdit}
               saved={(value) => {
                 setSettings(value);

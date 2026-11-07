@@ -2,8 +2,8 @@ import json
 import sqlite3
 from collections import Counter
 from copy import deepcopy
+from contextlib import contextmanager
 from datetime import UTC, datetime
-from hashlib import sha256
 from pathlib import Path
 
 
@@ -11,22 +11,18 @@ def now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def runtime_directory(output: Path) -> Path:
-    return Path("/data/runtime") / sha256(str(output.resolve()).encode()).hexdigest()[:16]
-
-
 class RuntimeStore:
-    """Runtime records in SQLite; NFO, images and maintained mappings stay files."""
+    """SQLite owns structured data; image bytes stay on disk."""
 
-    def __init__(self, root: Path):
-        self.root = runtime_directory(root)
+    def __init__(self, database: Path):
+        self.root = database.parent
         if self.root.is_symlink():
             raise ValueError("runtime directory must not be a symlink")
         self.root.mkdir(parents=True, exist_ok=True)
-        database = self.root / "runtime.sqlite3"
         for path in (database, Path(str(database) + "-wal"), Path(str(database) + "-shm")):
             if path.is_symlink() or (path.exists() and not path.is_file()):
                 raise ValueError("runtime database must be a regular file")
+        self._sequence = 0
         self.connection = sqlite3.connect(database, timeout=5)
         try:
             self.connection.execute("PRAGMA journal_mode=WAL")
@@ -43,6 +39,10 @@ class RuntimeStore:
             )
             self.connection.execute("CREATE TABLE IF NOT EXISTS variants (code TEXT NOT NULL, source TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(code, source))")
             self.connection.execute("CREATE TABLE IF NOT EXISTS selections (code TEXT PRIMARY KEY, data TEXT NOT NULL)")
+            self.connection.execute("CREATE TABLE IF NOT EXISTS media (id TEXT PRIMARY KEY, code TEXT NOT NULL, path TEXT UNIQUE NOT NULL, data TEXT NOT NULL, sync TEXT NOT NULL DEFAULT '{}')")
+            self.connection.execute("CREATE INDEX IF NOT EXISTS media_code_path ON media(code, path)")
+            self.connection.execute("UPDATE media SET sync=json_set(sync, '$.status', 'pending', '$.error', '同步被中断') WHERE json_extract(sync, '$.status')='syncing'")
+            self.connection.commit()
             self.works_data = self._read("scan").get("catalog", [])
             self._index_works()
             self.results = self._read("result")
@@ -69,6 +69,58 @@ class RuntimeStore:
             self.connection.close()
             raise
 
+    @contextmanager
+    def transaction(self):
+        self._sequence += 1
+        name = f"write_{self._sequence}"
+        self.connection.execute(f"SAVEPOINT {name}")
+        try:
+            yield
+            self.connection.execute(f"RELEASE SAVEPOINT {name}")
+        except BaseException:
+            self.connection.execute(f"ROLLBACK TO SAVEPOINT {name}")
+            self.connection.execute(f"RELEASE SAVEPOINT {name}")
+            raise
+
+    def media(self, code):
+        return [json.loads(row[0]) | {"sync": json.loads(row[1])} for row in self.connection.execute(
+            "SELECT data, sync FROM media WHERE code=? ORDER BY path", (code,))]
+
+    def save_sync(self, ident, state):
+        with self.transaction():
+            self.connection.execute("UPDATE media SET sync=? WHERE id=?", (json.dumps(state, ensure_ascii=False), ident))
+
+    def item_sync(self, server, ident):
+        row = self.connection.execute("SELECT data FROM records WHERE kind='item_sync' AND id=?", (f"{server}:{ident}",)).fetchone()
+        return json.loads(row[0]) if row else {}
+
+    def save_item_sync(self, server, ident, state):
+        with self.transaction():
+            self._write("item_sync", f"{server}:{ident}", state)
+
+    def portrait_sync(self, server, person):
+        row = self.connection.execute("SELECT data FROM records WHERE kind='portrait_sync' AND id=?", (f"{server}:{person}",)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def save_portrait_sync(self, server, person, digest):
+        with self.transaction():
+            self._write("portrait_sync", f"{server}:{person}", digest)
+
+    def metadata(self, code):
+        from .models import Metadata
+        row = self.connection.execute("SELECT data FROM records WHERE kind='metadata' AND id=?", (code,)).fetchone()
+        return Metadata.model_validate_json(row[0]) if row else None
+
+    def metadata_snapshot(self):
+        from .models import Metadata
+        return {code: Metadata.model_validate_json(data) for code, data in self.connection.execute(
+            "SELECT id, data FROM records WHERE kind='metadata'")}
+
+    def save_metadata(self, code, metadata):
+        with self.transaction():
+            from .models import EDITABLE_FIELDS
+            self._write("metadata", code, metadata.model_dump(mode="json", include={"code", *EDITABLE_FIELDS}))
+
     def _read(self, kind):
         return {
             key: json.loads(data)
@@ -92,19 +144,19 @@ class RuntimeStore:
         )
 
     def save_catalog(self, data):
-        with self.connection:
+        with self.transaction():
             self._write("scan", "catalog", data)
         self.works_data = data
         self._index_works()
 
     def clear_scan(self):
-        with self.connection:
+        with self.transaction():
             self.connection.execute("DELETE FROM records WHERE kind='scan'")
         self.works_data = []
         self._index_works()
 
     def save_issues(self, issues):
-        with self.connection:
+        with self.transaction():
             self.connection.execute("DELETE FROM records WHERE kind='actor'")
             for name, issue in issues.items():
                 self._write("actor", name, issue)
@@ -114,7 +166,7 @@ class RuntimeStore:
         self.connection.close()
 
     def delete_task(self, ident):
-        with self.connection:
+        with self.transaction():
             self.connection.execute("DELETE FROM tasks WHERE id=?", (ident,))
         self.task_data.pop(ident, None)
 
@@ -122,7 +174,7 @@ class RuntimeStore:
         if item is not None and task["id"] in self.task_data:
             old = self.connection.execute("SELECT json_extract(data, '$.status') FROM task_items WHERE task_id=? AND code=?", (task["id"], item["code"])).fetchone()
             if old is not None:
-                with self.connection:
+                with self.transaction():
                     self.connection.execute("UPDATE task_items SET data=? WHERE task_id=? AND code=?", (json.dumps(item, ensure_ascii=False), task["id"], item["code"]))
                     if old[0] != item["status"]:
                         for key, statuses in {"progress": {"success", "partial", "failed", "cancelled", "skipped"}, "success": {"success"}, "partial": {"partial"}, "failed": {"failed"}, "skipped": {"skipped", "cancelled"}}.items():
@@ -133,7 +185,7 @@ class RuntimeStore:
                 return
         counts = Counter(entry["status"] for entry in task["items"])
         task.update(progress=sum(counts[s] for s in ("success", "partial", "failed", "cancelled", "skipped")), success=counts["success"], partial=counts["partial"], failed=counts["failed"], skipped=counts["skipped"] + counts["cancelled"])
-        with self.connection:
+        with self.transaction():
             if task["id"] not in self.task_data:
                 task["sequence"] = self.task_sequence + 1
                 self._write("counter", "task", task["sequence"])
@@ -155,45 +207,48 @@ class RuntimeStore:
         ]
 
     def works(self, status=None, *, codes=None):
-        rows = self.works_data if codes is None else (row for code in codes for row in self._by_code.get(code, []))
-        return [dict(row) for row in rows if status is None or row["status"] == status]
+        rows = self.works_data if codes is None else (self._by_code[code] for code in codes if code in self._by_code)
+        return [{**row, "media": self.media(row["code"])} for row in rows if status is None or row["status"] == status]
 
     def _index_works(self):
-        self._by_code, self._by_path = {}, {}
-        for row in self.works_data:
-            self._by_code.setdefault(row["code"], []).append(row)
-            self._by_path[row["path"]] = row
+        self._by_code = {row["code"]: row for row in self.works_data}
+
+    def find_work(self, code):
+        return self._by_code.get(code)
 
     def work_row(self, code):
-        values = self._by_code.get(code, [])
-        if len(values) != 1 or values[0]["status"] in ("invalid_key", "conflict"):
-            raise ValueError("work code is missing, invalid or conflicting")
-        return values[0]
+        value = self.find_work(code)
+        if value is None or value["status"] == "invalid_key":
+            raise ValueError("work code is missing or invalid")
+        return value
 
     def work(self, code):
         from .scanner import Work
-        return Work.model_validate(self.work_row(code))
+        return Work.model_validate({**self.work_row(code), "media": self.media(code)})
 
     def update_work(self, work):
         row = self.work_row(work.code)
-        if row["path"] != str(work.path):
-            raise ValueError("work path changed; scan required")
-        value = work.model_dump(mode="json")
+        value = work.model_dump(mode="json", exclude={"media"})
         row.clear()
         row.update(value)
 
-    def work_at(self, path):
-        return self._by_path.get(path)
-
     def save_scan(self, works):
-        codes = {work.code for work in works}
-        with self.connection:
-            for (code,) in self.connection.execute("SELECT DISTINCT code FROM variants").fetchall():
+        with self.transaction():
+            found = set()
+            for work in works:
+                for media in work.media:
+                    found.add(media.id)
+                    self.connection.execute("INSERT INTO media(id, code, path, data) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET code=excluded.code, path=excluded.path, data=excluded.data",
+                        (media.id, work.code, str(media.path), media.model_dump_json()))
+            for ident, in self.connection.execute("SELECT id FROM media").fetchall():
+                if ident not in found:
+                    self.connection.execute("DELETE FROM media WHERE id=?", (ident,))
+            codes = {work.code for work in works}
+            for code, in self.connection.execute("SELECT DISTINCT code FROM variants").fetchall():
                 if code not in codes:
                     self.connection.execute("DELETE FROM variants WHERE code=?", (code,))
                     self.connection.execute("DELETE FROM selections WHERE code=?", (code,))
-        data = [m.model_dump(mode="json") for m in works]
-        self.save_catalog(data)
+            self.save_catalog([work.model_dump(mode="json", exclude={"media"}) for work in works])
 
     def record_result(self, key, result, *, selection=None):
         result = deepcopy(result)
@@ -205,7 +260,7 @@ class RuntimeStore:
                 "count": old.get("count", 0) + 1,
                 "last_seen_at": now(),
             }
-        with self.connection:
+        with self.transaction():
             self._write("result", key, result)
             if selection is not None:
                 self._save_selection(key, selection)
@@ -221,7 +276,7 @@ class RuntimeStore:
     def save_variant(self, code, variant):
         from .models import SourceVariant
         variant = SourceVariant.model_validate(variant).model_dump(mode="json")
-        with self.connection:
+        with self.transaction():
             self.connection.execute(
                 "INSERT INTO variants VALUES (?, ?, ?) ON CONFLICT(code, source) DO UPDATE SET data=excluded.data",
                 (code, variant["source"], json.dumps(variant, ensure_ascii=False)))
@@ -231,7 +286,7 @@ class RuntimeStore:
         return json.loads(row[0]) if row else {}
 
     def save_selection(self, code, selection):
-        with self.connection:
+        with self.transaction():
             self._save_selection(code, selection)
 
     def _save_selection(self, code, selection):
@@ -243,11 +298,30 @@ class RuntimeStore:
         return self._read("cooldown")
 
     def save_cooldown(self, source, value):
-        with self.connection:
+        with self.transaction():
             self._write("cooldown", str(source), value)
 
     def clear_cooldown(self, source):
-        with self.connection:
+        with self.transaction():
             self.connection.execute(
                 "DELETE FROM records WHERE kind='cooldown' AND (id=? OR id LIKE ?)",
                 (str(source), str(source) + ":%"))
+
+
+def read_rules(database: Path, kind: str, seed: Path):
+    with sqlite3.connect(database, timeout=10) as connection:
+        connection.execute("CREATE TABLE IF NOT EXISTS rules (kind TEXT PRIMARY KEY, data TEXT NOT NULL)")
+        row = connection.execute("SELECT data FROM rules WHERE kind=?", (kind,)).fetchone()
+        if row is None:
+            connection.execute("INSERT OR IGNORE INTO rules VALUES (?, ?)", (kind, seed.read_text()))
+            row = connection.execute("SELECT data FROM rules WHERE kind=?", (kind,)).fetchone()
+        return json.loads(row[0])
+
+
+def merge_rules(database: Path, kind: str, update):
+    with sqlite3.connect(database, timeout=10) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        value = json.loads(connection.execute("SELECT data FROM rules WHERE kind=?", (kind,)).fetchone()[0])
+        value = update(value)
+        connection.execute("UPDATE rules SET data=? WHERE kind=?", (json.dumps(value, ensure_ascii=False), kind))
+        return value

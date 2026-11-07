@@ -1,13 +1,9 @@
 name: Release
-
 on:
   push:
-    tags:
-      - 'v*'
-
+    tags: ['v*']
 permissions:
   contents: write
-
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -17,33 +13,16 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: |
-          python3 - <<'PYTHON'
+          python3 - <<'PY'
           import ast, json, os
           from pathlib import Path
-          from xml.etree import ElementTree
-          plugin = ElementTree.parse("emby-plugin/caress/caress.csproj").findtext("PropertyGroup/Version")
-          web = json.loads(Path("caress/web/package.json").read_text())["version"]
-          module = ast.parse(Path("caress/__init__.py").read_text())
-          backend = next(ast.literal_eval(node.value) for node in module.body if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "__version__" for target in node.targets))
-          assert os.environ["TAG"] == f"v{plugin}" and plugin == web == backend, "Version mismatch"
-          PYTHON
-      - name: Build plugin
-        run: |
-          cat > "$RUNNER_TEMP/compose.yml" <<EOF_COMPOSE
-          services:
-            plugin:
-              image: caress-plugin-release
-              entrypoint: /caress.dll
-              build:
-                context: $GITHUB_WORKSPACE
-                dockerfile: emby-plugin/Dockerfile
-          EOF_COMPOSE
-          docker compose -f "$RUNNER_TEMP/compose.yml" build plugin
-          docker compose -f "$RUNNER_TEMP/compose.yml" create plugin
-          docker compose -f "$RUNNER_TEMP/compose.yml" cp plugin:/caress.dll ./Caress.dll
-          docker compose -f "$RUNNER_TEMP/compose.yml" down
-      - name: Publish release
+          tree = ast.parse(Path('caress/__init__.py').read_text())
+          version = next(ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == '__version__' for t in n.targets))
+          assert os.environ['TAG'] == f'v{version}'
+          assert json.loads(Path('caress/web/package.json').read_text())['version'] == version
+          PY
+      - name: Publish source release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
-        run: gh release create "$TAG" Caress.dll --verify-tag --title "Caress $TAG" --generate-notes
+        run: gh release create "$TAG" --verify-tag --title "Caress $TAG" --generate-notes

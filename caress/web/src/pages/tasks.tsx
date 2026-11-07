@@ -304,8 +304,7 @@ function TaskWorks({
       (item): Work => ({
         ...(workByCode.get(item.code) ?? {
           code: item.code,
-          path: "",
-          media_files: [],
+          available: false,
           warnings: [],
           category: "",
         }),
@@ -355,7 +354,7 @@ function TaskWorks({
               pendingLabel="等待中"
               open={(work) =>
                 navigate(
-                  `library/work/${encodeURIComponent(work.path)}/${detail.id}`,
+                  `library/work/${encodeURIComponent(work.code)}/${detail.id}`,
                 )
               }
             />

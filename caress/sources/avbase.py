@@ -14,7 +14,7 @@ from ..models import (
     SourceResult,
     Status,
 )
-from .parsing import artwork, minutes, parse_date, text
+from .parsing import artwork, parse_date, text
 from .base import Source
 
 
@@ -89,12 +89,6 @@ class AVbase(Source):
                 release = datetime.strptime(work["min_date"][:15], "%a %b %d %Y").date()
             except ValueError:
                 pass
-        volume = str(info.get("volume") or "")
-        runtime = (
-            int(volume.split(":")[0]) * 60 + int(volume.split(":")[1])
-            if volume.count(":") == 2
-            else minutes(volume)
-        )
         product = next((p for p in products if p.get("image_url")), {})
         samples = [
             image.get("l") or image.get("s")
@@ -108,9 +102,7 @@ class AVbase(Source):
                 title=work["title"],
                 original_title=work["title"],
                 release_date=release,
-                runtime_minutes=runtime,
                 studio=product_name("maker"),
-                series=product_name("series"),
                 directors=[info["director"]] if info.get("director") else [],
                 actors=[
                     Actor(
@@ -130,8 +122,5 @@ class AVbase(Source):
                 artwork=artwork(
                     self.id, page.url, [product["image_url"]] if product else [], samples[:100]
                 ),
-                classification=self.rules.classify(request.code),
-                external_id=url.rsplit("/", 1)[-1],
-                source_url=page.url,
             ),
         )

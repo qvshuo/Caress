@@ -70,16 +70,6 @@ class FC2(Source):
                     warnings.append("FC2 description is a translation placeholder")
             except FetchError as exc:
                 warnings.append(f"description iframe unavailable: {exc.status}")
-        runtime = text(
-            selector,
-            '//*[contains(@class,"items_article_MainitemThumb")]//p[contains(@class,"items_article_info")]/text()',
-        )
-        length = re.fullmatch(r"(?:(\d+):)?(\d+):(\d+)", runtime or "")
-        runtime_minutes = (
-            ((int(length[1] or 0) * 3600 + int(length[2]) * 60 + int(length[3]) + 59) // 60)
-            if length
-            else None
-        )
         metadata = Metadata(
             code="FC2PPV-" + match[1],
             title=title,
@@ -92,7 +82,6 @@ class FC2(Source):
                     '//div[contains(@class,"items_article_headerInfo")]//p[contains(text(),"Sale Day") or contains(text(),"販売日") or contains(text(),"発売日")]//text()',
                 )
             ),
-            runtime_minutes=runtime_minutes,
             tags=texts(selector, "//a[@data-article-tag]/@data-tag"),
             artwork=artwork(
                 self.id,
@@ -108,8 +97,5 @@ class FC2(Source):
                 else [],
                 texts(selector, '//*[contains(@class,"items_article_SampleImagesArea")]//a/@href'),
             ),
-            classification=self.rules.classify(request.code),
-            external_id=match[1],
-            source_url=page.url,
         )
         return self.found(request, metadata, warnings=warnings)

@@ -5,7 +5,7 @@ const errors: Record<string, string> = {
   "cannot create tasks while metadata is being edited": "保存完成后可创建任务。",
   "cannot scan while a task is active": "任务结束后可扫描作品。",
   "task overlaps an active write task": "所选作品已有任务。",
-  "no eligible works or requested directory is invalid/conflicting": "请选择名称正确的作品。",
+  "no eligible works or requested filename is invalid": "请选择名称正确的作品。",
   "cannot retry active task": "任务尚未结束。",
   "task contains no failed items": "没有可重试的未完成项。",
   "cancel the task before deleting it": "请先取消任务，再删除记录。",
@@ -13,9 +13,9 @@ const errors: Record<string, string> = {
   "directory is outside the available mounts": "请选择可访问的文件夹。",
   "directory does not exist": "文件夹不存在。",
   "directory is not readable": "无法读取文件夹，请检查权限。",
-  "configure media and metadata directories first": "请先设置作品目录和元数据目录。",
+  "configure media directories first": "请先设置作品目录。",
   "configuration change in progress": "正在更新设置，请稍后。",
-  "filesystem access failed": "无法访问元数据目录。",
+  "filesystem access failed": "本地文件访问失败。",
   "source image changed; preview again": "原图已更新，请重新预览。",
   "not found": "记录不存在。",
   "work not found": "作品已不在作品库中。",
@@ -35,11 +35,7 @@ const errors: Record<string, string> = {
   "face detection failed; check the YuNet model": "人脸识别失败，请检查模型。",
   "crop must be an in-bounds 2:3 rectangle": "请在原图范围内选择 2:3 选区。",
   "invalid crop selection": "裁剪选区无效，请重新选择。",
-  "invalid movie NFO": "NFO 格式无效，无法读取。",
-  "unsafe or oversized NFO": "NFO 文件不安全或过大。",
-  "NFO number differs from directory": "NFO 番号与作品目录不一致。",
-  "NFO fields violate the Emby contract": "NFO 字段不符合 Emby 要求。",
-  "media roots and metadata root must be separate directory trees": "作品目录与元数据目录不能重叠。",
+  "media roots and image root must be separate directory trees": "作品目录与图片目录不能重叠。",
   "cannot update portraits while tasks are active": "任务结束后可更新头像。",
   "invalid gfriends file tree": "头像索引格式已变化。",
   "gfriends request failed": "头像来源请求失败。",
@@ -89,7 +85,7 @@ export function validationText(detail: unknown): string {
   if (typeof detail === "string") return errorText(detail);
   if (!Array.isArray(detail)) return "提交内容有误，请检查填写项。";
   return detail.map((item: { loc?: unknown[]; msg?: string; type?: string }) => {
-    const labels: Record<string, string> = { ...Object.fromEntries(fields.map(([key, label]) => [key, label])), model: "翻译模型", endpoint: "接口地址", api_key: "API Key", routes: "来源顺序", censored: "有码", uncensored: "无码", metadata_directory: "元数据目录", media_directories: "作品目录" };
+    const labels: Record<string, string> = { ...Object.fromEntries(fields.map(([key, label]) => [key, label])), model: "翻译模型", endpoint: "接口地址", api_key: "API Key", routes: "来源顺序", censored: "有码", uncensored: "无码", media_directories: "作品目录" };
     const field = item.loc?.filter((part) => part !== "body").map((part) => labels[String(part)] ?? String(part)).join(" · ");
     const reason = item.type === "missing" ? "未填写" : item.msg?.startsWith("Value error, ") ? errorText(item.msg.slice(13)) : "填写不符合要求";
     return `${field ? `${field}：` : ""}${reason}`;

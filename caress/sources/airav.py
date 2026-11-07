@@ -83,7 +83,5 @@ class AirAV(Source):
                 artwork=artwork(
                     self.id, page.url, texts(selector, '//meta[@property="og:image"]/@content'), []
                 ),
-                classification=self.rules.classify(request.code),
-                source_url=page.url,
             ),
         )

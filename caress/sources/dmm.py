@@ -18,8 +18,8 @@ from .parsing import artwork, parse_date
 from .base import Source
 
 QUERY = """query FetchDigitalContent($id: ID!) {
- ppvContent(id: $id) { id title description deliveryStartDate duration
- actresses { name } directors { name } series { name } maker { name }
+ ppvContent(id: $id) { id title description deliveryStartDate
+ actresses { name } directors { name } maker { name }
  genres { name } packageImage { largeUrl mediumUrl } sampleImages { imageUrl largeImageUrl } }
 }"""
 
@@ -186,9 +186,7 @@ class DMM(Source):
             original_title=work["title"],
             plot=work.get("description") or None,
             release_date=parse_date(work.get("deliveryStartDate")),
-            runtime_minutes=int(work["duration"]) // 60 if work.get("duration") else None,
             studio=next(iter(names("maker")), None),
-            series=next(iter(names("series")), None),
             directors=names("directors"),
             actors=[Actor(name=name) for name in names("actresses")],
             genres=names("genres"),
@@ -202,8 +200,5 @@ class DMM(Source):
                     if item.get("largeImageUrl") or item.get("imageUrl")
                 ],
             ),
-            classification=classification,
-            external_id=cid,
-            source_url=source_url,
         )
         return self.found(request, metadata)

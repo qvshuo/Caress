@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import os
-from collections import defaultdict
+import re
+import hashlib
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -12,10 +13,18 @@ from .models import Category
 EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".m4v", ".ts", ".strm"}
 
 
+class MediaFile(BaseModel):
+    id: str
+    path: Path
+    filename: str
+    subtitles: bool = False
+    uncensored: bool = False
+    part: int | None = None
+
+
 class Work(BaseModel):
     code: str
-    path: Path
-    media_files: list[Path]
+    media: list[MediaFile] = Field(default_factory=list)
     title: str | None = None
     actors: list[str] = Field(default_factory=list)
     poster: str | None = None
@@ -24,17 +33,40 @@ class Work(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+SUFFIX = re.compile(r"-(UC|C|U|CD[0-9]+)$", re.IGNORECASE)
+
+
+def parse_filename(path: Path) -> tuple[str, MediaFile]:
+    code = path.stem
+    subtitles = uncensored = False
+    part = None
+    while match := SUFFIX.search(code):
+        token = match[1].upper()
+        if token.startswith("CD"):
+            number = int(token[2:])
+            if part is not None and part != number:
+                raise ValueError("分集后缀冲突")
+            part = number
+        else:
+            subtitles |= token in {"C", "UC"}
+            uncensored |= token in {"U", "UC"}
+        code = code[:match.start()]
+    code = validate_code(code)
+    return code, MediaFile(id=hashlib.sha256(str(path).encode()).hexdigest(), path=path,
+        filename=path.name, subtitles=subtitles, uncensored=uncensored, part=part)
+
+
 def validate_code(value: str) -> str:
-    if (
-        not value
-        or value in {".", ".."}
-        or any(c in value for c in '/\\:*?"<>|')
-        or any(ord(c) < 32 for c in value)
-    ):
-        raise ValueError("请将媒体所在文件夹改为正确番号。")
-    if normalize_code(value) != value:
-        raise ValueError("请将媒体所在文件夹改为正确番号。")
-    return value
+    # Only case and supported catalog spelling are normalized; no filename cleanup.
+    if not value or value != value.strip() or any(c.isspace() for c in value):
+        raise ValueError("文件名不是有效番号")
+    try:
+        normalized = normalize_code(value)
+    except ValueError:
+        raise ValueError("文件名不是有效番号") from None
+    if normalized != value.upper():
+        raise ValueError("文件名不是标准番号")
+    return normalized
 
 
 def validate_roots(roots: list[Path], output: Path, *, require_existing: bool = True) -> None:
@@ -44,11 +76,11 @@ def validate_roots(roots: list[Path], output: Path, *, require_existing: bool = 
             raise ValueError(f"media root is not a directory: {root}")
         root = root.resolve()
         if output == root or output.is_relative_to(root) or root.is_relative_to(output):
-            raise ValueError("media roots and metadata root must be separate directory trees")
+            raise ValueError("media roots and image root must be separate directory trees")
 
 
 def scan(roots: list[Path], extensions: set[str] | None = None) -> list[Work]:
-    folders: dict[Path, set[Path]] = defaultdict(set)
+    files: set[Path] = set()
     for root in roots:
         if not root.is_dir():
             raise ValueError(f"media root is not a directory: {root}")
@@ -71,22 +103,17 @@ def scan(roots: list[Path], extensions: set[str] | None = None) -> list[Work]:
                     and path.suffix.lower() in (extensions or EXTENSIONS)
                     and not path.is_symlink()
                 ):
-                    folders[path.parent].add(path)
-    works = []
-    for folder, paths in sorted(folders.items()):
-        work = Work(code=folder.name, path=folder, media_files=sorted(paths))
+                    files.add(path)
+    works = {}
+    for path in sorted(files):
         try:
-            work.code = validate_code(work.code)
-        except ValueError:
-            work.status = "invalid_key"
-            work.warnings.append("请将媒体所在文件夹改为正确番号。")
-        works.append(work)
-    keys = defaultdict(list)
-    for work in works:
-        keys[work.code.casefold()].append(work)
-    for group in keys.values():
-        if len(group) > 1:
-            for work in group:
-                work.status = "conflict"
-                work.warnings.append("番号重复，请检查媒体所在文件夹。")
-    return works
+            code, media = parse_filename(path)
+        except ValueError as exc:
+            key = "invalid:" + hashlib.sha256(str(path).encode()).hexdigest()
+            works[key] = Work(code=key, media=[MediaFile(id=hashlib.sha256(str(path).encode()).hexdigest(), path=path, filename=path.name)],
+                status="invalid_key", warnings=[str(exc)])
+            continue
+        if code not in works:
+            works[code] = Work(code=code, media=[])
+        works[code].media.append(media)
+    return sorted(works.values(), key=lambda work: work.code)

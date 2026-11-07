@@ -83,9 +83,9 @@ def variant_metadata(variant: dict) -> Metadata:
 
 
 class Translator:
-    def __init__(self, settings: TranslationSettings, client: httpx.AsyncClient | None = None, *, actor_aliases_file: Path | None = None):
+    def __init__(self, settings: TranslationSettings, client: httpx.AsyncClient | None = None, *, database: Path | None = None):
         self.settings = settings
-        self.actor_aliases_file = actor_aliases_file
+        self.database = database
         self.client = client or httpx.AsyncClient(timeout=settings.timeout_seconds)
         self.owns_client = client is None
         self.lock = asyncio.Lock()
@@ -118,7 +118,7 @@ class Translator:
             return self.available
 
     def _rules(self):
-        pattern, names_digest = actor_name_rules(ActorAliases.load(self.actor_aliases_file))
+        pattern, names_digest = actor_name_rules(ActorAliases.load(self.database))
         settings = self.settings
         contract = {"enabled": settings.enabled, "endpoint": settings.endpoint.rstrip("/"),
                     "model": settings.model, "prompt": PROMPT, "roles": ["system", "user"],

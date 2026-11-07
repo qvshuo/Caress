@@ -79,18 +79,14 @@ class Metadata(BaseModel):
     original_title: str | None = None
     plot: str | None = None
     release_date: date | None = None
-    runtime_minutes: int | None = Field(default=None, ge=0)
+    year: int | None = Field(default=None, ge=1, le=9999)
     # The work's production maker/brand; never its retailer or an actor's agency.
     studio: str | None = None
-    series: str | None = None
     directors: list[str] = Field(default_factory=list)
     actors: list[Actor] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     genres: list[str] = Field(default_factory=list)
     artwork: list[Artwork] = Field(default_factory=list)
-    classification: Classification = Field(default_factory=Classification)
-    external_id: str | None = None
-    source_url: str
 
 
 class Candidate(BaseModel):
@@ -148,3 +144,5 @@ class SourceVariant(SourceResult):
     actor_mappings: list[ActorMapping] = Field(default_factory=list)
     mapping_fingerprint: str = ""
     title_text: str | None = None
+
+EDITABLE_FIELDS = ("title", "original_title", "plot", "release_date", "year", "actors", "directors", "studio", "genres", "tags")

@@ -3,10 +3,10 @@ export interface Work {
   actors?: string[];
   poster?: string | null;
   code: string;
-  path: string;
+  available?: boolean;
   category: string;
   status: string;
-  media_files: string[];
+  media?: { id: string; path: string; filename: string; subtitles: boolean; uncensored: boolean; part: number | null; sync?: { status?: string; error?: string; item_id?: string } }[];
   warnings: string[];
 }
 export interface Actor {
@@ -30,18 +30,14 @@ export interface FieldInputs {
   mapping_fingerprint: string;
 }
 export interface Metadata {
-  source_url?: string;
-  external_id?: string | null;
-  classification?: { category: string };
   artwork?: { url: string; role: string; source: string; referer: string }[];
   code: string;
   title: string;
   original_title?: string | null;
   plot?: string | null;
   release_date?: string | null;
-  runtime_minutes?: number | null;
+  year?: number | null;
   studio?: string | null;
-  series?: string | null;
   directors?: string[];
   actors?: Actor[];
   genres?: string[];
@@ -104,7 +100,6 @@ export interface WorkDetail extends Work {
   selection?: Selection;
   editable: boolean;
   metadata: Metadata | null;
-  metadata_error?: string | null;
   artwork: string[];
   artwork_versions: Record<string, string>;
   last_result: Report | null;
@@ -154,7 +149,6 @@ export interface Settings {
   translation_status: { valid: boolean | null; message: string };
   default_routes: Record<string, string[]>;
   media_directories: string[];
-  metadata_directory: string | null;
   flaresolverr_url: string | null;
   timeout_seconds: number;
   retries: number;
@@ -162,6 +156,7 @@ export interface Settings {
   source_timeout_seconds: number;
   sites: Record<string, Site>;
   routes: Record<string, string[]>;
+  emby: { url: string; api_key: string };
   translation: Translation;
   configured: boolean;
   source_defaults: Record<string, string>;

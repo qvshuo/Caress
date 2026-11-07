@@ -6,15 +6,12 @@ from .settings import Settings
 
 
 class Directories:
-    def __init__(self, media: list[Path], data: Path):
+    def __init__(self, media: list[Path]):
         self.media = [p.resolve() for p in media]
-        self.data = data.resolve()
 
     def roots(self, kind: str) -> list[Path]:
         if kind == "media":
             return self.media
-        if kind == "metadata":
-            return [self.data]
         raise ValueError("unknown directory type")
 
     def checked(self, path: Path, kind: str) -> Path:
@@ -50,5 +47,3 @@ class Directories:
     def validate(self, settings: Settings) -> None:
         for path in settings.media_directories:
             self.checked(path, "media")
-        if settings.metadata_directory is not None:
-            self.checked(settings.metadata_directory, "metadata")

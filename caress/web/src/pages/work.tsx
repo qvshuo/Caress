@@ -42,7 +42,7 @@ type Editor = {
   posterPreview?: string;
 };
 export function Work({
-  path,
+  code,
   taskId,
   revision,
   back,
@@ -51,7 +51,7 @@ export function Work({
   saved,
   reportEdit,
 }: {
-  path: string;
+  code: string;
   taskId?: string;
   revision?: WorkRecord;
   back: () => void;
@@ -63,7 +63,7 @@ export function Work({
   const [editor, setEditor] = useState<Editor | null>(null);
   const [savedNotice, setSavedNotice] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
-  const [pending, setPending] = useState<"save" | "prepare" | null>(null);
+  const [pending, setPending] = useState<"save" | "prepare" | "sync" | null>(null);
   const [cropImage, setCropImage] = useState<{
     role: string;
     choice: ImageChoice;
@@ -79,6 +79,16 @@ export function Work({
       !!editor.sampleSource ||
       JSON.stringify(editor.draft) !==
         JSON.stringify(metadataDraft(editor.detail)));
+  async function synchronize(relink = false) {
+    if (!editor) return;
+    setPending("sync");
+    try {
+      await api(`works/${encodeURIComponent(editor.detail.code)}/sync?relink=${relink}`, "POST");
+      accept(await api<WorkDetail>(`works/detail?code=${encodeURIComponent(editor.detail.code)}`));
+    } finally {
+      setPending(null);
+    }
+  }
   function accept(detail: WorkDetail) {
     setEditor({
       detail,
@@ -109,7 +119,7 @@ export function Work({
                 process: detail.process,
                 last_result: detail.last_result,
                 warnings: detail.warnings,
-                metadata_error: detail.metadata_error,
+                media: detail.media,
                 status: detail.status,
                 editable: detail.editable,
               },
@@ -122,7 +132,7 @@ export function Work({
     run(async () => {
       try {
         const value = await api<WorkDetail>(
-          `works/detail?path=${encodeURIComponent(path)}${taskId ? `&task_id=${encodeURIComponent(taskId)}` : ""}`,
+          `works/detail?code=${encodeURIComponent(code)}${taskId ? `&task_id=${encodeURIComponent(taskId)}` : ""}`,
           "GET",
           undefined,
           controller.signal,
@@ -137,7 +147,7 @@ export function Work({
       }
     });
     return () => controller.abort();
-  }, [path, taskId, revision, run]);
+  }, [code, taskId, revision, run]);
   useEffect(() => {
     reportEdit({ dirty: changed, saving: !!pending });
     return () => reportEdit({ dirty: false, saving: false });
@@ -154,7 +164,7 @@ export function Work({
     detail.process?.status ?? "",
   );
   const scrapeLocked =
-    !!pending || ["invalid_key", "conflict"].includes(detail.status);
+    !!pending || ["invalid_key"].includes(detail.status);
   const variants = detail.variants ?? [];
   const route = detail.route_sources ?? variants.map((v) => v.source);
   const artwork = (file: string) =>
@@ -475,7 +485,7 @@ export function Work({
           <Button variant="ghost" size="icon" aria-label="返回" onClick={back}>
             <ArrowLeft />
           </Button>
-          <h2 className="text-xl font-semibold">{detail.code}</h2>
+          <h2 className="text-xl font-semibold">{detail.status === "invalid_key" ? (detail.media?.[0]?.filename ?? detail.code) : detail.code}</h2>
           <Badge variant="secondary">{categories[detail.category]}</Badge>
           <Status
             status={processActive ? detail.process!.status : detail.status}
@@ -625,20 +635,20 @@ export function Work({
               })}
             </section>
             <section aria-label="作品元数据" className="min-w-0 space-y-4">
-              {detail.metadata_error && (
-                <p className="text-sm text-destructive">
-                  {errorText(detail.metadata_error)}
-                </p>
-              )}
+
 
               <div className="space-y-4">
                 {fields.map(renderField)}
               </div>
               <div className="space-y-2 break-all border-t pt-4 pb-6 text-sm text-muted-foreground">
                 <p className="font-medium text-foreground">文件路径</p>
-                {detail.media_files.map((file) => (
-                  <p key={file}>{file}</p>
-                ))}
+                {(detail.media ?? []).map(file => <div key={file.id} className="space-y-1">
+                  <p>{file.path}</p>
+                  <p>{[file.subtitles && "中文字幕", file.uncensored && "无码破解", file.part !== null && `分集 ${file.part}`, file.sync?.item_id && `Emby ${file.sync.item_id}`].filter(Boolean).join(" · ")}</p>
+                  <p>{file.sync?.error ?? (file.sync?.status === "synced" ? "已同步" : file.sync?.status === "syncing" ? "同步中" : "待同步")}</p>
+                </div>)}
+                <Button type="button" variant="outline" disabled={changed || !!pending || !detail.editable || !detail.metadata} onClick={() => run(() => synchronize())}>{pending === "sync" ? "同步中" : "同步 Emby"}</Button>
+                <Button type="button" variant="outline" disabled={changed || !!pending || !detail.editable || !detail.metadata} onClick={() => run(() => synchronize(true))}>重新关联</Button>
               </div>
             </section>
           </div>
@@ -725,7 +735,7 @@ export function Work({
       {cropImage && (
         <Suspense fallback={<Empty>正在载入裁剪…</Empty>}>
           <CropEditor
-            code={detail.code}
+            code={detail.status === "invalid_key" ? (detail.media?.[0]?.filename ?? detail.code) : detail.code}
             input={cropImage.choice}
             applyLabel={
               cropImage.role === "poster" || cropImage.role === "fanart"

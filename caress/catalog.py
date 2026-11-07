@@ -2,13 +2,11 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from functools import lru_cache
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 from .models import Category, Classification, Evidence
-from .storage import atomic_write
 
 FC2 = re.compile(r"(?i)^FC2[-_ ]*(?:PPV[-_ ]*)?(\d{5,10})$")
 STANDARD = re.compile(r"^([A-Z0-9]*[A-Z][A-Z0-9]*(?:-[A-Z]+)?)[-_](\d{2,8})$")
@@ -49,14 +47,9 @@ class CatalogRules(BaseModel):
 
     @classmethod
     def load(cls, path: Path | None = None) -> CatalogRules:
-        target = path or Path(__file__).parent / "data/catalog_rules.json"
-        stamp = target.stat()
-        return cls._load(target, (stamp.st_mtime_ns, stamp.st_ctime_ns, stamp.st_size))
-
-    @classmethod
-    @lru_cache(maxsize=4)
-    def _load(cls, path: Path, stamp) -> CatalogRules:
-        return cls.model_validate_json(path.read_bytes())
+        from .runtime import read_rules
+        seed = Path(__file__).parent / "data/catalog_rules.json"
+        return cls.model_validate(read_rules(path, "catalog", seed)) if path else cls.model_validate_json(seed.read_bytes())
 
     def classify(self, code: str) -> Classification:
         if code.startswith("FC2PPV-"):
@@ -76,18 +69,15 @@ class CatalogRules(BaseModel):
     def remember(self, code: str, category: Category, path: Path | None) -> None:
         if category == Category.UNKNOWN or self.classify(code).category != Category.UNKNOWN:
             return
-        current = CatalogRules.load(path).model_copy(deep=True) if path else self.model_copy(deep=True)
-        if current.classify(code).category == Category.UNKNOWN:
-            prefixes = getattr(current, f"{category.value}_prefixes")
-            prefixes.append(catalog_prefix(self.query_code(code)))
-            prefixes.sort()
-        current.validate_prefixes()
-        if path:
-            atomic_write(path, current.model_dump_json(indent=2) + "\n")
-        self.version = current.version
-        self.censored_prefixes = current.censored_prefixes
-        self.uncensored_prefixes = current.uncensored_prefixes
-        self.fc2_prefixes = current.fc2_prefixes
+        from .runtime import merge_rules
+        def update(data):
+            current = CatalogRules.model_validate(data)
+            if current.classify(code).category == Category.UNKNOWN:
+                getattr(current, f"{category.value}_prefixes").append(catalog_prefix(self.query_code(code)))
+            return current.model_dump()
+        data = merge_rules(path, "catalog", update) if path else update(self.model_dump())
+        current = CatalogRules.model_validate(data)
+        self.__dict__.update(current.__dict__)
         self._categories = current._categories
 
     def query_code(self, code: str) -> str:

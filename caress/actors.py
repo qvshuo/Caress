@@ -6,11 +6,9 @@ import hashlib
 import json
 import re
 import unicodedata
-from functools import lru_cache
 from pathlib import Path
 
 from .models import Actor, Category
-from .storage import atomic_write
 
 
 def comparison_name(name: str) -> str:
@@ -97,31 +95,20 @@ class ActorAliases:
     def remember(self, records: dict[str, dict], path: Path | None) -> None:
         if not records:
             return
-        actors = {**(ActorAliases.load(path).actors if path else self.actors), **records}
-        updated = ActorAliases(actors)
-        if path:
-            ordered = sorted(actors, key=lambda ident: (actors[ident]["type"], ident))
-            content = '{\n  "actors": {\n' + ',\n'.join(
-                '    ' + json.dumps(ident, ensure_ascii=False) + ':'
-                + json.dumps(actors[ident], ensure_ascii=False, separators=(',', ':')) for ident in ordered
-            ) + '\n  }\n}\n'
-            atomic_write(path, content)
-        # Active field and portrait processing share this index for the task.
-        self.__dict__.update(updated.__dict__)
+        from .runtime import merge_rules
+        def update(data):
+            actors = {**data["actors"], **records}
+            ActorAliases(actors)
+            return {"actors": actors}
+        value = merge_rules(path, "actors", update) if path else update({"actors": self.actors})
+        self.__dict__.update(ActorAliases(value["actors"]).__dict__)
 
     @classmethod
-    def load(cls, path: Path | None = None) -> ActorAliases:
-        target = path or Path(__file__).parent / "data/actor_aliases.json"
-        stamp = target.stat()
-        return cls._load(target, (stamp.st_mtime_ns, stamp.st_ctime_ns, stamp.st_size))
-
-    @classmethod
-    @lru_cache(maxsize=4)
-    def _load(cls, path, stamp):
-        document = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(document, dict) or set(document) != {"actors"}:
-            raise ValueError("actor mapping requires only an actors object")
-        return cls(document["actors"])
+    def load(cls, path: Path | None = None):
+        from .runtime import read_rules
+        seed = Path(__file__).parent / "data/actor_aliases.json"
+        value = read_rules(path, "actors", seed) if path else json.loads(seed.read_text())
+        return cls(value["actors"])
 
     def candidates(self, name: str, kind: int | None = None) -> list[str]:
         key = comparison_name(name)
@@ -195,7 +182,6 @@ def map_actor_names(actors: list[Actor], names: ActorAliases, kind=None, pinned=
 
 def library_actors(works, output: Path, names: ActorAliases, query: str = "") -> list[dict]:
     from .portraits import actor_image, actor_image_index
-    from .nfo import existing_nfo, read_nfo
 
     image_index = actor_image_index(output)
     invalid_names = set()
@@ -213,10 +199,10 @@ def library_actors(works, output: Path, names: ActorAliases, query: str = "") ->
     rows = {}
     for work in works:
         try:
-            metadata = read_nfo(existing_nfo(output, work), work.code)
+            actors = [Actor(name=name) for name in work.actors]
         except (ValueError, OSError):
             continue
-        for actor in metadata.actors:
+        for actor in actors:
             row = rows.setdefault(
                 actor.name, {"codes": set(), "types": set()}
             )
@@ -234,7 +220,7 @@ def library_actors(works, output: Path, names: ActorAliases, query: str = "") ->
         candidates = set().union(*(names.candidates(name, kind) for kind in row["types"]))
         if needle and not candidates.intersection(matched) and needle not in comparison_name(name):
             continue
-        # Existing NFO names remain the library identity, including when aliases match a search.
+        # Saved actor names remain the library identity, including when aliases match a search.
         target = matched.setdefault(name, {"actors": [], "codes": set(), "types": set()})
         target["actors"].append(name)
         target["codes"].update(row["codes"])

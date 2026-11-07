@@ -120,6 +120,21 @@ class TranslationSettings(BaseModel):
         return bool(self.model.strip() and self.api_key.strip())
 
 
+class EmbySettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    url: str = ""
+    api_key: str = Field(default="", repr=False)
+
+    @field_validator("url")
+    @classmethod
+    def address(cls, value):
+        if value:
+            parsed = urlparse(value)
+            if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+                raise ValueError("Emby requires an HTTP or HTTPS URL")
+        return value.rstrip("/")
+
+
 class Settings(BaseModel):
     model_config = ConfigDict(extra="forbid")
     flaresolverr_url: str | None = "http://flaresolverr:8191/v1"
@@ -129,10 +144,9 @@ class Settings(BaseModel):
     retries: int = Field(default=1, ge=0, le=3)
     sites: dict[SourceId, SiteSettings] = Field(default_factory=dict)
     javdb_api: ClassVar[ApiSettings] = ApiSettings()
-    catalog_rules_file: Path | None = Field(default=None, exclude=True)
-    actor_aliases_file: Path | None = Field(default=None, exclude=True)
+    database: Path = Field(default=Path("/data/caress.sqlite3"), exclude=True)
     media_directories: list[Path] = Field(default_factory=list)
-    metadata_directory: Path | None = Path("/data/metadata")
+    emby: EmbySettings = Field(default_factory=EmbySettings)
     translation: TranslationSettings = Field(default_factory=TranslationSettings)
     routes: dict[str, list[SourceId]] = Field(
         default_factory=lambda: {
@@ -192,8 +206,26 @@ class Settings(BaseModel):
             else SOURCE_INTERVALS[source]
         )
 
+    def save(self, path: Path | None = None, *, connection=None):
+        import sqlite3
+        if connection is None:
+            path = path or self.database
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with sqlite3.connect(path, timeout=10) as database:
+                self.save(connection=database)
+            return
+        connection.execute("CREATE TABLE IF NOT EXISTS options (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL)")
+        connection.execute("INSERT INTO options VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET data=excluded.data", (self.model_dump_json(),))
+
     @classmethod
-    def load(cls, path: Path | None = None) -> Settings:
-        if path is None:
-            return cls()
-        return cls.model_validate_json(path.read_bytes())
+    def load(cls, path: Path | None = None):
+        import sqlite3
+        path = path or Path("/data/caress.sqlite3")
+        if not path.exists():
+            return cls(database=path)
+        with sqlite3.connect(path, timeout=10) as connection:
+            connection.execute("CREATE TABLE IF NOT EXISTS options (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL)")
+            row = connection.execute("SELECT data FROM options WHERE id=1").fetchone()
+        value = cls.model_validate_json(row[0]) if row else cls()
+        value.database = path
+        return value

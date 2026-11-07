@@ -49,7 +49,7 @@ export function Library({
     () =>
       works.filter(
         (work) =>
-          `${work.code} ${work.path} ${work.title ?? ""} ${work.actors?.join(" ") ?? ""}`
+          `${work.code} ${(work.media ?? []).map(file => file.path).join(" ")} ${work.title ?? ""} ${work.actors?.join(" ") ?? ""}`
             .toLowerCase()
             .includes(search) && matchesWorkFilter(work.status, filter),
       ),
@@ -57,7 +57,7 @@ export function Library({
   );
   const pages = Math.max(1, Math.ceil(rows.length / pageSize)),
     current = Math.min(page, pages);
-  const chosen = works.filter((work) => selected.has(work.path) && valid(work));
+  const chosen = works.filter((work) => selected.has(work.code) && valid(work));
   function perform(fn: () => Promise<void>) {
     run(async () => {
       setPending(true);
@@ -135,7 +135,7 @@ export function Library({
           view={view}
           selection={selection}
           open={(work) =>
-            navigate(`library/work/${encodeURIComponent(work.path)}`)
+            navigate(`library/work/${encodeURIComponent(work.code)}`)
           }
         />
         {!rows.length && (

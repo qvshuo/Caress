@@ -32,12 +32,6 @@ def parse_date(value: str | None) -> date | None:
     return None
 
 
-def minutes(value: str | int | float | None) -> int | None:
-    if value is None:
-        return None
-    match = re.search(r"\d+", str(value))
-    return int(match[0]) if match else None
-
 
 def artwork(
     source: SourceId, referer: str, covers: list[str], samples: list[str], posters: list[str] | None = None

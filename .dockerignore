@@ -3,8 +3,6 @@
 !requirements.txt
 !caress/
 !caress/**
-!emby-plugin/
-!emby-plugin/**
 **/__pycache__/
 **/.DS_Store
 **/node_modules/

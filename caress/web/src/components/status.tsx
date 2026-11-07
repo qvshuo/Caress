@@ -10,8 +10,7 @@ export function Status({ status, label }: { status: string; label?: string }) {
         [
           "failed",
           "invalid_key",
-          "conflict",
-          "network_error",
+                "network_error",
           "parse_error",
           "timeout",
           "identity_mismatch",

@@ -22,6 +22,10 @@ import {
 import { Select } from "@/components/form-controls";
 import { Status } from "@/components/status";
 
+function workLabel(work: Work) {
+  return work.status === "invalid_key" ? (work.media?.[0]?.filename ?? work.code) : work.code;
+}
+
 export const workFilters = {
   all: "全部状态",
   todo: "待处理",
@@ -35,7 +39,6 @@ const groups: Record<string, string[]> = {
     "failed",
     "partial",
     "invalid_key",
-    "conflict",
     "cancelled",
   ],
   running: ["running"],
@@ -98,7 +101,7 @@ export function WorkList({
   const selectAll = selection && (
     <SelectionCheckbox
       {...selection}
-      keys={eligible.map((work) => work.path)}
+      keys={eligible.map((work) => work.code)}
       label="选择本页"
     />
   );
@@ -106,8 +109,8 @@ export function WorkList({
     selection && (
       <SelectionCheckbox
         {...selection}
-        keys={valid(work) ? [work.path] : []}
-        label={`选择 ${work.code}`}
+        keys={valid(work) ? [work.code] : []}
+        label={`选择 ${workLabel(work)}`}
       />
     );
   const status = (work: Work) => (
@@ -128,10 +131,10 @@ export function WorkList({
         <div className="grid grid-cols-2 gap-4 p-4 sm:grid-cols-3 lg:grid-cols-5">
           {works.map((work) => (
             <div
-              key={work.path || work.code}
-              role={work.path ? "link" : undefined}
-              aria-label={`查看 ${work.code}`}
-              {...(work.path
+              key={work.code}
+              role={work.available !== false ? "link" : undefined}
+              aria-label={`查看 ${workLabel(work)}`}
+              {...(work.available !== false
                 ? rowNavigation(
                     () => open(work),
                     "min-w-0 overflow-hidden rounded-lg border bg-card",
@@ -145,7 +148,7 @@ export function WorkList({
                 {work.poster ? (
                   <ArtworkImage
                     src={work.poster}
-                    alt={`${work.code} 封面`}
+                    alt={`${workLabel(work)} 封面`}
                     loading="lazy"
                     className="h-full w-full object-contain"
                   />
@@ -163,7 +166,7 @@ export function WorkList({
               <div className="space-y-2 p-3 text-sm">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="min-w-0 truncate font-medium">
-                    {work.code}
+                    {workLabel(work)}
                   </span>
                   {status(work)}
                 </div>
@@ -212,15 +215,15 @@ export function WorkList({
       <TableBody>
         {works.map((work) => (
           <TableRow
-            key={work.path || work.code}
-            aria-label={`查看 ${work.code}`}
-            {...(work.path ? rowNavigation(() => open(work)) : {})}
+            key={work.code}
+            aria-label={`查看 ${workLabel(work)}`}
+            {...(work.available !== false ? rowNavigation(() => open(work)) : {})}
           >
             {selection && (
               <TableCell className="pl-4">{select(work)}</TableCell>
             )}
             <TableCell className={`font-medium ${selection ? "" : "pl-4"}`}>
-              {work.code}
+              {workLabel(work)}
               {!!work.warnings.length && (
                 <p className="mt-1 whitespace-normal text-xs font-normal text-muted-foreground">
                   {work.warnings.join("；")}

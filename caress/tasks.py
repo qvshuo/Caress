@@ -3,10 +3,10 @@ import fcntl
 import logging
 import sqlite3
 import uuid
-from pathlib import Path
 from contextlib import AsyncExitStack
 from collections import Counter
 from typing import Literal
+from pathlib import Path
 from urllib.parse import quote
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -19,12 +19,11 @@ from .http import WebClient
 from .logging import progress, work_code
 from .logging import task_id as log_task_id
 from .models import Actor, Category
-from .nfo import existing_nfo, media_stems, nfo_paths, read_nfo, target_folder
+from .storage import image_stems, target_folder
 from .processing import complete_report, process_work, remap_work, retry_work, retry_task_report
-from .runtime import RuntimeStore, now, runtime_directory
+from .runtime import RuntimeStore, now
 from .scanner import scan, validate_roots
 from .settings import Settings
-from .storage import atomic_write
 from .translation import Translator
 
 logger = logging.getLogger(__name__)
@@ -46,14 +45,12 @@ class TaskRequest(BaseModel):
 
 class TaskQueue:
     def __init__(self, settings: Settings, *, scraper_factory=Scraper):
-        if not settings.media_directories or settings.metadata_directory is None:
-            raise ValueError("media_directories and metadata_directory are required")
-        validate_roots(
-            settings.media_directories, settings.metadata_directory, require_existing=False
-        )
+        if not settings.media_directories:
+            raise ValueError("media_directories are required")
         self.settings = settings
-        self.output = settings.metadata_directory.resolve()
-        internal = runtime_directory(self.output)
+        self.output = Path("/data/images")
+        validate_roots(settings.media_directories, self.output, require_existing=False)
+        internal = settings.database.parent
         if internal.is_symlink():
             raise ValueError("runtime directory must not be a symlink")
         internal.mkdir(parents=True, exist_ok=True)
@@ -63,15 +60,9 @@ class TaskQueue:
         self.process_lock = lock.open("a")
         try:
             fcntl.flock(self.process_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            self.runtime = RuntimeStore(self.output)
-            for field, filename in (("catalog_rules_file", "catalog_rules.json"), ("actor_aliases_file", "actor_aliases.json")):
-                if getattr(settings, field) is None:
-                    target = internal / filename
-                    if not target.exists():
-                        atomic_write(target, (Path(__file__).parent / "data" / filename).read_bytes())
-                    setattr(settings, field, target)
-            CatalogRules.load(settings.catalog_rules_file)
-            ActorAliases.load(settings.actor_aliases_file)
+            self.runtime = RuntimeStore(settings.database)
+            CatalogRules.load(settings.database)
+            ActorAliases.load(settings.database)
         except OSError, ValueError, sqlite3.Error:
             if hasattr(self, "runtime"):
                 self.runtime.close()
@@ -88,15 +79,17 @@ class TaskQueue:
         self.pending_settings = None
         self.on_idle = None
         self.scraper_factory = scraper_factory
-        self.translator = Translator(settings.translation, actor_aliases_file=settings.actor_aliases_file)
+        self.translator = Translator(settings.translation, database=settings.database)
         self._artwork_client = None
         self._artwork_lock = asyncio.Lock()
+        from .emby import EmbySync
+        self.emby = EmbySync(self)
         self.closed = False
         for row in self.runtime.works_data:
-            if row["status"] not in ("invalid_key", "conflict"):
+            if row["status"] != "invalid_key":
                 work = self.runtime.work(row["code"])
                 self._apply_result(work, self.runtime.results.get(work.code, {}))
-                row.update(work.model_dump(mode="json"))
+                row.update(work.model_dump(mode="json", exclude={"media"}))
 
 
     async def artwork_client(self):
@@ -119,15 +112,15 @@ class TaskQueue:
 
     async def apply_pending_settings(self):
         updated = self.pending_settings
-        if updated is None or updated.metadata_directory is None or not updated.media_directories or updated.metadata_directory.resolve() != self.output:
+        if updated is None or not updated.media_directories:
             return
         # Called only between batches; no worker observes a partially changed configuration.
         old = self.translator
         if updated.media_directories != self.settings.media_directories:
-            rows = await asyncio.to_thread(self._scan_rows, updated, self.runtime.results, set(), False)
+            rows = await asyncio.to_thread(self._scan_rows, updated, self.runtime.results, set(), False, self.runtime.metadata_snapshot())
             self.runtime.save_scan(rows)
         self.settings = updated
-        self.translator = Translator(updated.translation, actor_aliases_file=updated.actor_aliases_file)
+        self.translator = Translator(updated.translation, database=updated.database)
         if self._artwork_client is not None:
             self._artwork_client.settings = updated
         self.pending_settings = None
@@ -136,23 +129,17 @@ class TaskQueue:
     def active(self):
         return [t for t in self.runtime.tasks() if t["status"] in ("pending", "running")]
 
-    def _apply_result(self, work, result, *, rules=None):
-        work.category = (rules or CatalogRules.load(self.settings.catalog_rules_file)).classify(work.code).category
+    def _apply_result(self, work, result, *, rules=None, metadata_snapshot=None):
+        work.category = (rules or CatalogRules.load(self.settings.database)).classify(work.code).category
         work.title, work.actors = None, []
         work.poster = None
-        work.warnings = [warning for warning in work.warnings if warning != "NFO 无效，等待补抓"]
         work.status = "failed" if result.get("status") not in (None, "found", "unchanged") else "pending"
-        if existing_nfo(self.output, work).is_file():
-            try:
-                for path in nfo_paths(self.output, work):
-                    metadata = read_nfo(path, work.code)
-                    work.title, work.actors = metadata.title, [a.name for a in metadata.actors]
-                work.status = "partial" if result.get("partial") else "scraped" if work.status != "failed" else "failed"
-            except (ValueError, OSError):
-                work.title, work.actors = None, []
-                work.warnings.append("NFO 无效，等待补抓")
+        metadata = self.runtime.metadata(work.code) if metadata_snapshot is None else metadata_snapshot.get(work.code)
+        if metadata:
+            work.title, work.actors = metadata.title, [actor.name for actor in metadata.actors]
+            work.status = "partial" if result.get("partial") else "scraped"
         folder = target_folder(self.output, work.code)
-        stems = {stem + "-poster" for stem in media_stems(work)}
+        stems = {stem + "-poster" for stem in image_stems(work)}
         try:
             posters = sorted(folder.iterdir())
         except OSError:
@@ -171,21 +158,21 @@ class TaskQueue:
             break
 
     def _queue_status(self, work):
-        if work.status not in ("invalid_key", "conflict"):
+        if work.status != "invalid_key":
             if self.work_running(work.code):
                 work.status = "running"
             elif self._pending_counts[work.code]:
                 work.status = "queued"
 
-    def _scan_rows(self, options, results, previous, persist):
+    def _scan_rows(self, options, results, previous, persist, metadata_snapshot):
         works = scan(options.media_directories)
-        rules = CatalogRules.load(options.catalog_rules_file)
+        rules = CatalogRules.load(options.database)
         for work in works:
             if work.status == "pending":
                 result = results.get(work.code, {})
-                self._apply_result(work, result, rules=rules)
+                self._apply_result(work, result, rules=rules, metadata_snapshot=metadata_snapshot)
                 self._queue_status(work)
-            elif persist and (str(work.path), work.code, work.status) not in previous:
+            elif persist and (work.code, work.status) not in previous:
                 logger.warning("跳过 %s：%s", work.code, "; ".join(work.warnings))
         return works
 
@@ -201,9 +188,9 @@ class TaskQueue:
 
     async def scan_async(self, *, settings=None, persist=True):
         options, results = settings or self.settings, self.runtime.results
-        before = {row["path"]: row for row in self.runtime.works()}
-        previous = {(m["path"], m["code"], m["status"]) for m in before.values()}
-        works = await asyncio.to_thread(self._scan_rows, options, results, previous, persist)
+        before = {row["code"]: {key: value for key, value in row.items() if key != "media"} for row in self.runtime.works()}
+        previous = {(m["code"], m["status"]) for m in before.values()}
+        works = await asyncio.to_thread(self._scan_rows, options, results, previous, persist, self.runtime.metadata_snapshot())
         if persist:
             if self.closed or options is not self.settings:
                 return self.runtime.works()
@@ -211,21 +198,25 @@ class TaskQueue:
             running = set(self._running_codes)
             for code in running:
                 current = self.runtime.works(codes=[code])
-                scanned = [work for work in works if work.code == code]
-                # Keep newly discovered conflicts visible, even while the original work finishes.
-                if len(current) == 1 and current[0]["status"] not in ("invalid_key", "conflict") and not any(work.status == "conflict" for work in scanned):
+                if len(current) == 1 and current[0]["status"] != "invalid_key":
+                    retained = self.runtime.work(code)
+                    media = {item.id: item for item in retained.media}
+                    for scanned in works:
+                        if scanned.code == code:
+                            media.update({item.id: item for item in scanned.media})
+                    retained.media = list(media.values())
                     works = [work for work in works if work.code != code]
-                    works.append(self.runtime.work(code))
+                    works.append(retained)
             for work in works:
-                current = self.runtime.work_at(str(work.path))
-                if current and work.status not in ("invalid_key", "conflict") and (
-                    current != before.get(str(work.path))
+                current = self.runtime.find_work(work.code)
+                if current and work.status != "invalid_key" and (
+                    current != before.get(work.code)
                     or results.get(work.code) != self.runtime.results.get(work.code)
                 ):
                     for field in ("title", "actors", "poster", "status", "category", "warnings"):
                         setattr(work, field, Category(current[field]) if field == "category" else current[field])
                 self._queue_status(work)
-            works.sort(key=lambda work: str(work.path))
+            works.sort(key=lambda work: work.code)
             self.runtime.save_scan(works)
         return [work.model_dump(mode="json") for work in works]
 
@@ -238,10 +229,10 @@ class TaskQueue:
         eligible = {
             m["code"]
             for m in self.runtime.works()
-            if m["status"] not in ("invalid_key", "conflict")
+            if m["status"] != "invalid_key"
         }
         if request.type in ("update_portraits", "remap_actors"):
-            names = ActorAliases.load(self.settings.actor_aliases_file)
+            names = ActorAliases.load(self.settings.database)
             actors = library_actors([self.runtime.work(code) for code in eligible], self.output,
                                    names)
             eligible_actors = {actor["name"]: actor for actor in actors
@@ -266,7 +257,7 @@ class TaskQueue:
             raise ValueError("actor_names is only supported for actor tasks")
         keys = sorted(set(request.codes) if request.codes else eligible)
         if not keys or any(k not in eligible for k in keys):
-            raise ValueError("no eligible works or requested directory is invalid/conflicting")
+            raise ValueError("no eligible works or requested filename is invalid")
         params = request.model_dump(mode="json")
         params["codes"] = keys
         if request.type in ("update_portraits", "remap_actors"):
@@ -367,7 +358,7 @@ class TaskQueue:
                 await self.apply_pending_settings()
             if request.type in ("fill_missing", "refresh"):
                 await self.translator.verify(force=True)
-            names = ActorAliases.load(self.settings.actor_aliases_file)
+            names = ActorAliases.load(self.settings.database)
             self.runtime.save_issues(names.pending(self.runtime.issues))
             async with AsyncExitStack() as stack:
                 scraper = portraits = None
@@ -410,6 +401,8 @@ class TaskQueue:
                         work = self.runtime.work(item["code"])
                         self.runtime.work_row(item["code"])["status"] = "running"
                         report = await self.process(scraper, work, names, request, portraits)
+                        if report["status"] in ("found", "unchanged") or report.get("partial"):
+                            await self.emby.sync(work.code)
                     except Exception as exc:
                         logger.exception("处理 %s 失败", item["code"])
                         report = {"code": item["code"], "status": "error", "error": str(exc)}
@@ -444,7 +437,7 @@ class TaskQueue:
                     item.update(status="failed", result={"code": item["code"], "status": "error", "error": str(exc)}, stage=event)
                     item["events"] = [*item.get("events", []), event][-60:]
                     rows = self.runtime.works(codes=[item["code"]])
-                    if len(rows) == 1 and rows[0]["status"] not in ("invalid_key", "conflict"):
+                    if len(rows) == 1 and rows[0]["status"] != "invalid_key":
                         self.refresh_work(item["code"])
             task.update(status="finished", current=None, error=str(exc), finished_at=now())
         self.runtime.save_task(task)
@@ -453,9 +446,8 @@ class TaskQueue:
         if request.type == "remap_actors":
             return await remap_work(work, self.output, names, self.runtime, request.actor_names, request.actor_ids, portraits)
         if request.type == "update_portraits":
-            actors = dict.fromkeys(actor.name for path in nfo_paths(self.output, work)
-                                   for actor in read_nfo(path, work.code).actors
-                                   if actor.name in request.actor_names)
+            metadata = self.runtime.metadata(work.code)
+            actors = dict.fromkeys(actor.name for actor in metadata.actors if actor.name in request.actor_names) if metadata else {}
             warnings = await scraper.resolve_actors([Actor(name=name) for name in actors], names, work.category, {})
             records = await portraits.save([Actor(name=name) for name in actors], replace=True, kind=actor_type(work.category))
             failed = any(record["status"] == "error" for record in records)

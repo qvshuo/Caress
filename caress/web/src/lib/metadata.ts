@@ -2,13 +2,13 @@ import type { Variant, WorkDetail } from "./types";
 
 export const fields = [
   ["title", "标题", "textarea"],
+  ["original_title", "原始标题", "textarea"],
   ["plot", "剧情", "textarea"],
   ["release_date", "日期", "text"],
-  ["runtime_minutes", "时长分钟", "number"],
+  ["year", "年份", "number"],
   ["actors", "演员", "list"],
   ["directors", "导演", "list"],
   ["studio", "制作商", "text"],
-  ["series", "系列", "text"],
   ["genres", "类型", "list"],
   ["tags", "标签", "list"],
 ] as const;

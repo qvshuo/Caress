@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import sqlite3
 import time
 import uuid
 from urllib.parse import urlencode
@@ -19,7 +20,7 @@ from ..models import (
     SourceResult,
     Status,
 )
-from .parsing import artwork, minutes, parse_date
+from .parsing import artwork, parse_date
 from .base import Source
 
 
@@ -115,12 +116,10 @@ class JavDBApi(Source):
         warnings = []
         if not code.startswith("FC2PPV-"):
             try:
-                self.rules.remember(code, category, self.settings.catalog_rules_file)
-            except OSError as exc:
+                self.rules.remember(code, category, self.settings.database)
+            except (OSError, sqlite3.Error) as exc:
                 warnings.append(f"番号规则保存失败：{exc}")
-        classification = self.rules.classify(code)
         title = work.get("origin_title") or work["title"]
-        source_url = self.base + f"/api/v4/movies/{movie_id}"
         work_actors = work.get("actors") or []
         if not isinstance(work_actors, list):
             raise FetchError(Status.PARSE_ERROR, "JavDB API actor list schema changed")
@@ -139,9 +138,7 @@ class JavDBApi(Source):
             original_title=work.get("origin_title") or None,
             plot=work.get("summary") or None,
             release_date=parse_date(work.get("release_date")),
-            runtime_minutes=minutes(work.get("duration")),
             studio=work.get("maker_name") or None,
-            series=work.get("series_name") or None,
             directors=[work["director_name"]] if work.get("director_name") else [],
             actors=actors,
             tags=[
@@ -154,16 +151,13 @@ class JavDBApi(Source):
                 [item["large_url"] for item in work.get("preview_images") or [] if item.get("large_url")],
                 [work["thumb_url"]] if work.get("thumb_url") else [],
             ),
-            classification=classification,
-            external_id=movie_id,
-            source_url=source_url,
         )
         return self.found(request, metadata, warnings=warnings, actor_ids=actor_ids)
 
     async def resolve_actors(self, actors, names: ActorAliases, category, ids) -> list[str]:
         warnings = []
-        if self.settings.actor_aliases_file:
-            names.reload(self.settings.actor_aliases_file)
+        if self.settings.database:
+            names.reload(self.settings.database)
         kind = actor_type(category)
         for actor in actors:
             ident = ids.get(actor.name)
@@ -192,7 +186,7 @@ class JavDBApi(Source):
                         comparison_name(name) for name in ActorAliases.record_names(record)
                     }):
                         records[str(row["id"])] = record
-                names.remember(records, self.settings.actor_aliases_file)
-            except (FetchError, OSError, ValueError, TypeError) as exc:
+                names.remember(records, self.settings.database)
+            except (FetchError, OSError, sqlite3.Error, ValueError, TypeError) as exc:
                 warnings.append(f"{actor.name}: 演员查询失败（{exc}）")
         return warnings

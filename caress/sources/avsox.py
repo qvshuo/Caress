@@ -15,7 +15,7 @@ from ..models import (
     SourceResult,
     Status,
 )
-from .parsing import artwork, minutes, parse_date, text, texts
+from .parsing import artwork, parse_date, text, texts
 from .base import Source
 
 
@@ -106,9 +106,7 @@ class AVSOX(Source):
             title=title,
             original_title=title,
             release_date=parse_date(row("发行时间")),
-            runtime_minutes=minutes(row("长度")),
             studio=row("制作商"),
-            series=row("系列"),
             actors=[
                 Actor(
                     name=str(node.get_all_text()).strip(),
@@ -123,8 +121,5 @@ class AVSOX(Source):
                 texts(selector, '//img[@alt and @src][starts-with(@alt,"' + code + '")]/@src'),
                 texts(selector, '//*[contains(@class,"sample")]//img/@src'),
             ),
-            classification=self.rules.classify(code),
-            external_id=page.url.rstrip("/").rsplit("/", 1)[-1],
-            source_url=page.url,
         )
         return self.found(request, metadata)

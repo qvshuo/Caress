@@ -13,7 +13,7 @@ from ..models import (
     SourceResult,
     Status,
 )
-from .parsing import artwork, first, minutes, parse_date, text, texts
+from .parsing import artwork, first, parse_date, text, texts
 from .base import Source
 
 
@@ -94,9 +94,7 @@ class JavDBWeb(Source):
             title=title,
             original_title=original,
             release_date=parse_date(value("日期")),
-            runtime_minutes=minutes(value("時長")),
             studio=value("片商"),
-            series=value("系列"),
             directors=[value("導演")] if value("導演") else [],
             actors=actors,
             tags=texts(
@@ -110,8 +108,5 @@ class JavDBWeb(Source):
                     selector, '//*[contains(@class,"preview-images")]//a[contains(@class,"tile-item")]/@href'
                 ),
             ),
-            classification=self.rules.classify(canonical),
-            external_id=page.url.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1],
-            source_url=page.url,
         )
         return self.found(request, metadata)

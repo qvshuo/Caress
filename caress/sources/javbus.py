@@ -14,7 +14,7 @@ from ..models import (
     SourceResult,
     Status,
 )
-from .parsing import artwork, first, minutes, parse_date, text, texts
+from .parsing import artwork, first, parse_date, text, texts
 from .base import Source
 
 
@@ -92,9 +92,7 @@ class JavBus(Source):
             title=title,
             original_title=title,
             release_date=parse_date(row("發行日期")),
-            runtime_minutes=minutes(row("長度")),
             studio=row("製作商", "a[1]/text()"),
-            series=row("系列", "a[1]/text()"),
             directors=texts(
                 selector, '//span[contains(text(),"導演")]/following-sibling::a/text()'
             ),
@@ -106,7 +104,5 @@ class JavBus(Source):
                 texts(selector, '//a[contains(@class,"bigImage")]/@href'),
                 texts(selector, '//a[contains(@class,"sample-box")]/@href'),
             ),
-            classification=self.rules.classify(code),
-            source_url=page.url,
         )
         return self.found(request, metadata)

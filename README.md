@@ -1,52 +1,31 @@
-<p align="center">
-  <img src="assets/logo.png" alt="Caress" width="96" height="96" />
-</p>
-
+<p align="center"><img src="assets/logo.png" alt="Caress" width="96" height="96" /></p>
 <h1 align="center">Caress <small>/kəˈres/</small></h1>
 
-刮削 JAV 视频元数据。
-
-- 多源刮削：支持 DMM、JavDB、JavBus 等来源；
-- 配套插件：Emby 插件直接读取本地 NFO、封面、剧照和演员头像；
-- 演员头像：从 gfriends 获取，按日文主名、中文名和别名匹配；
-- 封面裁剪：检测人脸，自动裁剪为适用于 Emby 的 2:3 封面；
-- 自动翻译：配置 OpenAI 兼容 API 后，自动翻译作品标题与剧情；
-- 标准格式：使用符合 Emby 规范的 NFO，图片独立保存。
+扫描视频与 STRM，多源刮削元数据、自动翻译、匹配演员头像和裁剪封面，通过 Emby REST API 同步。
 
 ## 部署
-
-下载源码，或通过 Git 克隆后进入项目目录：
 
 ```sh
 git clone --depth=1 https://github.com/qvshuo/Caress.git caress && cd caress
 mkdir -p data
 cp docker-compose.example.yml docker-compose.yml
-
-# 修改 docker-compose.yml 中的作品目录和数据目录后启动
+# 修改媒体目录和数据目录的宿主机路径
 docker compose up -d --build
 ```
 
-打开 `http://服务器IP:9307`。
+宿主机数据目录须允许容器内 UID 1000 读写。
+
+打开 `http://服务器IP:9307`。在设置中选择容器内的媒体目录，填写 Emby 地址和 API Key，并测试连接。
+Caress 和 Emby 容器必须将同一媒体目录挂载到相同的容器内绝对路径。例如 Emby 中为 `/path/to/media`，Caress 也应挂载到 `/path/to/media`。通过完整路径精确关联作品。
 
 ## 使用
 
-1. 设置作品目录和元数据目录，视频或 STRM 文件的父文件夹名称须为完整番号，且不能重复；
-2. 配置 OpenAI 兼容 API，用于翻译；
-3. 下载 [Caress.dll](https://github.com/qvshuo/Caress/releases/latest/download/Caress.dll)，放入 Emby 配置目录下的 `plugins` 文件夹，Docker 部署时，对应 Emby 容器内的 `/config/plugins`；如有旧的 `caress.dll`，请先移除；
+- 扫描依据文件名主干识别番号，父目录名称不参与识别。仅移除末尾的 `-C`、`-U`、`-UC` 和 `-cdN` 后缀，忽略大小写；同番号的版本和分集共享元数据。
+- 补齐缺失更新自动字段及图片，保留手动编辑；刷新替换所选来源的全部字段及图片。字段和图片可分别选择来源。
+- 配置翻译后自动翻译标题与剧情。头像更新只更新所选演员头像。
+- 保存或刮削后自动同步 Emby。未入库的媒体保持待同步；失败可手动同步重试，路径关联可重新建立。
+- Emby 的类型和标签分别同步；字幕、破解标识写入标签。剧照与原始背景图使用有序 Backdrop 图片，封面和演员头像使用 Primary。
+- 时长由 Emby 探测媒体；电影的系列名称不能直接写入，因此不刮削或编辑这些字段。
 
-4. 在 Emby 的 Compose 服务中挂载元数据目录，冒号左侧填写 Caress 元数据目录在宿主机上的绝对路径：
-
-   ```yaml
-   volumes:
-     - /path/to/data/metadata:/caress-metadata:ro
-   ```
-
-5. 在 Emby 的 Compose 文件所在目录执行以下命令，应用挂载并加载插件：
-
-   ```sh
-   docker compose down && docker compose up -d
-   ```
-
-6. 在媒体库的元数据读取器中启用 **Caress**，随后刷新媒体库。
-
-插件直接读取本地文件，无需连接 Caress 服务。运行期间会监听元数据目录的变更并自动刷新媒体库；首次接入时仍需手动刷新媒体库。
+所有结构化数据保存在 `/data/caress.sqlite3`，图片保存在 `/data/images`。媒体只读。
+生产环境由 Python 提供 Web 静态文件。本版本使用全新数据库，不导入旧版数据。

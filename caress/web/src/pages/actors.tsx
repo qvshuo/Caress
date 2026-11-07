@@ -419,7 +419,7 @@ function ActorDetail({
   const rows = works.filter(
     (w) =>
       codes.has(w.code) &&
-      `${w.code} ${w.path} ${w.title ?? ""}`
+      `${w.code} ${(w.media ?? []).map(file => file.path).join(" ")} ${w.title ?? ""}`
         .toLowerCase()
         .includes(query.toLowerCase()),
   );
@@ -525,10 +525,10 @@ function ActorDetail({
                     .slice((current - 1) * pageSize, current * pageSize)
                     .map((work) => (
                       <TableRow
-                        key={work.path}
+                        key={work.code}
                         {...rowNavigation(() =>
                           navigate(
-                            `library/work/${encodeURIComponent(work.path)}`,
+                            `library/work/${encodeURIComponent(work.code)}`,
                           ),
                         )}
                         aria-label={`查看 ${work.code}`}

@@ -115,7 +115,7 @@ async def _save_images(
     missing_only: bool = False,
     protected_roles=(),
 ) -> list[dict]:
-    """Write stem-named images; crop posters and preserve other originals."""
+    """Write work images; crop posters and preserve other originals."""
     covers = [item for item in items if item.role == "cover"]
     posters = [item for item in items if item.role == "poster"]
     plan = []
@@ -172,7 +172,7 @@ async def _save_images(
             for base in paths:
                 if missing_only and existing(base):
                     continue
-                # Append an extension: dotted video names must retain their full stem.
+                # Add the extension after the shared work code and image role.
                 path = base.parent / (base.name + extension)
                 if not missing_only or not path.is_file():
                     atomic_write(path, image.content)
