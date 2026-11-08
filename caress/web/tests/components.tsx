@@ -28,6 +28,7 @@ function Fixture() {
     <Checkbox aria-label="受控复选" checked={checked} onCheckedChange={setChecked} />
     <Checkbox aria-label="非受控复选" defaultChecked />
     <Checkbox aria-label="部分选择" indeterminate />
+    <Checkbox aria-label="禁用复选" disabled />
     <output>{choice}</output>
   </div>;
 }

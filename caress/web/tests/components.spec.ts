@@ -53,6 +53,13 @@ test("uncontrolled dialog and select respond to pointer and Escape", async ({ pa
 
 test("checkbox controlled, uncontrolled and indeterminate semantics", async ({ page }) => {
   const controlled = page.getByRole("checkbox", { name: "受控复选", exact: true });
+  await expect(controlled).toBeVisible();
+  const box = await controlled.boundingBox();
+  expect(box?.width).toBe(16);
+  expect(box?.height).toBe(16);
+  const disabled = page.getByRole("checkbox", { name: "禁用复选" });
+  await expect(disabled).toBeDisabled();
+  await expect(disabled).toHaveCSS("opacity", "0.5");
   await controlled.focus();
   await page.keyboard.press("Space");
   await expect(controlled).toBeChecked();
