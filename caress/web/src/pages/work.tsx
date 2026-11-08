@@ -1,3 +1,4 @@
+import { toast } from "@/components/ui/sonner";
 import { lazy, Suspense, useEffect, useEffectEvent, useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -61,7 +62,6 @@ export function Work({
   reportEdit: EditReporter;
 }) {
   const [editor, setEditor] = useState<Editor | null>(null);
-  const [savedNotice, setSavedNotice] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
   const [pending, setPending] = useState<"save" | "prepare" | "sync" | null>(null);
   const [cropImage, setCropImage] = useState<{
@@ -118,6 +118,7 @@ export function Work({
                 variants: detail.variants,
                 process: detail.process,
                 last_result: detail.last_result,
+                health: detail.health,
                 warnings: detail.warnings,
                 media: detail.media,
                 status: detail.status,
@@ -174,7 +175,6 @@ export function Work({
     action: "save" | "prepare" = "prepare",
   ) {
     run(async () => {
-      setSavedNotice(false);
       setPending(action);
       try {
         await fn();
@@ -249,7 +249,7 @@ export function Work({
       image_choices: editor!.images,
     });
     accept(result);
-    setSavedNotice(true);
+    toast.success("已保存");
     saved(result);
   }
   const imageFiles = Object.fromEntries(
@@ -292,8 +292,7 @@ export function Work({
       group.roles.map(
         (role) =>
           editor!.images[role]?.source ??
-          detail.selection?.image_choices?.[role]?.source ??
-          detail.selection?.image_source ??
+          detail.selection?.artwork?.roles[role]?.choice?.source ??
           "unknown",
       ),
     );
@@ -401,7 +400,12 @@ export function Work({
     const original = editor.inputs.original_fields[key];
     const originalText = Array.isArray(original) ? original.map((actor) => actor.name).join("\n") : original ?? "";
     const unchangedActors = key === "actors" && Array.isArray(original) && originalText === draft[key];
-    const tag = key === "actors" ? (unchangedActors ? null : "主名") : ["title", "plot"].includes(key) ? "译" : null;
+    const translated = editor.fieldSources[key]
+      ? sourceVariant?.translated_fields?.includes(key)
+      : detail.selection?.translated_fields?.includes(key);
+    const tag = key === "actors" && source !== "custom" && !unchangedActors && original !== undefined
+      ? "主名" : translated && source !== "custom" ? "译" : null;
+    const showOriginal = ["title", "plot", "actors"].includes(key) && original !== undefined && !unchangedActors;
     const change = (value: string) =>
       setEditor({
         ...editor,
@@ -441,26 +445,18 @@ export function Work({
             aria-label={label}
             type={type}
             disabled={locked}
-            min={type === "number" ? 0 : undefined}
+            min={type === "number" ? 1 : undefined}
+            max={type === "number" ? 9999 : undefined}
             value={draft[key]}
             onChange={(e) => change(e.target.value)}
           />
         )}
-        {tag && (
+        {showOriginal && (
           <div className="space-y-2">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <label htmlFor={`metadata-${key}-original`} className="text-sm font-medium">{label}</label>
-              <Select
-                label={`${label}原文来源`}
-                value={source}
-                onChange={(id) => perform(() => chooseField(key, id))}
-                disabled={locked}
-                options={options}
-              />
-            </div>
+            <label htmlFor={`metadata-${key}-original`} className="text-sm text-muted-foreground">{key === "actors" ? "原始姓名" : "原文"}</label>
             <Textarea
               id={`metadata-${key}-original`}
-              aria-label={label}
+              aria-label={`${label}原文`}
               readOnly
               rows={key === "plot" ? 6 : 2}
               value={originalText}
@@ -488,9 +484,9 @@ export function Work({
           <h2 className="text-xl font-semibold">{detail.status === "invalid_key" ? (detail.media?.[0]?.filename ?? detail.code) : detail.code}</h2>
           <Badge variant="secondary">{categories[detail.category]}</Badge>
           <Status
-            status={processActive ? detail.process!.status : detail.status}
+            status={detail.status}
             label={
-              !processActive && detail.status === "pending"
+              detail.status === "pending"
                 ? "未刮削"
                 : undefined
             }
@@ -500,7 +496,7 @@ export function Work({
               dateTime={updatedAt}
               className="text-sm text-muted-foreground"
             >
-              更新于 {formatDate(updatedAt, true)}
+              任务更新于 {formatDate(updatedAt, true)}
             </time>
           )}
         </div>
@@ -542,6 +538,9 @@ export function Work({
                 ))}
               </div>
             )}
+            {detail.health?.artwork_problems.map(problem => (
+              <p key={problem} role="alert" className="rounded-md border border-destructive/30 p-3 text-sm text-destructive">{problem}</p>
+            ))}
             <Diagnostics
               report={detail.last_result}
               title="当前文件问题"
@@ -722,11 +721,6 @@ export function Work({
         </div>
         <div className="h-8" aria-hidden="true" />
         <StickyActions>
-          {savedNotice && !changed && (
-            <span role="status" className="text-sm text-muted-foreground">
-              已保存
-            </span>
-          )}
           <Button type="submit" disabled={locked || !changed}>
             {pending === "save" ? "保存中" : "保存"}
           </Button>

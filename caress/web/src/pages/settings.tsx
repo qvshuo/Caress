@@ -1,3 +1,4 @@
+import { toast } from "@/components/ui/sonner";
 import { lazy, Suspense, useEffect, useState } from "react";
 import { FolderOpen, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -42,7 +43,6 @@ export function Settings({
   reportEdit: EditReporter;
 }) {
   const [draft, setDraft] = useState(() => settingsDraft(settings));
-  const [savedNotice, setSavedNotice] = useState(false);
   const [pending, setPending] = useState(false);
   const [testing, setTesting] = useState(false);
   const [embyTesting, setEmbyTesting] = useState(false);
@@ -85,7 +85,6 @@ export function Settings({
     }
   }
   async function save() {
-    setSavedNotice(false);
     setPending(true);
     try {
       const value = await api<Preferences>("settings", "PUT", {
@@ -102,7 +101,7 @@ export function Settings({
       });
       setDraft(settingsDraft(value));
       saved(value);
-      setSavedNotice(true);
+      toast.success("已保存");
     } finally {
       setPending(false);
     }
@@ -409,11 +408,6 @@ export function Settings({
           </div>
         )}
         <StickyActions>
-          {savedNotice && !changed && (
-            <span role="status" className="text-sm text-muted-foreground">
-              已保存
-            </span>
-          )}
           <Button
             type="submit"
             disabled={pending || !changed || !draft.media_directories.length}

@@ -21,11 +21,11 @@ export function Select({
   disabled?: boolean;
 }) {
   return (
-    <SelectRoot value={value} onValueChange={onChange} disabled={disabled}>
+    <SelectRoot value={value} items={options} onValueChange={(next) => { if (next !== null) onChange(next); }} disabled={disabled}>
       <SelectTrigger aria-label={label} className="max-w-full">
         <SelectValue />
       </SelectTrigger>
-      <SelectContent position="popper">
+      <SelectContent>
         {Object.entries(options).map(([id, text]) => (
           <SelectItem key={id} value={id}>
             {text}

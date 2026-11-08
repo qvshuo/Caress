@@ -81,6 +81,7 @@ export function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [tick, setTick] = useState(0);
   const polling = useRef(false);
+  const refreshRequest = useRef(0);
   const previousTasks = useRef<Task[]>([]);
   const workCursor = useRef<string | null>(null);
   const [actorRevision, setActorRevision] = useState(0);
@@ -116,9 +117,19 @@ export function App() {
   const mergeWorks = useCallback((updates: WorkRecord[]) => {
     if (!updates.length) return;
     const byCode = new Map(updates.map((work) => [work.code, work]));
-    setWorks((current) => current.map((work) => byCode.get(work.code) ?? work));
+    setWorks((current) => {
+      let changed = false;
+      const next = current.map((work) => {
+        const update = byCode.get(work.code);
+        if (!update || JSON.stringify(update) === JSON.stringify(work)) return work;
+        changed = true;
+        return update;
+      });
+      return changed ? next : current;
+    });
   }, []);
   const savedWork = useCallback((work: WorkRecord) => {
+    refreshRequest.current++;
     const { code, category, status, media, warnings, title, actors, poster } = work;
     mergeWorks([{ code, category, status, media, warnings, title, actors, poster }]);
     setActorRevision((value) => value + 1);
@@ -126,20 +137,10 @@ export function App() {
   const refreshTasks = useCallback(async (poll = false) => {
     const activeIds = previousTasks.current.filter(active).map((task) => task.id);
     if (poll && !activeIds.length) return;
+    const ticket = ++refreshRequest.current;
     const incoming = await api<Task[]>(poll ? `tasks?ids=${activeIds.join(",")}` : "tasks");
+    if (ticket !== refreshRequest.current) return;
     const byId = new Map(incoming.map((task) => [task.id, task]));
-    if (poll && activeIds.some((id) => !byId.has(id))) {
-      // Switching the metadata directory selects another runtime scope and task list.
-      const [preferences, catalog, records] = await Promise.all([api<Preferences>("settings"), api<WorkRecord[]>("works"), api<Task[]>("tasks")]);
-      setSettings(preferences);
-      setWorks(catalog);
-      previousTasks.current = records;
-      setTasks(records);
-      workCursor.current = null;
-      setActorRevision((value) => value + 1);
-      setTick((value) => value + 1);
-      return;
-    }
     const next = poll ? previousTasks.current.map((task) => byId.get(task.id) ?? task) : incoming;
     const previousById = new Map(previousTasks.current.map((task) => [task.id, task]));
     const changed = next.filter((task) => {
@@ -155,19 +156,24 @@ export function App() {
       const updates = await api<{ time: string; works: WorkRecord[] }>(
         `works/updates?task_ids=${ids.join(",")}${cursor ? `&after=${encodeURIComponent(cursor)}` : ""}`,
       );
+      if (ticket !== refreshRequest.current) return;
       mergeWorks(updates.works);
       workCursor.current = updates.time;
     }
     if (changed.length) setActorRevision((value) => value + 1);
-    previousTasks.current = next;
-    setTasks(next);
-    setTick((value) => value + 1);
+    if (JSON.stringify(previousTasks.current) !== JSON.stringify(next)) {
+      previousTasks.current = next;
+      setTasks(next);
+      setTick((value) => value + 1);
+    }
   }, [mergeWorks]);
   const refresh = useCallback(async () => {
+    const ticket = ++refreshRequest.current;
     const [works, tasks] = await Promise.all([
       api<WorkRecord[]>("works"),
       api<Task[]>("tasks"),
     ]);
+    if (ticket !== refreshRequest.current) return;
     setWorks(works);
     previousTasks.current = tasks;
     workCursor.current = null;

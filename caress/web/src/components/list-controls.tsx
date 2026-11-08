@@ -205,13 +205,8 @@ export function SelectionCheckbox({
     <Checkbox
       aria-label={label}
       disabled={!keys.length}
-      checked={
-        keys.length && keys.every((key) => selected.has(key))
-          ? true
-          : keys.some((key) => selected.has(key))
-            ? "indeterminate"
-            : false
-      }
+      checked={keys.length > 0 && keys.every((key) => selected.has(key))}
+      indeterminate={keys.some((key) => selected.has(key)) && !keys.every((key) => selected.has(key))}
       onCheckedChange={(checked) => toggle(keys, checked === true)}
     />
   );

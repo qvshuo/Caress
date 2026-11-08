@@ -37,10 +37,8 @@ export function ConfirmationDialog({
       <DialogContent className="max-h-[85dvh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{value?.title}</DialogTitle>
-          <DialogDescription asChild>
-            <div className="whitespace-pre-wrap break-words">
+          <DialogDescription render={<div />} className="whitespace-pre-wrap break-words">
               {value?.description}
-            </div>
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>

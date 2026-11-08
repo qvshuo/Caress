@@ -1,4 +1,5 @@
 export interface Work {
+  progress_at?: string | null;
   title?: string | null;
   actors?: string[];
   poster?: string | null;
@@ -29,8 +30,7 @@ export interface FieldInputs {
   title_text: string | null;
   mapping_fingerprint: string;
 }
-export interface Metadata {
-  artwork?: { url: string; role: string; source: string; referer: string }[];
+export interface WorkMetadata {
   code: string;
   title: string;
   original_title?: string | null;
@@ -42,6 +42,9 @@ export interface Metadata {
   actors?: Actor[];
   genres?: string[];
   tags?: string[];
+}
+export interface SourceMetadata extends WorkMetadata {
+  artwork: { url: string; role: string; source: string; referer: string }[];
 }
 export interface SourceReport {
   elapsed_seconds?: number | null;
@@ -75,17 +78,15 @@ export interface ProgressEvent {
 }
 export interface Variant extends SourceReport, Partial<FieldInputs> {
   translation_errors?: { field: string; error: string }[];
-  metadata: Metadata | null;
+  metadata: SourceMetadata | null;
   translated_fields?: string[];
-  processed_fields?: Partial<Metadata>;
+  processed_fields?: Partial<WorkMetadata>;
 }
 export interface Selection extends Partial<FieldInputs> {
   field_sources?: Record<string, string>;
-  image_choices?: Record<string, ImageChoice>;
-  image_source?: string;
+  artwork?: { roles: Record<string, { file?: string; choice?: ImageChoice; protected?: boolean; origin?: string; status: string }>; samples_protected: boolean };
   translated_fields?: string[];
   manual_fields?: string[];
-  manual_image_roles?: string[];
 }
 export interface WorkDetail extends Work {
   process?: TaskItem & {
@@ -99,10 +100,11 @@ export interface WorkDetail extends Work {
   variants?: Variant[];
   selection?: Selection;
   editable: boolean;
-  metadata: Metadata | null;
+  metadata: WorkMetadata | null;
   artwork: string[];
   artwork_versions: Record<string, string>;
   last_result: Report | null;
+  health?: { metadata: boolean; incomplete_stages: string[]; artwork_problems: string[] } | null;
 }
 export interface TaskItem {
   code: string;
