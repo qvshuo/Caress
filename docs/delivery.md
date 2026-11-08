@@ -1,6 +1,6 @@
 # Caress 架构收敛与 Base UI 迁移交付
 
-版本保持 1.6.2。运行时采用 Python 3.15.2、FastAPI 0.162.2、Pydantic 2.14.3、React 19.3.1、TypeScript 7.0.2、Bun 1.4.4、Tailwind CSS 4.3.5、Base UI 1.9.0、Sonner 2.0.8。shadcn/ui 使用官方 Base UI 组件组织与组合方式；核对时 CLI 稳定版为 4.23.0，CLI 不作为生产依赖。
+版本为 1.7.0。运行时采用 Python 3.15.2、FastAPI 0.162.2、Pydantic 2.14.3、React 19.3.1、TypeScript 7.0.2、Bun 1.4.4、Tailwind CSS 4.3.5、Base UI 1.9.0、Sonner 2.0.8。shadcn/ui 使用官方 Base UI 组件组织与组合方式；核对时 CLI 稳定版为 4.23.0，CLI 不作为生产依赖。
 
 ## 目录与模块
 
