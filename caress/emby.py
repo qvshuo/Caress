@@ -2,13 +2,13 @@
 import asyncio
 import base64
 import hashlib
-import json
 import io
+import json
 import re
-
-from PIL import Image
+from dataclasses import dataclass
 
 import httpx
+from PIL import Image
 
 from .portraits import actor_image
 from .storage import target_folder
@@ -38,6 +38,20 @@ def work_images(folder, code):
     return result
 
 
+def sync_files(output, code, actors):
+    folder = target_folder(output, code)
+    images = [(kind, number, str(path), hashlib.sha256(path.read_bytes()).hexdigest())
+              for kind, number, path in work_images(folder, code)]
+    portraits = [(actor.name, str(path), hashlib.sha256(path.read_bytes()).hexdigest())
+                 for actor in actors if (path := actor_image(output, actor.name))]
+    return images, portraits
+
+
+def image_pixels_match(expected_bytes, actual_bytes):
+    with Image.open(io.BytesIO(expected_bytes)) as expected, Image.open(io.BytesIO(actual_bytes)) as actual:
+        return actual.size == expected.size and actual.convert("RGBA").tobytes() == expected.convert("RGBA").tobytes()
+
+
 def sync_error(exc):
     if isinstance(exc, httpx.HTTPStatusError):
         return f'Emby 请求失败（HTTP {exc.response.status_code}）'
@@ -61,6 +75,56 @@ def field_value(key, value):
 
 def fields_match(actual, expected):
     return all(field_value(key, actual.get(key)) == field_value(key, value) for key, value in expected.items())
+
+
+@dataclass(frozen=True)
+class ImageUpload:
+    kind: str
+    index: int
+    file: str
+    digest: str
+
+
+@dataclass(frozen=True)
+class SyncPlan:
+    """Pure desired changes; constructing a plan performs no I/O."""
+    item_id: str
+    metadata: dict
+    update_metadata: bool
+    managed_tags: list[str]
+    managed_people: list[tuple[str, str]]
+    uploads: tuple[ImageUpload, ...]
+    deletions: tuple[str, ...]
+    portraits: tuple[tuple[str, str, str], ...]
+
+
+def plan_sync(ident, metadata, original, item_state, media, images, portraits):
+    labels = (["中文字幕"] if any(row["subtitles"] for row in media) else []) + (
+        ["无码破解"] if any(row["uncensored"] for row in media) else [])
+    tags = list(dict.fromkeys([*metadata.tags, *labels]))
+    people = [{"Name": actor.name, "Type": "Actor"} for actor in metadata.actors] + [
+        {"Name": name, "Type": "Director"} for name in metadata.directors]
+    managed_people = [(person["Name"], person["Type"]) for person in people]
+    prior_people = {tuple(person) for person in item_state.get("managed_people", [])}
+    people += [person for person in original.get("People", [])
+               if (person["Name"], person.get("Type")) not in prior_people | set(managed_people)]
+    payload = {"Name": metadata.title, "OriginalTitle": metadata.original_title or "",
+        "Overview": metadata.plot or "", "PremiereDate": metadata.release_date.isoformat() + "T00:00:00Z" if metadata.release_date else None,
+        "ProductionYear": metadata.year or (metadata.release_date.year if metadata.release_date else None),
+        "GenreItems": [{"Name": name} for name in metadata.genres],
+        "Studios": [{"Name": metadata.studio}] if metadata.studio else [], "People": people,
+        "ProviderIds": {**original.get("ProviderIds", {}), "caress": metadata.code},
+        "TagItems": [{"Name": name} for name in dict.fromkeys([
+            tag["Name"] for tag in original.get("TagItems", []) if tag["Name"] not in item_state.get("managed_tags", [])] + tags)],
+        "LockData": True}
+    saved_images = item_state.get("images", {})
+    desired = {f"{kind}:{index}" for kind, index, _, _ in images}
+    uploads = tuple(ImageUpload(kind, index, file, digest) for kind, index, file, digest in images
+                    if saved_images.get(f"{kind}:{index}") != digest)
+    deletions = tuple(sorted((key for key in saved_images if desired and key not in desired),
+                            key=lambda key: int(key.split(":")[1]), reverse=True))
+    return SyncPlan(ident, payload, not fields_match(original, payload), tags, managed_people,
+                    uploads, deletions, tuple(portraits))
 
 
 class EmbyClient:
@@ -121,12 +185,58 @@ class EmbyClient:
         saved = await self.request('GET', f'Items/{ident}/Images')
         if not any(row['ImageType'] == kind and row.get('ImageIndex', 0) == index and row.get('Width', 0) > 0 for row in saved):
             raise ValueError('Emby 图片回读验证失败')
+        response = await self.client.get(f"Items/{ident}/Images/{kind}/{index}", params={"Format": "original", "EnableImageEnhancers": "false"}, headers={"Cache-Control": "no-cache"})
+        response.raise_for_status()
+        if not await asyncio.to_thread(image_pixels_match, data, response.content):
+            raise ValueError("Emby 图片内容回读不一致")
 
 
 class EmbySync:
     def __init__(self, service):
         self.service = service
         self.lock = asyncio.Lock()
+
+    async def apply(self, client, plan, original, item_state, server):
+        from pathlib import Path
+
+        runtime = self.service.runtime
+        current = original
+        if plan.update_metadata:
+            await client.request("POST", f"Items/{plan.item_id}", json={**original, **plan.metadata})
+            current = await client.item(plan.item_id)
+            if not fields_match(current, plan.metadata):
+                raise ValueError("Emby 元数据回读不一致")
+        item_state.update(managed_tags=plan.managed_tags, managed_people=plan.managed_people)
+        runtime.save_item_sync(server, plan.item_id, item_state)
+        images = dict(item_state.get("images", {}))
+        for upload in plan.uploads:
+            data = await asyncio.to_thread(Path(upload.file).read_bytes)
+            if hashlib.sha256(data).hexdigest() != upload.digest:
+                raise ValueError("同步期间图片已变化，请重试")
+            await client.upload(plan.item_id, upload.kind, data, upload.index)
+            images[f"{upload.kind}:{upload.index}"] = upload.digest
+            item_state["images"] = dict(images)
+            runtime.save_item_sync(server, plan.item_id, item_state)
+        for key in plan.deletions:
+            kind, number = key.split(":")
+            await client.request("DELETE", f"Items/{plan.item_id}/Images/{kind}/{number}")
+            saved = await client.request("GET", f"Items/{plan.item_id}/Images")
+            if any(row["ImageType"] == kind and row.get("ImageIndex", 0) == int(number) for row in saved):
+                raise ValueError("Emby 图片删除回读不一致")
+            images.pop(key)
+            item_state["images"] = dict(images)
+            runtime.save_item_sync(server, plan.item_id, item_state)
+        people = {person["Name"]: person.get("Id") for person in current.get("People", []) if person.get("Type") == "Actor"}
+        for name, file, digest in plan.portraits:
+            person = people.get(name)
+            if not person:
+                raise ValueError("Emby 未返回演员 ID：" + name)
+            if runtime.portrait_sync(server, person) != digest:
+                data = await asyncio.to_thread(Path(file).read_bytes)
+                if hashlib.sha256(data).hexdigest() != digest:
+                    raise ValueError("同步期间头像已变化，请重试")
+                await client.upload(person, "Primary", data)
+                runtime.save_portrait_sync(server, person, digest)
 
     async def sync(self, code, *, relink=False, force=False):
         service = self.service
@@ -143,13 +253,9 @@ class EmbySync:
             client = EmbyClient(settings)
             pending = rows
             try:
-                folder = target_folder(service.output, code)
-                image_inputs = {file.name: hashlib.sha256(file.read_bytes()).hexdigest()
-                    for _, _, file in work_images(folder, code)}
-                portraits = {actor.name: hashlib.sha256(path.read_bytes()).hexdigest()
-                    for actor in metadata.actors if (path := actor_image(service.output, actor.name))}
+                image_inputs, portrait_inputs = await asyncio.to_thread(sync_files, service.output, code, metadata.actors)
                 content = fingerprint({'metadata': metadata.model_dump(mode='json'), 'images': image_inputs,
-                    'portraits': portraits, 'media': [row['id'] for row in rows],
+                    'portraits': portrait_inputs, 'media': [row['id'] for row in rows],
                     'configuration': settings.model_dump(mode='json')})
                 pending = [row for row in rows if force or relink or row.get('sync', {}).get('status') != 'synced' or row.get('sync', {}).get('content') != content]
                 if not pending:
@@ -172,56 +278,8 @@ class EmbySync:
                         server = original.get('ServerId') or settings.url
                         item_state = service.runtime.item_sync(server, ident)
                         associated = [media for media in rows if index.get(media['path']) == {ident}]
-                        labels = (['中文字幕'] if any(media['subtitles'] for media in associated) else []) + (['无码破解'] if any(media['uncensored'] for media in associated) else [])
-                        managed_tags = list(dict.fromkeys([*metadata.tags, *labels]))
-                        payload = {'Name': metadata.title, 'OriginalTitle': metadata.original_title or '',
-                            'Overview': metadata.plot or '', 'PremiereDate': metadata.release_date.isoformat() + 'T00:00:00Z' if metadata.release_date else None,
-                            'ProductionYear': metadata.year or (metadata.release_date.year if metadata.release_date else None),
-                            'GenreItems': [{'Name': name} for name in metadata.genres], 'Studios': [{'Name': metadata.studio}] if metadata.studio else [],
-                            'People': [{'Name': actor.name, 'Type': 'Actor'} for actor in metadata.actors]
-                                + [{'Name': name, 'Type': 'Director'} for name in metadata.directors],
-                            'ProviderIds': {**original.get('ProviderIds', {}), 'caress': code},
-                            'TagItems': [{'Name': name} for name in dict.fromkeys([tag['Name'] for tag in original.get('TagItems', []) if tag['Name'] not in item_state.get('managed_tags', [])] + managed_tags)],
-                            'LockData': True}
-                        payload['People'] += [person for person in original.get('People', []) if person.get('Type') not in ('Actor', 'Director')]
-                        current = original
-                        if not fields_match(original, payload):
-                            await client.request('POST', f'Items/{ident}', json={**original, **payload})
-                            current = await client.item(ident)
-                            if not fields_match(current, payload):
-                                raise ValueError('Emby 元数据回读不一致')
-                        item_state['managed_tags'] = managed_tags
-                        service.runtime.save_item_sync(server, ident, item_state)
-                        images = dict(item_state.get('images', {}))
-                        folder = target_folder(service.output, code)
-                        desired_images = set()
-                        for kind, number, image in work_images(folder, code):
-                            data = image.read_bytes(); digest = hashlib.sha256(data).hexdigest(); key = f'{kind}:{number}'
-                            desired_images.add(key)
-                            if images.get(key) != digest:
-                                await client.upload(ident, kind, data, number)
-                                images[key] = digest
-                                item_state['images'] = images
-                                service.runtime.save_item_sync(server, ident, item_state)
-                        stale = [key for key in images if desired_images and key.startswith(('Primary:', 'Backdrop:')) and key not in desired_images]
-                        for key in sorted(stale, key=lambda value: int(value.split(':')[1]), reverse=True):
-                            kind, number = key.split(':')
-                            await client.request('DELETE', f'Items/{ident}/Images/{kind}/{number}')
-                            del images[key]
-                            item_state['images'] = images
-                            service.runtime.save_item_sync(server, ident, item_state)
-                        people = {person['Name']: person.get('Id') for person in current.get('People', []) if person.get('Type') == 'Actor'}
-                        for actor in metadata.actors:
-                            image = actor_image(service.output, actor.name)
-                            person = people.get(actor.name)
-                            if image and not person:
-                                raise ValueError('Emby 未返回演员 ID：' + actor.name)
-                            if image and person:
-                                data = image.read_bytes(); digest = hashlib.sha256(data).hexdigest()
-                                server = current.get('ServerId') or settings.url
-                                if service.runtime.portrait_sync(server, person) != digest:
-                                    await client.upload(person, 'Primary', data)
-                                    service.runtime.save_portrait_sync(server, person, digest)
+                        plan = plan_sync(ident, metadata, original, item_state, associated, image_inputs, portrait_inputs)
+                        await self.apply(client, plan, original, item_state, server)
                         state.update(status='synced', error=None, content=content)
                     except (httpx.HTTPError, ValueError, OSError) as exc:
                         state.update(status='failed', error=sync_error(exc))

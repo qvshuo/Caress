@@ -6,20 +6,21 @@ import re
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
-from urllib.parse import urlsplit, unquote
+from urllib.parse import unquote, urlsplit
 
 from PIL import Image, UnidentifiedImageError
 
 from .http import FetchError, WebClient
 from .logging import report_progress
-from .models import Artwork, SourceId
+from .models import ArtworkCandidate, SourceId
 from .storage import atomic_write, file_transaction
 
 
 def validate_resources() -> None:
+    import cv2
+
     from .actors import ActorAliases
     from .catalog import CatalogRules
-    import cv2
 
     CatalogRules.load()
     ActorAliases.load()
@@ -107,15 +108,7 @@ async def save_images(client, items, target, stems, missing_only=False, previous
         return records
 
 
-async def _save_images(
-    client: WebClient,
-    items: list[Artwork],
-    target: Path,
-    stems: list[str],
-    missing_only: bool = False,
-    protected_roles=(),
-) -> list[dict]:
-    """Write work images; crop posters and preserve other originals."""
+def image_plan(items):
     covers = [item for item in items if item.role == "cover"]
     posters = [item for item in items if item.role == "poster"]
     plan = []
@@ -125,6 +118,19 @@ async def _save_images(
         plan.append((covers[0] if covers else posters[0], "fanart"))
     samples = list({(item.source, item.url): item for item in items if item.role == "sample"}.values())
     plan.extend((item, f"fanart{i + 1}") for i, item in enumerate(samples[:100]))
+    return plan
+
+
+async def _save_images(
+    client: WebClient,
+    items: list[ArtworkCandidate],
+    target: Path,
+    stems: list[str],
+    missing_only: bool = False,
+    protected_roles=(),
+) -> list[dict]:
+    """Write work images; crop posters and preserve other originals."""
+    plan = image_plan(items)
     records, downloaded, download_errors = [], {}, {}
 
     def existing(base):

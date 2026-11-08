@@ -8,14 +8,14 @@ from ..http import FetchError, Page, response_issue
 from ..models import (
     Actor,
     Candidate,
-    Metadata,
     ScrapeRequest,
     SourceId,
+    SourceMetadata,
     SourceResult,
     Status,
 )
-from .parsing import artwork, first, parse_date, text, texts
 from .base import Source
+from .parsing import artwork, first, parse_date, text, texts
 
 
 class JavBus(Source):
@@ -87,7 +87,7 @@ class JavBus(Source):
             for node in selector.css("div.star-name > a[href]")
             if str(node.get_all_text()).strip()
         ]
-        metadata = Metadata(
+        metadata = SourceMetadata(
             code=code,
             title=title,
             original_title=title,

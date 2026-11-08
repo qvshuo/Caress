@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from contextlib import nullcontext
 from typing import Any
@@ -10,16 +11,18 @@ from .catalog import CatalogRules, catalog_prefix
 from .http import Client, WebClient
 from .logging import report_progress
 from .models import (
-    ScrapeRequest,
     Category,
-    SourceId,
+    ScrapeRequest,
     ScrapeResult,
-    Status,
+    SourceId,
     SourceResult,
+    Status,
 )
 from .scanner import validate_code
 from .settings import Settings
 from .sources import SOURCES
+
+logger = logging.getLogger(__name__)
 
 
 class Scraper:
@@ -82,6 +85,8 @@ class Scraper:
             finally:
                 lock.release()
             result.elapsed_seconds = time.monotonic() - started
+            logger.info("来源请求完成", extra={"event": "source.fetched", "source": source,
+                        "stage": "fetch", "result": result.status, "elapsed_seconds": result.elapsed_seconds})
             if on_result is not None:
                 on_result(result)
             report_progress("source", result.status.value, source)

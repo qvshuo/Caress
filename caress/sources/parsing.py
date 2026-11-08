@@ -6,7 +6,7 @@ from urllib.parse import urljoin
 
 from scrapling.parser import Selector
 
-from ..models import Artwork, SourceId
+from ..models import ArtworkCandidate, SourceId
 
 
 def texts(page: Selector, expression: str) -> list[str]:
@@ -35,7 +35,7 @@ def parse_date(value: str | None) -> date | None:
 
 def artwork(
     source: SourceId, referer: str, covers: list[str], samples: list[str], posters: list[str] | None = None
-) -> list[Artwork]:
+) -> list[ArtworkCandidate]:
     images = []
     seen: set[tuple[str, str]] = set()
     for role, urls in (("cover", covers), ("poster", posters or []), ("sample", samples)):
@@ -49,5 +49,5 @@ def artwork(
             ):
                 continue
             seen.add((role, url))
-            images.append(Artwork(source=source, role=role, url=url, referer=referer))
+            images.append(ArtworkCandidate(source=source, role=role, url=url, referer=referer))
     return images

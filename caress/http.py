@@ -8,21 +8,21 @@ import uuid
 from contextlib import AsyncExitStack, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
+from email.utils import parsedate_to_datetime
 from functools import cached_property
 from math import ceil
-from email.utils import parsedate_to_datetime
 from typing import Any, Protocol
 from urllib.parse import urlparse
 from weakref import WeakKeyDictionary
 
 import httpx
+from pydantic import JsonValue
 from scrapling.engines.toolbelt.custom import Response
 from scrapling.fetchers import FetcherSession
 from scrapling.parser import Selector
 
 from .logging import report_progress
 from .models import SourceId, Status
-from pydantic import JsonValue
 from .settings import Settings
 
 SOLVER_TIMEOUT_SECONDS = 45
@@ -331,7 +331,7 @@ class WebClient:
             self.check_cooldown(cooldown_key)
         host_lock = self._host_locks.setdefault(parsed.hostname, asyncio.Lock())
         settings = self.settings.sites.get(source)
-        # Artwork CDNs must not receive the source site's account cookies.
+        # ArtworkCandidate CDNs must not receive the source site's account cookies.
         cookie_host = (
             urlparse(settings.base_url or "https://javdb.com").hostname
             if settings and source == SourceId.JAVDB

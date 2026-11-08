@@ -7,14 +7,14 @@ from ..http import FetchError, Page
 from ..models import (
     Actor,
     Candidate,
-    Metadata,
     ScrapeRequest,
     SourceId,
+    SourceMetadata,
     SourceResult,
     Status,
 )
-from .parsing import artwork, first, parse_date, text, texts
 from .base import Source
+from .parsing import artwork, first, parse_date, text, texts
 
 
 class JavDBWeb(Source):
@@ -89,7 +89,7 @@ class JavDBWeb(Source):
                     )
                 )
         canonical = normalize_code(code)
-        metadata = Metadata(
+        metadata = SourceMetadata(
             code=canonical,
             title=title,
             original_title=original,

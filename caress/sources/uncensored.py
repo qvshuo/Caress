@@ -8,14 +8,14 @@ from urllib.parse import urlparse
 from ..http import FetchError, Page
 from ..models import (
     Actor,
-    Metadata,
     ScrapeRequest,
     SourceId,
+    SourceMetadata,
     SourceResult,
     Status,
 )
-from .parsing import artwork, first, parse_date, text, texts
 from .base import Source
+from .parsing import artwork, first, parse_date, text, texts
 
 
 class Uncensored(Source):
@@ -92,7 +92,7 @@ class OnePondo(Uncensored):
                 warnings.append("剧照列表暂不可用，已保留元数据。")
         return self.found(
             request,
-            Metadata(
+            SourceMetadata(
                 code=data["MovieID"],
                 title=data["Title"],
                 original_title=data["Title"],
@@ -148,7 +148,7 @@ class Caribbeancom(Uncensored):
                 pass
         return self.found(
             request,
-            Metadata(
+            SourceMetadata(
                 code=identity,
                 title=title,
                 original_title=title,
@@ -211,7 +211,7 @@ class Heyzo(Uncensored):
         )
         return self.found(
             request,
-            Metadata(
+            SourceMetadata(
                 code="HEYZO-" + identity,
                 title=title,
                 original_title=title,

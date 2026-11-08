@@ -1,6 +1,6 @@
 import asyncio
-import html
 import hashlib
+import html
 import json
 import re
 import time
@@ -8,11 +8,11 @@ from functools import lru_cache
 from pathlib import Path
 
 import httpx
+from pydantic import BaseModel, Field
 
 from .actors import ActorAliases
-from .models import Metadata
+from .models import WorkMetadata
 from .settings import TranslationSettings
-from pydantic import BaseModel, Field
 
 
 class TranslationReport(BaseModel):
@@ -78,8 +78,10 @@ def compose_title(code: str, actors, text: str) -> str:
     return " ".join(part for part in [code, *(actor.name for actor in actors), text] if part)
 
 
-def variant_metadata(variant: dict) -> Metadata:
-    return Metadata.model_validate({**variant["metadata"], **variant.get("processed_fields", {})})
+def variant_metadata(variant: dict) -> WorkMetadata:
+    return WorkMetadata.model_validate({key: value for key, value in
+        {**variant["metadata"], **variant.get("processed_fields", {})}.items()
+        if key in WorkMetadata.model_fields})
 
 
 class Translator:
@@ -130,7 +132,7 @@ class Translator:
     def fingerprint(self) -> str:
         return self._rules()[1]
 
-    def field_fingerprint(self, field: str, metadata: Metadata, fingerprint: str | None = None) -> str:
+    def field_fingerprint(self, field: str, metadata: WorkMetadata, fingerprint: str | None = None) -> str:
         fingerprint = fingerprint or self.fingerprint
         if field == "title":
             return hashlib.sha256(json.dumps([fingerprint, metadata.code,
@@ -240,7 +242,7 @@ class Translator:
         parts.append(await fragment(value[offset:]))
         return "".join(parts)
 
-    async def metadata(self, metadata: Metadata, *, fields=("title", "plot"), names: re.Pattern | None) -> TranslationReport:
+    async def metadata(self, metadata: WorkMetadata, *, fields=("title", "plot"), names: re.Pattern | None) -> TranslationReport:
         report = TranslationReport()
         for field in fields:
             value = getattr(metadata, field)

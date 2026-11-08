@@ -1,36 +1,14 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import re
-import hashlib
 from pathlib import Path
 
-from pydantic import BaseModel, Field
-
 from .catalog import normalize_code
-from .models import Category
+from .models import MediaFile, Work
 
 EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".m4v", ".ts", ".strm"}
-
-
-class MediaFile(BaseModel):
-    id: str
-    path: Path
-    filename: str
-    subtitles: bool = False
-    uncensored: bool = False
-    part: int | None = None
-
-
-class Work(BaseModel):
-    code: str
-    media: list[MediaFile] = Field(default_factory=list)
-    title: str | None = None
-    actors: list[str] = Field(default_factory=list)
-    poster: str | None = None
-    status: str = "pending"
-    category: Category = Category.UNKNOWN
-    warnings: list[str] = Field(default_factory=list)
 
 
 SUFFIX = re.compile(r"-(UC|C|U|CD[0-9]+)$", re.IGNORECASE)

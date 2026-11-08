@@ -8,14 +8,14 @@ from ..http import FetchError
 from ..models import (
     Actor,
     Evidence,
-    Metadata,
     ScrapeRequest,
     SourceId,
+    SourceMetadata,
     SourceResult,
     Status,
 )
-from .parsing import artwork, parse_date
 from .base import Source
+from .parsing import artwork, parse_date
 
 QUERY = """query FetchDigitalContent($id: ID!) {
  ppvContent(id: $id) { id title description deliveryStartDate
@@ -180,7 +180,7 @@ class DMM(Source):
             value = [value] if isinstance(value, dict) else value
             return [item["name"] for item in value if isinstance(item, dict) and item.get("name")]
 
-        metadata = Metadata(
+        metadata = SourceMetadata(
             code=request.code,
             title=work["title"],
             original_title=work["title"],

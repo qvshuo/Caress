@@ -21,7 +21,6 @@ def main() -> None:
     uvicorn.run(
         create_app(
             load_settings(),
-            settings_path=Path("/data/caress.sqlite3"),
             directories=Directories([Path("/")]),
         ),
         host="0.0.0.0",

@@ -12,7 +12,7 @@ import httpx
 from .actors import comparison_name
 from .images import validate_image
 from .logging import report_progress
-from .storage import atomic_write
+from .storage import atomic_write, file_transaction
 
 
 def actor_image_index(output: Path) -> dict[str, Path]:
@@ -181,9 +181,10 @@ class Gfriends:
                 image = await asyncio.to_thread(validate_image, await self.document(url, 32 * 1024 * 1024))
                 extension = ".jpg" if image.format == "jpeg" else "." + image.format
                 target = self.output / "actors" / (name + extension)
-                atomic_write(target, image.content)
-                if existing and existing != target:
-                    existing.unlink()
+                with file_transaction(self.output / "actors"):
+                    atomic_write(target, image.content)
+                    if existing and existing != target:
+                        existing.unlink()
                 records.append({"name": name, "status": "saved"})
             except (ValueError, OSError) as exc:
                 records.append({"name": name, "status": "error", "error": str(exc)})

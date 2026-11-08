@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from contextlib import closing
 from pathlib import Path
 from typing import ClassVar
 from urllib.parse import urlparse
@@ -211,7 +212,7 @@ class Settings(BaseModel):
         if connection is None:
             path = path or self.database
             path.parent.mkdir(parents=True, exist_ok=True)
-            with sqlite3.connect(path, timeout=10) as database:
+            with closing(sqlite3.connect(path, timeout=10)) as database, database:
                 self.save(connection=database)
             return
         connection.execute("CREATE TABLE IF NOT EXISTS options (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL)")
@@ -223,7 +224,7 @@ class Settings(BaseModel):
         path = path or Path("/data/caress.sqlite3")
         if not path.exists():
             return cls(database=path)
-        with sqlite3.connect(path, timeout=10) as connection:
+        with closing(sqlite3.connect(path, timeout=10)) as connection, connection:
             connection.execute("CREATE TABLE IF NOT EXISTS options (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL)")
             row = connection.execute("SELECT data FROM options WHERE id=1").fetchone()
         value = cls.model_validate_json(row[0]) if row else cls()
