@@ -81,14 +81,14 @@ class TaskQueue:
         return self.service.runtime.task(ident)
 
     def delete(self, ident):
-        task = self.service.runtime.task_data[ident]
+        task = self.service.runtime.task(ident)
         if task["status"] in ("pending", "running"):
             raise ValueError("cancel the task before deleting it")
         self.service.runtime.delete_task(ident)
         return {"deleted": True}
 
     async def cancel(self, ident):
-        task = self.service.runtime.task_data[ident]
+        task = self.service.runtime.task(ident)
         if task["status"] not in ("pending", "running"):
             raise ValueError("task is not active")
         worker = self.running.get(ident)
@@ -137,7 +137,7 @@ class TaskQueue:
 
     async def _run(self, ident):
         log_task_id.set(ident)
-        task = self.service.runtime.task_data[ident]
+        task = self.service.runtime.task(ident)
         request = TaskRequest.model_validate(task["params"])
         task["status"] = "running"
         self.service.runtime.save_task(task)

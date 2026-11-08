@@ -151,6 +151,7 @@ class WebClient:
         self._stack = AsyncExitStack()
         self._sessions: dict[tuple[SourceId, str], Session] = {}
         self._session_lock = asyncio.Lock()
+        self.source_work_locks: dict[SourceId, asyncio.Lock] = {}
         self._source_locks: dict[SourceId, asyncio.Lock] = {}
         self._host_locks: dict[str, asyncio.Lock] = {}
         self._last_request: dict[str, float] = {}
@@ -167,8 +168,12 @@ class WebClient:
         # Task workers and image previews share the same host pacing budget.
         loop = asyncio.get_running_loop()
         if loop not in self._budgets:
-            self._budgets[loop] = ({}, {}, {}, asyncio.Semaphore(8), asyncio.Semaphore(1))
-        self._source_locks, self._host_locks, self._last_request, self._limit, self._solver_limit = self._budgets[loop]
+            self._budgets[loop] = ({}, {}, {}, {}, {}, {}, asyncio.Semaphore(8), asyncio.Semaphore(1))
+        # Batch scrapers and manual previews share whole-work gates and pacing,
+        # independently of the per-request connection and host locks.
+        (self.source_work_locks, self._source_locks, self._host_locks,
+         self._last_request, self._metadata_last, self._paced_work,
+         self._limit, self._solver_limit) = self._budgets[loop]
 
     @property
     def cooldowns(self):
@@ -331,7 +336,7 @@ class WebClient:
             self.check_cooldown(cooldown_key)
         host_lock = self._host_locks.setdefault(parsed.hostname, asyncio.Lock())
         settings = self.settings.sites.get(source)
-        # ArtworkCandidate CDNs must not receive the source site's account cookies.
+        # Artwork CDNs must not receive the source site's account cookies.
         cookie_host = (
             urlparse(settings.base_url or "https://javdb.com").hostname
             if settings and source == SourceId.JAVDB
@@ -346,7 +351,7 @@ class WebClient:
                 self.check_cooldown(cooldown_key)
                 scope = self._work_scope.get()
                 if scope is None or self._paced_work.get(source) is not scope:
-                    await self._throttle(source, parsed.netloc)
+                    await self._throttle(source, parsed.hostname)
                     self._paced_work[source] = scope
             await locks.enter_async_context(host_lock)
             await locks.enter_async_context(self._limit)
@@ -359,7 +364,7 @@ class WebClient:
             session = await self._session(source, url)
             for attempt in range(self.settings.retries + 1):
                 if binary:
-                    await self._throttle(source, parsed.netloc, True)
+                    await self._throttle(source, parsed.hostname, True)
                 report_progress(
                     "request",
                     source=source,

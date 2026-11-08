@@ -136,3 +136,22 @@ async def test_stage_repair_uses_pinned_failed_input_without_refetch(store):
         scraper.scrape.assert_not_awaited()
     finally:
         await translator.close()
+
+
+@pytest.mark.asyncio
+async def test_portrait_retry_reports_portrait_stages_independent_of_work_health(store):
+    from types import SimpleNamespace
+
+    from caress.processing import WorkProcessor
+    from caress.tasks import TaskRequest
+
+    store.record_result("ABC-123", {"partial": True, "incomplete_stages": ["translation"]})
+    processor = WorkProcessor(SimpleNamespace(runtime=store),
+        TaskRequest(type="update_portraits", actor_names=["actor"], retry_only=True))
+    report = {"code": "ABC-123", "status": "error", "stages": {"portraits": "failed"},
+              "portraits": [{"name": "actor", "status": "error", "error": "portrait failed"}]}
+    processor._process = AsyncMock(return_value=report)
+    result = await processor.process(Work(code="ABC-123"))
+    assert result["stages"] == {"portraits": "failed"}
+    assert result["portraits"][0]["error"] == "portrait failed"
+    assert store.result("ABC-123")["incomplete_stages"] == ["translation"]

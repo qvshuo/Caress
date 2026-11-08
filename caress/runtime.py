@@ -67,7 +67,7 @@ class RuntimeStore:
                                for row in self._read("scan").get("catalog", [])]
             self._index_works()
             self._task_data = {
-                ident: {**json.loads(data), "items": []}
+                ident: {**json.loads(data), "items": [], "current": None}
                 for ident, data in self.connection.execute("SELECT id, data FROM tasks")
             }
             self.task_sequence = self._read("counter").get("task", 0)
@@ -77,6 +77,8 @@ class RuntimeStore:
                 "SELECT task_id, data FROM task_items ORDER BY position"
             ):
                 self._task_data[ident]["items"].append(json.loads(data))
+            self._task_positions = {ident: {item["code"]: position for position, item in enumerate(task["items"])}
+                                    for ident, task in self._task_data.items()}
             for task in list(self._task_data.values()):
                 if task["status"] in ("pending", "running"):
                     task.update(status="finished", error="process interrupted", finished_at=now())
@@ -95,11 +97,6 @@ class RuntimeStore:
     @property
     def issues(self):
         return self._read("actor")
-
-    @property
-    def task_data(self):
-        # Callers edit detached execution records, then explicitly commit them.
-        return deepcopy(self._task_data)
 
     def _publish(self, callback):
         if self._commits:
@@ -223,7 +220,10 @@ class RuntimeStore:
     def delete_task(self, ident):
         with self.transaction():
             self.connection.execute("DELETE FROM tasks WHERE id=?", (ident,))
-        self._publish(lambda: self._task_data.pop(ident, None))
+        def publish():
+            self._task_data.pop(ident, None)
+            self._task_positions.pop(ident, None)
+        self._publish(publish)
 
     def save_task(self, task, item=None):
         if item is not None and task["id"] in self._task_data:
@@ -231,33 +231,49 @@ class RuntimeStore:
             if old is not None:
                 with self.transaction():
                     self.connection.execute("UPDATE task_items SET data=? WHERE task_id=? AND code=?", (json.dumps(item, ensure_ascii=False), task["id"], item["code"]))
-                    if old[0] != item["status"]:
-                        for key, statuses in {"progress": {"success", "partial", "failed", "cancelled", "skipped"}, "success": {"success"}, "partial": {"partial"}, "failed": {"failed"}, "skipped": {"skipped", "cancelled"}}.items():
-                            task[key] += int(item["status"] in statuses) - int(old[0] in statuses)
-                        self.connection.execute("UPDATE tasks SET data=json_set(data, '$.progress', ?, '$.success', ?, '$.partial', ?, '$.failed', ?, '$.skipped', ?, '$.current', json(?)) WHERE id=?", (task["progress"], task["success"], task["partial"], task["failed"], task["skipped"], json.dumps(task.get("current"), ensure_ascii=False), task["id"]))
-                # The live header is a projection; detailed progress is durable in the item.
-                saved = deepcopy(task)
-                self._publish(lambda: self._task_data.__setitem__(saved["id"], saved))
+                    groups = {"progress": {"success", "partial", "failed", "cancelled", "skipped"},
+                              "success": {"success"}, "partial": {"partial"}, "failed": {"failed"},
+                              "skipped": {"skipped", "cancelled"}}
+                    deltas = {key: int(item["status"] in statuses) - int(old[0] in statuses)
+                              for key, statuses in groups.items()}
+                    counts = {}
+                    if any(deltas.values()):
+                        fields = ", ".join(f"'$.{key}', json_extract(data, '$.{key}') + ?" for key in groups)
+                        returning = ", ".join(f"json_extract(data, '$.{key}')" for key in groups)
+                        row = self.connection.execute(f"UPDATE tasks SET data=json_set(data, {fields}) WHERE id=? RETURNING {returning}",
+                            (*deltas.values(), task["id"])).fetchone()
+                        counts = dict(zip(groups, row, strict=True))
+                # The current pointer is a projection of the committed item;
+                # immutable request parameters never need copying on each event.
+                header = {"id": task["id"], **counts, "current": deepcopy(task.get("current"))}
+                saved_item = deepcopy(item)
+                def publish_item():
+                    task.update(counts)
+                    cached = self._task_data[header["id"]]
+                    cached.update(header)
+                    cached["items"][self._task_positions[header["id"]][saved_item["code"]]] = saved_item
+                self._publish(publish_item)
                 return
         counts = Counter(entry["status"] for entry in task["items"])
         task.update(progress=sum(counts[s] for s in ("success", "partial", "failed", "cancelled", "skipped")), success=counts["success"], partial=counts["partial"], failed=counts["failed"], skipped=counts["skipped"] + counts["cancelled"])
         with self.transaction():
-            if task["id"] not in self._task_data:
+            if not self.connection.execute("SELECT 1 FROM tasks WHERE id=?", (task["id"],)).fetchone():
                 counter = self.connection.execute("SELECT data FROM records WHERE kind='counter' AND id='task'").fetchone()
                 task["sequence"] = (json.loads(counter[0]) if counter else 0) + 1
                 self._write("counter", "task", task["sequence"])
-            header = {key: value for key, value in task.items() if key != "items"}
+            header = {key: value for key, value in task.items() if key not in {"items", "current"}}
             self.connection.execute("INSERT INTO tasks VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET data=excluded.data", (task["id"], json.dumps(header, ensure_ascii=False)))
             self.connection.executemany("INSERT INTO task_items VALUES (?, ?, ?, ?) ON CONFLICT(task_id, code) DO UPDATE SET data=excluded.data", ((task["id"], entry["code"], position, json.dumps(entry, ensure_ascii=False)) for position, entry in enumerate(task["items"])))
         saved = deepcopy(task)
         def publish():
             self._task_data[saved["id"]] = saved
+            self._task_positions[saved["id"]] = {item["code"]: position for position, item in enumerate(saved["items"])}
             self.task_sequence = max(self.task_sequence, saved["sequence"])
         self._publish(publish)
 
     def task(self, task_id, include_items=True):
         task = self._task_data[task_id]
-        return deepcopy(task) if include_items else {k: v for k, v in task.items() if k != "items"}
+        return deepcopy(task if include_items else {k: v for k, v in task.items() if k != "items"})
 
     def tasks(self, ids=None):
         rows = self._task_data.values() if ids is None else (self._task_data[ident] for ident in ids if ident in self._task_data)
@@ -265,6 +281,50 @@ class RuntimeStore:
             self.task(t["id"], False)
             for t in sorted(rows, key=lambda t: t["created_at"], reverse=True)
         ]
+
+    def task_page(self, ident, page, page_size, statuses, query):
+        items = self._task_data[ident]["items"]
+        if statuses is not None:
+            items = [item for item in items if item["status"] in statuses]
+        if query:
+            paths = {}
+            for code, path in self.connection.execute("SELECT code, path FROM media"):
+                paths.setdefault(code, []).append(path)
+            needle = query.casefold()
+            def matches(item):
+                row = self.find_work(item["code"]) or {}
+                return needle in " ".join([item["code"], row.get("title") or "",
+                    *paths.get(item["code"], []), *row.get("actors", [])]).casefold()
+            items = [item for item in items if matches(item)]
+        items = sorted(items, key=lambda item: (item["status"] != "failed", item["code"]))
+        pages = max(1, (len(items) + page_size - 1) // page_size)
+        page = min(page, pages)
+        return {**self.task(ident, False), "items": deepcopy(items[(page - 1) * page_size:page * page_size]),
+                "page": page, "pages": pages, "matched": len(items)}
+
+    def task_updates(self, ids, after):
+        updates = {}
+        for ident in ids:
+            task = self._task_data.get(ident)
+            if task is None:
+                continue
+            for item in task["items"]:
+                event = item.get("stage")
+                if item["status"] == "running" or (event and (after is None or datetime.fromisoformat(event["time"]) >= after)):
+                    updates[item["code"]] = max(updates.get(item["code"]) or "", event["time"]) if event else None
+        return updates
+
+    def work_process(self, code, task_id=None):
+        tasks = [self._task_data[task_id]] if task_id in self._task_data else []
+        if task_id is None:
+            tasks = sorted(self._task_data.values(), key=lambda task: task["created_at"], reverse=True)
+        for task in tasks:
+            position = self._task_positions[task["id"]].get(code)
+            if position is not None:
+                return {"task_id": task["id"], "type": task["type"], "sequence": task["sequence"],
+                        "created_at": task["created_at"], "finished_at": task.get("finished_at"),
+                        **deepcopy(task["items"][position])}
+        return None
 
     def works(self, status=None, *, codes=None):
         rows = self.works_data if codes is None else (self._by_code[code] for code in codes if code in self._by_code)

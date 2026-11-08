@@ -198,20 +198,9 @@ def create_app(
         if after is not None and after.tzinfo is None:
             raise HTTPException(422, "progress timestamp requires a timezone")
         timestamp = now()
-        codes = set()
-        progress_at = {}
-        for ident in task_ids.split(","):
-            task = service.runtime.task_data.get(ident)
-            if task is None:
-                continue
-            for item in task["items"]:
-                event = item.get("stage")
-                if item["status"] == "running" or (event and (after is None or datetime.fromisoformat(event["time"]) >= after)):
-                    codes.add(item["code"])
-                    if event:
-                        progress_at[item["code"]] = max(progress_at.get(item["code"], ""), event["time"])
+        progress_at = service.runtime.task_updates(task_ids.split(","), after)
         return {"time": timestamp, "works": [{**work, "progress_at": progress_at.get(work["code"])}
-                for work in service.runtime.works(codes=sorted(codes))]}
+                for work in service.runtime.works(codes=sorted(progress_at))]}
 
     @app.get("/api/works/detail")
     async def work_details(code: str, task_id: str | None = None):
@@ -237,8 +226,7 @@ def create_app(
                         continue
                     artwork.append(image.name)
                     artwork_versions[image.name] = f"{version.st_mtime_ns}-{version.st_size}"
-        tasks = ([service.runtime.task_data[task_id]] if task_id in service.runtime.task_data else []) if task_id else sorted(service.runtime.task_data.values(), key=lambda t: t["created_at"], reverse=True)
-        process = next(({"task_id": t["id"], "type": t["type"], "sequence": t.get("sequence"), "created_at": t["created_at"], "finished_at": t.get("finished_at"), **item} for t in tasks for item in t["items"] if item["code"] == row["code"]), None)
+        process = service.runtime.work_process(row["code"], task_id)
         route = service.settings.routes.get(row["category"], service.settings.routes["unknown"])
         route_sources = route
         if process:
@@ -337,9 +325,8 @@ def create_app(
 
     @app.get("/api/tasks/{task_id}")
     async def task(task_id: str, page: int | None = None, page_size: int = 100, status: str = "all", query: str = ""):
-        record = configured_service().runtime.task(task_id)
         if page is None:
-            return record
+            return configured_service().runtime.task(task_id)
         if page < 1 or page_size not in (100, 1000, 10000) or status not in (
             "all",
             "success",
@@ -353,33 +340,9 @@ def create_app(
             "done",
         ):
             raise HTTPException(422, "invalid task result filter")
-        items = sorted(
-            record.pop("items"),
-            key=lambda item: (item["status"] != "failed", item["code"]),
-        )
         groups = {"todo": {"pending", "failed", "partial", "cancelled"}, "done": {"success", "skipped"}}
-        search = query.casefold()
-        def matches_query(item):
-            if not search:
-                return True
-            rows = configured_service().runtime.works(codes=[item["code"]])
-            row = rows[0] if len(rows) == 1 else {}
-            return search in " ".join([item["code"], row.get("title") or "", *[media["path"] for media in row.get("media", [])], *row.get("actors", [])]).casefold()
-        items = [
-            item
-            for item in items
-            if (status == "all" or item["status"] in groups.get(status, {status}))
-            and matches_query(item)
-        ]
-        pages = max(1, (len(items) + page_size - 1) // page_size)
-        page = min(page, pages)
-        return {
-            **record,
-            "items": items[(page - 1) * page_size : page * page_size],
-            "page": page,
-            "pages": pages,
-            "matched": len(items),
-        }
+        statuses = None if status == "all" else groups.get(status, {status})
+        return configured_service().runtime.task_page(task_id, page, page_size, statuses, query)
 
     @app.delete("/api/tasks/{task_id}")
     async def delete_task(task_id: str):

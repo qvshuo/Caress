@@ -30,12 +30,19 @@ class Scraper:
         self.settings = settings or Settings()
         self.client = client or WebClient(self.settings, runtime=runtime)
         self._owns_client = client is None
-        self.source_locks = {}
+        self._source_locks = {}
         self.prefix_locks = {}
         self.sources = {
             source: factory(self.client, self.settings)
             for source, factory in SOURCES.items()
         }
+
+    @property
+    def source_locks(self):
+        if isinstance(self.client, WebClient):
+            self.client.share_limits()
+            return self.client.source_work_locks
+        return self._source_locks
 
     @property
     def rules(self) -> CatalogRules:

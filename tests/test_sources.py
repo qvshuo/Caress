@@ -75,3 +75,73 @@ def test_cooldowns_are_keyed_by_source_and_hostname_and_rebuild(store):
     rebuilt.check_cooldown(rebuilt.cooldown_key(SourceId.JAVDB, "https://two.invalid/a"))
     store.clear_cooldown(SourceId.JAVDB)
     rebuilt.check_cooldown(key)
+
+
+@pytest.mark.asyncio
+async def test_separate_scrapers_share_whole_source_work_gate(tmp_path):
+    from caress.http import WebClient
+    settings = Settings(database=tmp_path / "data.sqlite3")
+    settings.routes["censored"] = [SourceId.DMM]
+    rules = CatalogRules.load(settings.database)
+    rules.remember("TESTABC-123", Category.CENSORED, settings.database)
+    active = maximum = 0
+    class Stub:
+        async def fetch(self, request):
+            nonlocal active, maximum
+            active += 1
+            maximum = max(maximum, active)
+            await asyncio.sleep(.01)
+            active -= 1
+            return SourceResult(source=SourceId.DMM, requested_code=request.code, status=Status.FOUND,
+                                metadata=SourceMetadata(code=request.code, title="source"))
+    scrapers = [Scraper(settings, client=WebClient(settings)) for _ in range(2)]
+    for scraper in scrapers:
+        scraper.sources = {SourceId.DMM: Stub()}
+    await asyncio.gather(*(scraper.scrape("TESTABC-123") for scraper in scrapers))
+    assert maximum == 1
+
+
+@pytest.mark.asyncio
+async def test_pacing_is_shared_between_clients_but_not_within_one_work(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from caress.http import WebClient
+
+    class Session:
+        async def get(self, url, **kwargs):
+            return SimpleNamespace(url=url, status=200, body=b"{}", headers={})
+    batch, preview = WebClient(Settings()), WebClient(Settings())
+    batch._session = AsyncMock(return_value=Session())
+    preview._session = AsyncMock(return_value=Session())
+    sleep = AsyncMock()
+    monkeypatch.setattr("caress.http.asyncio.sleep", sleep)
+    with batch.source_work():
+        await batch.get(SourceId.JAVDB, "https://example.invalid/search")
+        await batch.get(SourceId.JAVDB, "https://example.invalid/detail")
+    sleep.assert_not_awaited()
+    with preview.source_work():
+        await preview.get(SourceId.JAVDB, "https://example.invalid/actor")
+    sleep.assert_awaited_once()
+    assert 0 < sleep.call_args.args[0] <= 60
+
+
+@pytest.mark.asyncio
+async def test_images_share_one_second_budget_by_hostname_across_ports(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from caress.http import WebClient
+
+    class Session:
+        async def get(self, url, **kwargs):
+            return SimpleNamespace(url=url, status=200, body=b"image", headers={})
+    first, second = WebClient(Settings()), WebClient(Settings())
+    first._session = AsyncMock(return_value=Session())
+    second._session = AsyncMock(return_value=Session())
+    sleep = AsyncMock()
+    monkeypatch.setattr("caress.http.asyncio.sleep", sleep)
+    await first.image_bytes(SourceId.JAVDB, "https://images.invalid:8443/one", "https://example.invalid")
+    await second.image_bytes(SourceId.JAVDB, "https://images.invalid:9443/two", "https://example.invalid")
+    sleep.assert_awaited_once()
+    assert 0 < sleep.call_args.args[0] <= 1

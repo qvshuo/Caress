@@ -33,7 +33,7 @@ def test_task_views_cannot_mutate_committed_data(store):
     view = store.task("t1")
     assert view["items"][0]["status"] == "pending"
     view["items"][0]["status"] = "failed"
-    assert store.task_data["t1"]["items"][0]["status"] == "pending"
+    assert store.task("t1")["items"][0]["status"] == "pending"
 
 
 def test_task_sequence_never_reuses_deleted_or_nested_ids(store):
@@ -125,3 +125,52 @@ def test_temporary_media_disappearance_preserves_selections_and_candidates(store
     store.save_scan(scan([media]))
     assert store.selection("ABC-123")["manual_fields"] == ["title"]
     assert store.variants("ABC-123")[0]["metadata"]["title"] == "raw"
+
+
+def test_independent_item_snapshots_preserve_other_items_and_atomic_counters(store):
+    record = {**task(), "type": "refresh"}
+    record["items"].append({"code": "DEF-456", "status": "pending", "result": None})
+    store.save_task(record)
+    first, second = store.task("t1"), store.task("t1")
+    first["items"][0].update(status="success", stage={"time": "2026-01-01T00:00:01+00:00"})
+    store.save_task(first, first["items"][0])
+    second["items"][1].update(status="success", stage={"time": "2026-01-01T00:00:02+00:00"})
+    store.save_task(second, second["items"][1])
+    current = store.task("t1")
+    assert current["success"] == current["progress"] == 2
+    assert [item["status"] for item in current["items"]] == ["success", "success"]
+    process = store.work_process("ABC-123")
+    assert process["status"] == "success"
+    process["status"] = "mutated"
+    assert store.work_process("ABC-123")["status"] == "success"
+    assert store.task_updates(["t1"], None) == {"ABC-123": "2026-01-01T00:00:01+00:00", "DEF-456": "2026-01-01T00:00:02+00:00"}
+
+
+def test_item_commit_rollback_preserves_cache_counts_and_safe_retry(store):
+    record = task()
+    store.save_task(record)
+    working = store.task("t1")
+    working["items"][0]["status"] = "success"
+    with pytest.raises(RuntimeError), store.transaction():
+        store.save_task(working, working["items"][0])
+        raise RuntimeError("outer commit failed")
+    assert store.task("t1")["success"] == working["success"] == 0
+    assert store.task("t1")["items"][0]["status"] == "pending"
+    store.save_task(working, working["items"][0])
+    assert store.task("t1")["success"] == working["success"] == 1
+
+
+def test_task_pages_filter_sort_and_return_detached_items(store):
+    record = {**task(), "type": "refresh"}
+    record["items"] += [{"code": "DEF-456", "status": "failed", "result": None},
+                        {"code": "GHI-789", "status": "success", "result": None}]
+    store.save_task(record)
+    page = store.task_page("t1", 1, 1, None, "")
+    assert page["items"][0]["code"] == "DEF-456"
+    assert (page["pages"], page["matched"]) == (3, 3)
+    page["items"][0]["status"] = "mutated"
+    assert store.work_process("DEF-456")["status"] == "failed"
+    filtered = store.task_page("t1", 3, 100, {"success"}, "ghi")
+    assert filtered["page"] == 1
+    assert filtered["matched"] == 1
+    assert filtered["items"][0]["code"] == "GHI-789"

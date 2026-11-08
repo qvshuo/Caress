@@ -279,7 +279,7 @@ class WorkProcessor:
     async def process(self, work):
         service, request = self.service, self.request
         previous = service.runtime.result(work.code)
-        stages = previous.get("incomplete_stages", []) if request.retry_only and previous.get("partial") else []
+        stages = previous.get("incomplete_stages", []) if request.type in ("fill_missing", "refresh") and request.retry_only and previous.get("partial") else []
         report = await self._process(work, stages)
         if request.type in ("fill_missing", "refresh") and (report["status"] in ("found", "unchanged") or not previous):
             service.runtime.record_result(work.code, report)
