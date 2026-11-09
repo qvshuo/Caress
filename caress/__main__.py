@@ -1,31 +1,16 @@
-"""Docker entry point with configuration at a stable, mounted location."""
-
-from pathlib import Path
+"""Docker entry point; all long-lived local state is the small SQLite ledger."""
 
 from .settings import Settings
 
 
-def load_settings(path: Path = Path("/data/caress.sqlite3")) -> Settings:
-    return Settings.load(path)
-
-
-def main() -> None:
+def main():
     import uvicorn
 
     from .api import create_app
-    from .directories import Directories
     from .logging import configure
 
     configure()
-    Path("/data/images").mkdir(parents=True, exist_ok=True)
-    uvicorn.run(
-        create_app(
-            load_settings(),
-            directories=Directories([Path("/")]),
-        ),
-        host="0.0.0.0",
-        port=9307,
-    )
+    uvicorn.run(create_app(Settings.load()), host="0.0.0.0", port=9307)
 
 
 if __name__ == "__main__":

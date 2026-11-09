@@ -9,5 +9,5 @@ export default defineConfig({
     { name: "light", use: { ...devices["Desktop Chrome"], colorScheme: "light" } },
     { name: "dark", use: { ...devices["Desktop Chrome"], colorScheme: "dark" } },
   ],
-  webServer: { command: "bun tests/server.ts", url: "http://127.0.0.1:19308/__components", reuseExistingServer: false },
+  webServer: { command: "bun tests/server.ts", url: "http://127.0.0.1:19308/", reuseExistingServer: false },
 });

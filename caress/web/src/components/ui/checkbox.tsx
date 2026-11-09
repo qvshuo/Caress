@@ -8,7 +8,9 @@ import { Checkbox as CheckboxPrimitive } from "@base-ui/react/checkbox";
 function Checkbox({
   className,
   ...props
-}: Omit<React.ComponentProps<typeof CheckboxPrimitive.Root>, "className"> & { className?: string }) {
+}: Omit<React.ComponentProps<typeof CheckboxPrimitive.Root>, "className"> & {
+  className?: string;
+}) {
   return (
     <CheckboxPrimitive.Root
       data-slot="checkbox"

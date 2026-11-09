@@ -1,61 +1,30 @@
-import type { ReactNode, MouseEvent, KeyboardEvent } from "react";
-import { ChevronLeft, ChevronRight, Search, LayoutGrid, List } from "lucide-react";
-import { Checkbox } from "@/components/ui/checkbox";
+import type { KeyboardEvent, MouseEvent } from "react";
+import { ChevronLeft, ChevronRight, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Select } from "./form-controls";
-import type { useSelection } from "@/hooks/use-selection";
-
-export function SummaryHeader({
-  count,
-  unit,
-  suffix = "",
-  children,
-}: {
-  count?: number;
-  unit: string;
-  suffix?: string;
-  children?: ReactNode;
-}) {
-  return (
-    <div className="flex min-h-9 flex-wrap items-center justify-between gap-3">
-      {count !== undefined && (
-        <p className="text-base leading-6 font-medium tabular-nums">
-          {count} {unit}{suffix}
-        </p>
-      )}
-      {children}
-    </div>
-  );
-}
-
+import { Checkbox } from "@/components/ui/checkbox";
+import { Select } from "@/components/form-controls";
 export function SearchInput({
   value,
   onChange,
-  label = "搜索作品",
-  disabled,
 }: {
   value: string;
   onChange: (value: string) => void;
-  label?: string;
-  disabled?: boolean;
 }) {
   return (
     <div className="relative min-w-40 flex-1">
-      <Search className="pointer-events-none absolute top-2.5 left-3 size-4 text-muted-foreground" />
+      <Search className="pointer-events-none absolute left-3 top-2.5 size-4 text-muted-foreground" />
       <Input
         type="search"
-        disabled={disabled}
+        aria-label="搜索番号或标题"
+        placeholder="搜索番号或标题"
         className="pl-9"
-        aria-label={label}
-        placeholder={label}
         value={value}
         onChange={(e) => onChange(e.target.value)}
       />
     </div>
   );
 }
-
 export function Pagination({
   page,
   pages,
@@ -69,7 +38,7 @@ export function Pagination({
   total: number;
   onChange: (page: number) => void;
   pageSize: number;
-  onPageSizeChange: (pageSize: number) => void;
+  onPageSizeChange: (size: number) => void;
 }) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3 text-sm tabular-nums">
@@ -78,10 +47,7 @@ export function Pagination({
         <Select
           label="每页条数"
           value={String(pageSize)}
-          onChange={(value) => {
-            onPageSizeChange(Number(value));
-            onChange(1);
-          }}
+          onChange={(n) => onPageSizeChange(Number(n))}
           options={{
             100: "100 条/页",
             1000: "1000 条/页",
@@ -121,16 +87,37 @@ export function Pagination({
     </div>
   );
 }
-
-// Row navigation leaves embedded controls and text selection independent.
-export function rowNavigation(open: () => void, className = "") {
+export function SelectionCheckbox({
+  ids,
+  selected,
+  onChange,
+  label,
+}: {
+  ids: string[];
+  selected: Set<string>;
+  onChange: (ids: string[], checked: boolean) => void;
+  label: string;
+}) {
+  const count = ids.filter((id) => selected.has(id)).length;
+  return (
+    <Checkbox
+      aria-label={label}
+      disabled={!ids.length}
+      checked={!!ids.length && count === ids.length}
+      indeterminate={count > 0 && count < ids.length}
+      onCheckedChange={(checked) => onChange(ids, checked === true)}
+    />
+  );
+}
+export function rowNavigation(open: () => void) {
   return {
     tabIndex: 0,
-    className: `cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${className}`,
+    className:
+      "cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
     onClick(event: MouseEvent<HTMLElement>) {
       if (
         (event.target as HTMLElement).closest(
-          "button,a,input,label,summary,[role=checkbox],[role=combobox]",
+          "button,a,input,label,[role=checkbox],[role=combobox]",
         ) ||
         window.getSelection()?.toString()
       )
@@ -139,87 +126,12 @@ export function rowNavigation(open: () => void, className = "") {
     },
     onKeyDown(event: KeyboardEvent<HTMLElement>) {
       if (
-        event.target !== event.currentTarget ||
-        !["Enter", " "].includes(event.key)
-      )
-        return;
-      event.preventDefault();
-      open();
+        event.target === event.currentTarget &&
+        ["Enter", " "].includes(event.key)
+      ) {
+        event.preventDefault();
+        open();
+      }
     },
   };
-}
-
-export type ViewMode = "list" | "grid";
-
-export function defaultListView(): ViewMode {
-  return window.matchMedia("(min-width: 640px)").matches ? "list" : "grid";
-}
-
-export function ViewToggle({
-  value,
-  onChange,
-}: {
-  value: ViewMode;
-  onChange: (value: ViewMode) => void;
-}) {
-  return (
-    <div
-      role="group"
-      aria-label="查看方式"
-      className="inline-flex shrink-0 gap-0.5 rounded-md border p-0.5"
-    >
-      {(
-        [
-          ["list", "列表", List],
-          ["grid", "大图", LayoutGrid],
-        ] as const
-      ).map(([mode, label, Icon]) => (
-        <Button
-          key={mode}
-          type="button"
-          variant={value === mode ? "secondary" : "ghost"}
-          size="icon-sm"
-          aria-label={label}
-          aria-pressed={value === mode}
-          onClick={() => onChange(mode)}
-        >
-          <Icon />
-        </Button>
-      ))}
-    </div>
-  );
-}
-
-export function SelectionCheckbox({
-  keys,
-  selected,
-  toggle,
-  label,
-}: {
-  keys: string[];
-  selected: Set<string>;
-  toggle: (keys: string[], checked: boolean) => void;
-  label: string;
-}) {
-  return (
-    <Checkbox
-      aria-label={label}
-      disabled={!keys.length}
-      checked={keys.length > 0 && keys.every((key) => selected.has(key))}
-      indeterminate={keys.some((key) => selected.has(key)) && !keys.every((key) => selected.has(key))}
-      onCheckedChange={(checked) => toggle(keys, checked === true)}
-    />
-  );
-}
-
-export function ClearSelection({
-  selection,
-}: {
-  selection: ReturnType<typeof useSelection>;
-}) {
-  return selection.selected.size ? (
-    <Button variant="ghost" size="sm" onClick={selection.clear}>
-      清除选择
-    </Button>
-  ) : null;
 }

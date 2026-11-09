@@ -31,9 +31,7 @@ function Badge({
   variant = "default",
   size = "default",
   ...props
-}: React.ComponentProps<"span"> &
-  VariantProps<typeof badgeVariants>) {
-
+}: React.ComponentProps<"span"> & VariantProps<typeof badgeVariants>) {
   return (
     <span
       data-slot="badge"

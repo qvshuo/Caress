@@ -6,10 +6,10 @@ services:
     ports:
       - "0.0.0.0:9307:9307"
     volumes:
-      - /path/to/media:/path/to/media:ro # 改为视频、STRM 所在的实际目录
-      - /path/to/data:/data # 改为数据目录，SQLite 和图片保存在此目录
+      - /path/to/caress-data:/data # 设置和处理记录；无需挂载媒体目录
     environment:
       TZ: Asia/Shanghai
+    stop_grace_period: 45s
     depends_on:
       flaresolverr:
         condition: service_healthy
@@ -19,13 +19,9 @@ services:
     environment:
       TZ: Asia/Shanghai
     volumes:
-      - /path/to/data/flaresolverr:/config
+      - /path/to/caress-data/flaresolverr:/config
     healthcheck:
-      test:
-        - CMD
-        - curl
-        - -fsS
-        - http://127.0.0.1:8191/
+      test: [CMD, curl, -fsS, http://127.0.0.1:8191/]
       interval: 5s
       timeout: 5s
       retries: 10

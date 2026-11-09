@@ -8,7 +8,6 @@ from datetime import UTC, datetime
 
 task_id = ContextVar("task_id", default=None)
 work_code = ContextVar("work_code", default=None)
-progress = ContextVar("progress", default=None)
 
 
 def report_progress(
@@ -17,17 +16,9 @@ def report_progress(
     source=None,
     message: str | None = None,
 ) -> None:
-    callback = progress.get()
-    if callback:
-        callback(
-            {
-                "stage": stage,
-                "status": status,
-                "source": source,
-                "message": message,
-                "time": datetime.now(UTC).isoformat(),
-            }
-        )
+    logging.getLogger('caress.progress').info(message or stage, extra={
+        'event': 'processing.progress', 'stage': stage, 'source': source, 'result': status,
+    })
 
 
 class JsonFormatter(logging.Formatter):

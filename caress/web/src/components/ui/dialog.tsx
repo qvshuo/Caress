@@ -34,7 +34,9 @@ function DialogClose({
 function DialogOverlay({
   className,
   ...props
-}: Omit<React.ComponentProps<typeof DialogPrimitive.Backdrop>, "className"> & { className?: string }) {
+}: Omit<React.ComponentProps<typeof DialogPrimitive.Backdrop>, "className"> & {
+  className?: string;
+}) {
   return (
     <DialogPrimitive.Backdrop
       data-slot="dialog-overlay"
@@ -52,7 +54,9 @@ function DialogContent({
   children,
   showCloseButton = true,
   ...props
-}: Omit<React.ComponentProps<typeof DialogPrimitive.Popup>, "className"> & { className?: string } & {
+}: Omit<React.ComponentProps<typeof DialogPrimitive.Popup>, "className"> & {
+  className?: string;
+} & {
   showCloseButton?: boolean;
 }) {
   return (
@@ -85,7 +89,10 @@ function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="dialog-header"
-      className={cn("flex min-w-0 flex-col gap-2 pr-6 break-words text-center sm:text-left", className)}
+      className={cn(
+        "flex min-w-0 flex-col gap-2 pr-6 break-words text-center sm:text-left",
+        className,
+      )}
       {...props}
     />
   );
@@ -121,7 +128,9 @@ function DialogFooter({
 function DialogTitle({
   className,
   ...props
-}: Omit<React.ComponentProps<typeof DialogPrimitive.Title>, "className"> & { className?: string }) {
+}: Omit<React.ComponentProps<typeof DialogPrimitive.Title>, "className"> & {
+  className?: string;
+}) {
   return (
     <DialogPrimitive.Title
       data-slot="dialog-title"
@@ -134,7 +143,10 @@ function DialogTitle({
 function DialogDescription({
   className,
   ...props
-}: Omit<React.ComponentProps<typeof DialogPrimitive.Description>, "className"> & { className?: string }) {
+}: Omit<
+  React.ComponentProps<typeof DialogPrimitive.Description>,
+  "className"
+> & { className?: string }) {
   return (
     <DialogPrimitive.Description
       data-slot="dialog-description"

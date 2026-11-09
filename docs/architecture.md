@@ -1,49 +1,81 @@
-# 架构契约
+# 工程契约
 
-## 审计与收敛方向
+Caress 只处理 Emby 无法提供的 JAV 数据获取、翻译、演员匹配和封面加工。Emby 拥有媒体、全部作品元数据、图片及手动修改。前端只保留作品与设置。
 
-现有适配器、文件名识别、翻译分段、YuNet 裁剪和 REST 传输继续保留。
-确认需要修复的边界：来源和最终 Metadata 混用、TaskQueue 编排作品处理、API 中的完整保存事务、嵌套事务提前发布缓存、图片保护重复表达、配置 idle 回调、Emby 计划和写入耦合。
+## 核心流程
 
-## 领域与所有权
+Emby 所选媒体库分页读取 → 按视频/STRM 文件名识别番号 → 查询成功记录 → 依优先级准确命中一个来源 → 翻译与演员匹配 → 临时下载和 YuNet 裁剪 → 按每个 Item ID 分别写入 Emby → 回读验证 → 保存处理结果。
 
-| 概念 | 数据 | 权威维护者 |
-| --- | --- | --- |
-| Work | 标准番号、分类、当前输出 | RuntimeStore；扫描发现身份 |
-| Media | 完整路径、原文件名、字幕/破解/分集 | Scanner → RuntimeStore.media |
-| SourceMetadata | 来源字段和图片候选 | 来源适配器 → variants |
-| WorkMetadata | Emby 可写字段，不含图片候选 | WorkProcessor / WorkOperations → RuntimeStore |
-| Selection / Provenance | 人工字段保护、来源、固定原文、处理指纹 | 作品操作 → selections |
-| Artwork | 每个文件角色的选择、保护、处理输入和状态 | artwork.py → selections.artwork |
-| Task | 操作参数、历史进度和执行结果 | TaskQueue → tasks / task_items |
-| EmbyAssociation | 每个媒体的关联和同步结果 | EmbySync → media.sync |
+同一批次的同番号复用一次刮削及翻译。普通刮削跳过成功记录；完整流程失败后可重试；强制重刮及重试已有部分写入需要明确确认。手动裁剪独立于批次与成功记录。
 
-数据库是唯一持久化事实来源。任务和扫描内存投影必须可重建，不得在外层事务提交之前发布。任务历史不是作品健康状态；Emby 失败不改变刮削成功结果。扫描不覆盖执行期间产生的新输出。
+## 职责
 
-## 处理阶段
+| 模块 | 责任 |
+| --- | --- |
+| `emby.py` | 服务器身份、分页、Item/人物/图片读取、受管字段更新和回读验证 |
+| `library.py` | 实时只读投影、路径与关联验证、图片 tag URL，不缓存媒体库 |
+| `identifiers.py` | 文件名主干、四类后缀、规范番号，保留现有媒体扩展名 |
+| `catalog.py` / `actors.py` | 四类路由与保守的演员 ID/主名/别名规则 |
+| `scraper.py` / `sources/` | 来源顺序查询、命中停止、身份校验和适配器 |
+| `http.py` | Scrapling/FlareSolverr、连接复用、来源独占、主机限速与冷却 |
+| `processing.py` | 每番号一次加工、临时图片、演员头像，只在刮削批次触发翻译验证 |
+| `translation.py` | 标题/简介串行翻译、演员名和边界空白保护、失败回退 |
+| `images.py` / `portraits.py` | 图片验证、YuNet、无重采样 2:3 PNG、临时 gfriends 头像 |
+| `runtime.py` / `tasks.py` | SQLite 事务、一个四并发批次、Item 互斥、取消和重启恢复 |
+| `service.py` / `api.py` | 生命周期、最新详情、有限期裁剪会话、HTTP 边界和秘密脱敏 |
+| `import_settings.py` | 一次性备份及原子导入，不构成长期开关或兼容层 |
+| Web `pages/` / `components/` / `lib/` | 作品与设置、共享控件和懒加载裁剪器、类型与传输 |
 
-| 阶段 | 输入 → 输出 | 副作用及恢复 |
-| --- | --- | --- |
-| Resolve | Work → 分类、路由 | 仅成功的精确分类写 rules |
-| Fetch | 路由 → SourceResult[] | 候选写 variants，失败与未找到分开 |
-| Select | 排序候选、人工选择 → 单一来源 | 不自动拼接来源 |
-| Transform | 固定原文 → 最终字段及溯源 | 翻译串行；失败保留有效旧值 |
-| Persist | 最终字段、溯源 → SQLite | 同一事务提交 |
-| Artwork | 每角色输入 → 验证过的文件、状态 | 文件回滚包围数据库提交；保存输入后可独立重试 |
-| Sync | 当前输出 → Emby | Resolve → 纯数据 Plan → Apply → Verify |
+## 身份与安全写入
 
-fill_missing 更新自动字段并保留人工保护和显式空值；refresh 重置保护并替换受管输出。remap_actors 离线使用保存的身份；update_portraits 不执行翻译和作品刮削。
+使用服务器 `System/Info.Id` 和 Item ID 定位。处理记录额外核对创建时间和番号，避免错误继承重建项目的记录。STRM 的 `Path` 用于识别；HTTP 播放地址不作为媒体文件路径。详情补读 `PartCount`、`AdditionalParts` 的完整 Item 和各 `MediaSources.ItemId`，执行前展开并去重。无法确定路径、创建时间或唯一番号时明确不支持。
 
-## 生命周期
+每次写入先读完整 DTO，只覆盖来源非空的 Name、OriginalTitle、Overview、PremiereDate/ProductionYear、Studios、演员/导演、GenreItems、TagItems 和 caress Provider ID。保留其他 Provider ID、人物类型、现有标签、系统/用户字段以及 `LockData`/`LockedFields`。来源没有的数据不清空。标签合并保留，避免在没有归属证据时删除用户数据。
 
-配置保存在 options，批次使用稳定快照。新配置只在批次边界激活，旧客户端关闭后重建。资源随服务或批次退出关闭。服务写锁和作品锁保留，不增加调度框架。
+图片验证格式、尺寸及内容；上传 base64 与真实 MIME，再回读原始字节并比较像素。Primary 可替换；Backdrop 内容去重后追加，绝不依赖猜测的旧索引删除。人物只有可靠演员映射、明确 Emby Person ID 且无现有头像时才自动获取，同批次去重，失败仅警告。
 
-## 前端契约
+Emby 没有跨 HTTP 请求的原子事务。失败可已部分写入，状态必须如实反映，重试重新执行并依内容去重。Caress 不宣称回滚外部服务器。
 
-components/ui 是唯一 Headless UI 边界。实际迁移范围为 Dialog、Select、Checkbox、Button；Badge 使用语义化 span。保留 CVA 样式和现有页面布局。采用 Base UI 的 render、Backdrop / Popup、Positioner / List、checked / indeterminate 和 data 属性，不保留 Radix 适配层。
+## 最小持久化
 
-前端只拥有未提交草稿和交互状态；轮询更新服务端投影，不覆盖草稿。不存在的 Menu、Popover、Tooltip、Radio、Tabs、Accordion、ScrollArea 不为本次迁移新增。
+| 表 | 内容 |
+| --- | --- |
+| `options` | 设置，密钥仅服务端保存 |
+| `rules` | 番号分类与演员匹配所需规则 |
+| `scrapes` | 服务器/Item、身份摘要、番号、成功时间、最近结果/原因与成功来源 |
+| `batch` | 唯一当前/最近批次的参数、计数所需 Item 状态及失败原因 |
+| `cooldowns` | 来源与请求主机的必要冷却 |
 
-## 验证边界
+没有作品元数据、媒体路径清单、来源候选、图片归属账本、编辑保护、翻译指纹或历史任务事件。成功记录不会因 Emby 手动编辑而失效；强制处理失败仍保留上一次成功时间。中断时记录失败或取消，已确认成功不丢失；缺席 Item 不自动删除历史记录。
 
-自动测试使用临时 SQLite、临时图片及 HTTP mock；不连接真实刮削站点。测试源码纳入 Git，环境、缓存、产物在仓库外，生产镜像排除测试。真实 9307 不参与部署；9308 使用独立数据库。真实 Emby 的外部写入必须可回读、可恢复，测试不能把现有媒体当作可丢弃数据。
+图片在系统临时目录处理，每个番号关联全部完成后清理，批次结束兜底清理。裁剪会话至多四个、十分钟过期，关闭/保存清理，最终海报只在 Emby。原图优先直接读取Emby 横向背景，无可用背景时访问来源；来源也可显式重取，初始居中选框不加载 YuNet；从不使用 Primary 假装恢复原图。
+
+## HTTP 接口
+
+| 接口 | 用途 |
+| --- | --- |
+| `GET /api/health` | 容器健康与版本 |
+| `GET/PUT /api/settings` | 脱敏设置和保存；仅保留 Emby、翻译、来源路由/地址和 FlareSolverr，空缺密钥保留；source_defaults 只读提供内置来源地址 |
+| `POST /api/settings/test/{emby,translation}` | 独立连接/翻译测试，不读取媒体库，不回传密钥 |
+| `POST /api/settings/libraries` | 按当前表单连接读取媒体库，与连接测试分开 |
+| `GET /api/works?q=&status=&offset=&limit=` | 从 Emby 分页批读，再搜索/筛选并分页响应 |
+| `GET /api/works/{id}?q=&status=` | 最新完整只读详情、版本与分集，以及当前筛选顺序的前后作品 |
+| `GET/POST /api/batch` | 当前批次；普通、强制或完整重试 |
+| `POST /api/batch/cancel` | 取消并等待清理 |
+| `GET /api/images/{id}/{Primary,Backdrop}/{index}?tag=` | 固定 Emby 目标的限量图片代理，图片 tag 失效缓存 |
+| `POST /api/works/{id}/crop/source` | 创建临时原图会话，可指定整个作品来源 |
+| `POST /api/works/{id}/crop/{preview,apply}` | 2:3 预览或独立上传 Primary |
+| `GET /api/works/{id}/crop/{token}/image` | 读取会话原图 |
+| `DELETE /api/works/{id}/crop/{token}` | 关闭并清理会话 |
+
+没有扫描、目录浏览、元数据保存、字段来源混搭、演员管理或历史任务接口。没有任意 URL 代理、任意本地路径读取或额外账户系统。
+
+## 验证依据
+
+以真实 Emby 4.10.2.0 的 Swagger 和写入回读为主要证据，结合官方 [Item Information](https://dev.emby.media/doc/restapi/Item-Information.html)、[Items](https://dev.emby.media/reference/RestAPI/ItemsService/getItems.html) 与 [Metadata Manager](https://www.emby.media/support/articles/Metadata-manager.html)。关闭在线提供者不等于禁止本地 NFO、扫描或手动刷新；配置和验收必须明确此边界。
+
+## 前端交互
+
+只保留表格；作品与设置等宽。批量模式独立选择，执行按钮固定为“开始”。刷新统一使用图标与“刷新”；详情顶部为“← 上一个作品 / 返回 / 下一个作品 →”，沿用当前搜索及筛选顺序，返回保留页码。状态用胶囊呈现，不展示内部 Item ID 或成功时间。头像有固定占位，封面与剧照使用 Base UI 对话框浏览，支持方向键。裁剪以选框、实时预览和操作按钮引导，只保留必要错误。
+
+密钥以纯展示掩码表示已有配置，掩码不进入保存请求；来源地址显示实际配置或内置值。没有新增长期前端状态或媒体缓存。
