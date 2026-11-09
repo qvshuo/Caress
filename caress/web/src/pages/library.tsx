@@ -173,7 +173,9 @@ export function Library({
                     ? "已中断"
                     : batch.status === "failed"
                       ? "失败"
-                      : "已完成"}
+                      : batch.items.some((i) => i.status === "failed")
+                        ? "已结束"
+                        : "已完成"}
               {` · ${batch.items.filter((i) => i.status === "success").length} 成功 · ${batch.items.filter((i) => i.status === "failed").length} 失败 · ${batch.items.filter((i) => i.status === "skipped").length} 跳过`}
             </p>
             {busy && (

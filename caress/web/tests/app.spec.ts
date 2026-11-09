@@ -453,6 +453,15 @@ test("portraits reserve space and gallery supports buttons and keyboard", async 
   await page.getByRole("button", { name: "查看图片 1" }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByText("2 / 3", { exact: true })).toBeVisible();
+  await page.evaluate(() =>
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }),
+    ),
+  );
+  await expect(dialog.getByText("2 / 3", { exact: true })).toBeVisible();
+  await dialog.getByRole("button", { name: "关闭", exact: true }).focus();
+  await page.keyboard.press("ArrowLeft");
+  await expect(dialog.getByText("2 / 3", { exact: true })).toBeVisible();
   await dialog.getByRole("button", { name: "下一张" }).click();
   await expect(dialog.getByText("3 / 3", { exact: true })).toBeVisible();
   await expect(dialog.getByRole("button", { name: "下一张" })).toBeDisabled();
@@ -585,7 +594,7 @@ test("completed batch is a compact summary with optional errors", async ({
   );
   await page.goto("/");
   const batch = page.getByRole("region", { name: "当前批次" });
-  await expect(batch).toContainText("已完成 · 1 成功 · 1 失败 · 1 跳过");
+  await expect(batch).toContainText("已结束 · 1 成功 · 1 失败 · 1 跳过");
   await expect(batch.getByRole("progressbar")).toHaveCount(0);
   await expect(
     batch.getByText("来源暂不可用", { exact: false }),
@@ -678,4 +687,54 @@ test("key layouts keep aligned controls and contain long content", async ({
       ),
     ).toBe(true);
   }
+});
+
+test("image retry bypasses failed cache and a new URL starts cleanly", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(crypto, "randomUUID", { value: undefined });
+  });
+  const svg =
+    '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="300"><rect width="200" height="300" fill="#66737d"/></svg>';
+  let tag = "old";
+  const requests: URL[] = [];
+  await page.route("**/api/works/1", (route) =>
+    route.fulfill({
+      json: { ...work, poster: `/api/images/1/Primary/0?tag=${tag}` },
+    }),
+  );
+  await page.route("**/api/images/**", (route) => {
+    const url = new URL(route.request().url());
+    requests.push(url);
+    return url.searchParams.has("retry") ||
+      url.searchParams.get("tag") === "new"
+      ? route.fulfill({ contentType: "image/svg+xml", body: svg })
+      : route.fulfill({
+          contentType: "image/png",
+          headers: { "Cache-Control": "max-age=3600" },
+          body: "invalid image",
+        });
+  });
+  await page.goto("/#library/work/1");
+  await page.getByRole("button", { name: "查看封面" }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("button", { name: "重试", exact: true }).click();
+  await expect(
+    dialog.getByRole("img", { name: "封面", exact: true }),
+  ).toBeVisible();
+  expect(
+    requests.some(
+      (url) =>
+        url.searchParams.get("tag") === "old" && url.searchParams.has("retry"),
+    ),
+  ).toBe(true);
+  await page.keyboard.press("Escape");
+  tag = "new";
+  await page.getByRole("button", { name: "刷新作品", exact: true }).click();
+  await expect(
+    page.getByRole("img", { name: "封面", exact: true }),
+  ).toBeVisible();
+  expect(requests.at(-1)!.searchParams.get("tag")).toBe("new");
+  expect(requests.at(-1)!.searchParams.has("retry")).toBe(false);
 });

@@ -1,9 +1,4 @@
-import {
-  useEffect,
-  useState,
-  type ComponentProps,
-  type ReactNode,
-} from "react";
+import { useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { ArrowLeft, ArrowRight, ImageOff } from "lucide-react";
 import {
   Dialog,
@@ -21,8 +16,19 @@ export function ArtworkImage({
   retryable = false,
   ...props
 }: ComponentProps<"img"> & { fallback?: ReactNode; retryable?: boolean }) {
-  const [failed, setFailed] = useState<string>();
-  if (src && failed === src)
+  const [request, setRequest] = useState({ src, nonce: "", failed: false });
+  const current =
+    request.src === src ? request : { src, nonce: "", failed: false };
+  if (current !== request) setRequest(current);
+  let imageSrc = src;
+  if (current.nonce && typeof src === "string") {
+    const url = new URL(src, location.href);
+    if (url.protocol === "http:" || url.protocol === "https:") {
+      url.searchParams.set("retry", current.nonce);
+      imageSrc = url.href;
+    }
+  }
+  if (src && current.failed)
     return (
       <span
         role="img"
@@ -40,7 +46,13 @@ export function ArtworkImage({
               <Button
                 size="sm"
                 variant="ghost"
-                onClick={() => setFailed(undefined)}
+                onClick={() =>
+                  setRequest({
+                    src,
+                    nonce: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+                    failed: false,
+                  })
+                }
               >
                 重试
               </Button>
@@ -52,11 +64,11 @@ export function ArtworkImage({
   return (
     <img
       {...props}
-      src={src}
+      src={imageSrc}
       alt={alt}
       className={className}
       onError={(event) => {
-        setFailed(typeof src === "string" ? src : undefined);
+        setRequest({ ...current, failed: true });
         props.onError?.(event);
       }}
     />
@@ -77,28 +89,12 @@ export function ImageViewer({
 }) {
   const [index, setIndex] = useState(Math.min(initialIndex, images.length - 1));
   const image = images[index]!;
+  const frame = useRef<HTMLDivElement>(null);
   function move(delta: number) {
-    setIndex((current) =>
-      Math.min(images.length - 1, Math.max(0, current + delta)),
-    );
+    const next = Math.min(images.length - 1, Math.max(0, index + delta));
+    if (next === 0 || next === images.length - 1) frame.current?.focus();
+    setIndex(next);
   }
-  useEffect(() => {
-    // A boundary button can lose focus when it becomes disabled.
-    const keyboard = (event: KeyboardEvent) => {
-      if (event.altKey || event.ctrlKey || event.metaKey) return;
-      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-        event.preventDefault();
-        setIndex((current) =>
-          Math.min(
-            images.length - 1,
-            Math.max(0, current + (event.key === "ArrowLeft" ? -1 : 1)),
-          ),
-        );
-      }
-    };
-    window.addEventListener("keydown", keyboard, true);
-    return () => window.removeEventListener("keydown", keyboard, true);
-  }, [images.length]);
   return (
     <Dialog
       open
@@ -113,10 +109,39 @@ export function ImageViewer({
         <DialogHeader>
           <DialogTitle>图片</DialogTitle>
         </DialogHeader>
-        <div className="grid min-h-0 grid-cols-[36px_minmax(0,1fr)_36px] items-center gap-2 sm:gap-4">
+        <div
+          ref={frame}
+          role="group"
+          aria-label="图片浏览"
+          tabIndex={0}
+          className="grid min-h-0 grid-cols-[36px_minmax(0,1fr)_36px] items-center gap-2 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring sm:gap-4"
+          onKeyDownCapture={(event) => {
+            if (
+              event.defaultPrevented ||
+              event.altKey ||
+              event.ctrlKey ||
+              event.metaKey
+            )
+              return;
+            const target = event.target as Element;
+            if (
+              target.closest(
+                "input,textarea,select,[contenteditable=true],[role=combobox]",
+              ) ||
+              (target.closest("button") &&
+                !target.closest("[data-image-navigation]"))
+            )
+              return;
+            if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+              event.preventDefault();
+              move(event.key === "ArrowLeft" ? -1 : 1);
+            }
+          }}
+        >
           <Button
             size="icon"
             variant="ghost"
+            data-image-navigation=""
             aria-label="上一张"
             disabled={index === 0}
             onClick={() => move(-1)}
@@ -135,6 +160,7 @@ export function ImageViewer({
           <Button
             size="icon"
             variant="ghost"
+            data-image-navigation=""
             aria-label="下一张"
             disabled={index === images.length - 1}
             onClick={() => move(1)}

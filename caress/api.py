@@ -203,6 +203,10 @@ def create_app(settings: Settings | None = None):
         if not ident.isalnum() or not 0 <= index <= 1000:
             raise HTTPException(404)
         async with service.emby() as client:
+            if not await client.contains(ident) and not (
+                kind == "Primary" and await client.contains_person(ident)
+            ):
+                raise HTTPException(404, "图片不属于已选择的媒体库或关联人物")
             image = await client.image(ident, kind, index, tag=tag)
         return Response(
             image.content, media_type=image.mime, headers={"Cache-Control": "no-cache"}

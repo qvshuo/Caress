@@ -44,7 +44,8 @@ class BatchRunner:
 
     async def cancel(self):
         if self.running:
-            self.task.cancel()
+            if not self.task.cancelling():
+                self.task.cancel()
             await asyncio.gather(self.task, return_exceptions=True)
             batch = self.service.runtime.batch()
             if batch and batch["status"] == "running":
@@ -132,16 +133,20 @@ class BatchRunner:
                     semaphore = asyncio.Semaphore(4)
 
                     async def work(row):
-                        if row["status"] == "skipped":
-                            return
                         server, identity, code = client.server, None, None
                         writing = False
+                        reserved_code = row["code"]
                         work_token = work_code.set(row["code"])
-                        async with semaphore, service.item_lock(server, row["id"]):
-                            try:
+                        try:
+                            async with semaphore, service.item_lock(server, row["id"]):
+                                if row["status"] == "skipped":
+                                    return
                                 item = await client.item(row["id"])
                                 code, identity, media = identify(item)
-                                row["code"] = code
+                                if code != row["code"]:
+                                    raise ValueError(
+                                        "Emby 项目番号已变化，请刷新后重试"
+                                    )
                                 old = runtime.record(server, row["id"], identity, code)
                                 if (
                                     batch["action"] == "scrape"
@@ -200,45 +205,47 @@ class BatchRunner:
                                     status="success",
                                     warnings=[*row.get("warnings", []), *warnings],
                                 )
-                            except asyncio.CancelledError:
-                                row.update(
-                                    status="cancelled",
-                                    error="已取消；写入可能已部分完成"
-                                    if writing
-                                    else "已取消；尚未开始写入",
+                        except asyncio.CancelledError:
+                            row.update(
+                                status="cancelled",
+                                error="已取消；写入可能已部分完成"
+                                if writing
+                                else "已取消；尚未开始写入",
+                            )
+                            if identity:
+                                runtime.save_record(
+                                    server,
+                                    row["id"],
+                                    identity,
+                                    code,
+                                    "cancelled",
+                                    error=row["error"],
                                 )
-                                if identity:
-                                    runtime.save_record(
-                                        server,
-                                        row["id"],
-                                        identity,
-                                        code,
-                                        "cancelled",
-                                        error=row["error"],
-                                    )
-                                raise
-                            except Exception as exc:
-                                row.update(
-                                    status="failed",
-                                    error=("写入可能已部分完成：" if writing else "")
-                                    + sync_error(exc),
+                            raise
+                        except Exception as exc:
+                            row.update(
+                                status="failed",
+                                error=("写入可能已部分完成：" if writing else "")
+                                + sync_error(exc),
+                            )
+                            if identity:
+                                runtime.save_record(
+                                    server,
+                                    row["id"],
+                                    identity,
+                                    code,
+                                    "failed",
+                                    error=row["error"],
                                 )
-                                if identity:
-                                    runtime.save_record(
-                                        server,
-                                        row["id"],
-                                        identity,
-                                        code,
-                                        "failed",
-                                        error=row["error"],
+                        finally:
+                            work_code.reset(work_token)
+                            remaining[reserved_code] -= 1
+                            try:
+                                if remaining[reserved_code] == 0:
+                                    await processor.release(
+                                        reserved_code, batch["source"]
                                     )
                             finally:
-                                work_code.reset(work_token)
-                                remaining[row["code"]] -= 1
-                                if remaining[row["code"]] == 0:
-                                    await processor.release(
-                                        row["code"], batch["source"]
-                                    )
                                 save()
 
                     try:

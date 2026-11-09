@@ -63,20 +63,30 @@ class WorkProcessor:
 
     async def release(self, code, source):
         task = self.prepared.pop((code, source), None)
-        if task and task.done() and not task.cancelled() and task.exception() is None:
+        if task is None:
+            return
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        if not task.cancelled() and task.exception() is None:
             prepared = task.result()
             folder = (
                 self.temporary
                 / hashlib.sha256((code + prepared.source).encode()).hexdigest()
             )
-            await asyncio.to_thread(shutil.rmtree, folder, True)
+            await asyncio.to_thread(shutil.rmtree, folder)
 
     async def finish(self):
-        tasks = list(self.prepared.values())
-        for task in tasks:
+        for task in self.prepared.values():
             if not task.done():
                 task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        # Drain every group even when one directory fails to clean up.
+        results = await asyncio.gather(
+            *(self.release(*key) for key in list(self.prepared)), return_exceptions=True
+        )
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
 
     async def _prepare(self, code, source):
         result = await self.scraper.scrape(ScrapeRequest(code=code, source=source))
@@ -121,30 +131,38 @@ class WorkProcessor:
             / hashlib.sha256((code + prepared.source).encode()).hexdigest()
         )
         folder.mkdir()
-        downloaded = {}
-        for candidate, role in image_plan(metadata.artwork):
-            try:
-                if candidate.url not in downloaded:
-                    image = await fetch_artwork(self.scraper.client, candidate)
-                    path = folder / (
-                        hashlib.sha256(candidate.url.encode()).hexdigest() + ".original"
+        try:
+            downloaded = {}
+            for candidate, role in image_plan(metadata.artwork):
+                try:
+                    if candidate.url not in downloaded:
+                        image = await fetch_artwork(self.scraper.client, candidate)
+                        path = folder / (
+                            hashlib.sha256(candidate.url.encode()).hexdigest()
+                            + ".original"
+                        )
+                        await asyncio.to_thread(path.write_bytes, image)
+                        downloaded[candidate.url] = path
+                    path = downloaded[candidate.url]
+                    data = await asyncio.to_thread(path.read_bytes)
+                    if role == "poster":
+                        data = (await asyncio.to_thread(crop_poster, data))["content"]
+                        path = folder / "poster.png"
+                        await asyncio.to_thread(path.write_bytes, data)
+                    if role != "poster":
+                        prepared.digests[path] = await asyncio.to_thread(
+                            pixel_digest, data
+                        )
+                    prepared.images.append(
+                        ("Primary" if role == "poster" else "Backdrop", path)
                     )
-                    await asyncio.to_thread(path.write_bytes, image)
-                    downloaded[candidate.url] = path
-                path = downloaded[candidate.url]
-                data = await asyncio.to_thread(path.read_bytes)
-                if role == "poster":
-                    data = (await asyncio.to_thread(crop_poster, data))["content"]
-                    path = folder / "poster.png"
-                    await asyncio.to_thread(path.write_bytes, data)
-                if role != "poster":
-                    prepared.digests[path] = await asyncio.to_thread(pixel_digest, data)
-                prepared.images.append(
-                    ("Primary" if role == "poster" else "Backdrop", path)
-                )
-            except (FetchError, ValueError, OSError) as exc:
-                prepared.errors.append(f"{role}: {exc}")
-        return prepared
+                except (FetchError, ValueError, OSError) as exc:
+                    prepared.errors.append(f"{role}: {exc}")
+            return prepared
+
+        except BaseException:
+            await asyncio.to_thread(shutil.rmtree, folder)
+            raise
 
     async def write(self, client, ident, prepared, media):
         current = await client.write_metadata(ident, prepared.metadata, media)

@@ -240,15 +240,21 @@ def test_restart_retains_confirmed_success_and_cleans_interruption(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_preparation_reused_for_same_code():
+async def test_preparation_reused_for_same_code(tmp_path):
     processor = object.__new__(WorkProcessor)
     processor.prepared = {}
-    processor._prepare = AsyncMock(return_value=object())
+    import hashlib
+
+    processor.temporary = tmp_path
+    folder = tmp_path / hashlib.sha256(b"ABC-123dmm").hexdigest()
+    folder.mkdir()
+    processor._prepare = AsyncMock(return_value=SimpleNamespace(source="dmm"))
     left, right = await asyncio.gather(
         processor.prepare("ABC-123"), processor.prepare("ABC-123")
     )
     assert left is right and processor._prepare.await_count == 1
     await processor.finish()
+    assert not folder.exists() and not processor.prepared
 
 
 class FakeClient:
@@ -870,7 +876,9 @@ async def test_image_proxy_reuses_validation_and_preserves_mime(tmp_path, monkey
 
     @asynccontextmanager
     async def connection():
-        yield SimpleNamespace(image=AsyncMock(return_value=image))
+        yield SimpleNamespace(
+            contains=AsyncMock(return_value=True), image=AsyncMock(return_value=image)
+        )
 
     async with (
         app.router.lifespan_context(app),
@@ -919,3 +927,246 @@ async def test_uploaded_image_requires_matching_readback(mismatch):
             await client.upload("1", "Primary", original)
     finally:
         await client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["scrape", "retry", "force"])
+async def test_batch_settles_skipped_and_processed_groups(
+    fake_batch, monkeypatch, action
+):
+    FakeClient.movies = {str(i): item(str(i)) for i in range(1, 6)}
+    code, identity, _ = identify(item())
+    for ident in FakeClient.movies:
+        fake_batch.runtime.save_record(
+            "s", ident, identity, code, "success" if ident == "1" else "failed"
+        )
+
+    async def parts(self, movie):
+        return [{"Id": "outside"}] if movie["Id"] == "1" else []
+
+    monkeypatch.setattr(FakeClient, "parts", parts)
+    release = AsyncMock()
+    monkeypatch.setattr(FakeProcessor, "release", release)
+    FakeProcessor.fail = {"2"}
+    fake_batch.batches.start(list(FakeClient.movies), action, None)
+    await fake_batch.batches.task
+    assert release.await_count == 2
+    release.assert_any_await("ABC-123", None)
+    release.assert_any_await(None, None)
+    assert "outside" not in FakeProcessor.writes
+    assert ("1" in FakeProcessor.writes) == (action == "force")
+    assert fake_batch.runtime.batch()["status"] == "finished"
+    assert any(row["status"] == "failed" for row in fake_batch.runtime.batch()["items"])
+
+
+@pytest.mark.asyncio
+async def test_queued_cancellation_settles_once_even_when_cancel_repeated(
+    fake_batch, monkeypatch
+):
+    FakeClient.movies = {str(i): item(str(i)) for i in range(1, 6)}
+    FakeProcessor.block = asyncio.Event()
+    release = AsyncMock()
+    monkeypatch.setattr(FakeProcessor, "release", release)
+    fake_batch.batches.start(list(FakeClient.movies), "scrape", None)
+    for _ in range(100):
+        if len(fake_batch.runtime.batch()["current"]) == 4:
+            break
+        await asyncio.sleep(0.001)
+    await asyncio.gather(fake_batch.batches.cancel(), fake_batch.batches.cancel())
+    release.assert_awaited_once_with("ABC-123", None)
+    assert all(r["status"] == "cancelled" for r in fake_batch.runtime.batch()["items"])
+
+
+@pytest.mark.asyncio
+async def test_changed_code_does_not_escape_original_group_accounting(
+    fake_batch, monkeypatch
+):
+    original = FakeClient.item
+    calls = {}
+
+    async def changed(self, ident):
+        calls[ident] = calls.get(ident, 0) + 1
+        if ident == "1" and calls[ident] > 1:
+            return item("1", path="/strm/XYZ-999.strm")
+        return await original(self, ident)
+
+    monkeypatch.setattr(FakeClient, "item", changed)
+    release = AsyncMock()
+    monkeypatch.setattr(FakeProcessor, "release", release)
+    fake_batch.batches.start(["1", "2"], "scrape", None)
+    await fake_batch.batches.task
+    release.assert_awaited_once_with("ABC-123", None)
+    assert FakeProcessor.writes == ["2"]
+    assert "番号已变化" in fake_batch.runtime.batch()["items"][0]["error"]
+
+
+@pytest.mark.asyncio
+async def test_release_cancels_and_drains_inflight_shared_preparation(tmp_path):
+    processor = object.__new__(WorkProcessor)
+    processor.prepared = {}
+    processor.temporary = tmp_path
+    started, finished = asyncio.Event(), asyncio.Event()
+
+    async def prepare(*args):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            finished.set()
+
+    processor._prepare = prepare
+    waiter = asyncio.create_task(processor.prepare("ABC-123"))
+    await started.wait()
+    await processor.release("ABC-123", None)
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    assert finished.is_set() and not processor.prepared
+
+
+@pytest.mark.asyncio
+async def test_image_scope_allows_only_selected_movies_and_confirmed_people(
+    tmp_path, monkeypatch
+):
+    from contextlib import asynccontextmanager
+
+    from caress.images import validate_image
+    from test_images import image_bytes
+
+    upstream = SimpleNamespace(
+        contains=AsyncMock(side_effect=lambda ident: ident == "movie"),
+        contains_person=AsyncMock(side_effect=lambda ident: ident == "person"),
+        image=AsyncMock(return_value=validate_image(image_bytes())),
+    )
+
+    @asynccontextmanager
+    async def connection():
+        yield upstream
+
+    app = create_app(Settings(database=tmp_path / "db"))
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://caress"
+        ) as client,
+    ):
+        monkeypatch.setattr(app.state.service, "emby", connection)
+        for ident, kind, expected in [
+            ("movie", "Primary", 200),
+            ("movie", "Backdrop", 200),
+            ("person", "Primary", 200),
+            ("person", "Backdrop", 404),
+            ("outside", "Primary", 404),
+        ]:
+            response = await client.get(f"/api/images/{ident}/{kind}/0")
+            assert response.status_code == expected
+        assert upstream.image.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_person_scope_checks_returned_identity_not_only_query_filter():
+    def handler(request):
+        assert request.url.params["PersonIds"] == "person"
+        assert request.url.params["ParentId"] == "A"
+        return httpx.Response(200, json={"Items": [{"People": [{"Id": "other"}]}]})
+
+    client = EmbyClient(
+        EmbySettings(url="http://emby", library_ids=["A"]),
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        assert not await client.contains_person("person")
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_preparation_removes_partial_image_directory(
+    tmp_path, monkeypatch
+):
+    import caress.processing as processing
+    from caress.models import (
+        ArtworkCandidate,
+        Category,
+        Classification,
+        SourceId,
+        Status,
+    )
+
+    folder = tmp_path / "images"
+    folder.mkdir()
+    processor = WorkProcessor(Settings(database=tmp_path / "db"), None, folder)
+    metadata = SourceMetadata(
+        code="ABC-123",
+        title="title",
+        artwork=[
+            ArtworkCandidate(
+                url="https://source/cover",
+                source=SourceId.DMM,
+                role="cover",
+                referer="https://source",
+            )
+        ],
+    )
+    processor.scraper.scrape = AsyncMock(
+        return_value=SimpleNamespace(
+            status=Status.FOUND,
+            metadata=metadata,
+            selected_source=SourceId.DMM,
+            classification=Classification(category=Category.CENSORED),
+            results=[SimpleNamespace(source=SourceId.DMM, actor_ids={})],
+        )
+    )
+    processor.scraper.resolve_actors = AsyncMock(return_value=[])
+    processor.translator.metadata = AsyncMock(return_value=SimpleNamespace(errors=[]))
+    started = asyncio.Event()
+
+    async def fetch(*args):
+        started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(processing, "fetch_artwork", fetch)
+    waiter = asyncio.create_task(processor.prepare("ABC-123"))
+    try:
+        await started.wait()
+        assert list(folder.iterdir())
+        await processor.release("ABC-123", None)
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+        assert not list(folder.iterdir())
+    finally:
+        await processor.finish()
+        await processor.__aexit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_finish_drains_other_groups_when_directory_cleanup_fails(
+    tmp_path, monkeypatch
+):
+    import hashlib
+    import shutil
+
+    processor = object.__new__(WorkProcessor)
+    processor.temporary = tmp_path
+    processor.prepared = {}
+    folders = []
+
+    async def ready():
+        return SimpleNamespace(source="dmm")
+
+    for code in ["ABC-123", "XYZ-999"]:
+        folder = tmp_path / hashlib.sha256((code + "dmm").encode()).hexdigest()
+        folder.mkdir()
+        folders.append(folder)
+        processor.prepared[(code, None)] = asyncio.create_task(ready())
+    await asyncio.gather(*processor.prepared.values())
+    original = shutil.rmtree
+
+    def cleanup(path, *args, **kwargs):
+        if path == folders[0]:
+            raise OSError("cleanup failed")
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(shutil, "rmtree", cleanup)
+    with pytest.raises(OSError, match="cleanup failed"):
+        await processor.finish()
+    assert not processor.prepared and not folders[1].exists()

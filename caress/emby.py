@@ -199,6 +199,30 @@ class EmbyClient:
                 return True
         return False
 
+    async def contains_person(self, ident):
+        for library in self.settings.library_ids:
+            data = await self.request(
+                "GET",
+                "Items",
+                params={
+                    "ParentId": library,
+                    "Recursive": "true",
+                    "PersonIds": str(ident),
+                    "IncludeItemTypes": "Movie",
+                    "Fields": "People",
+                    "Limit": 1,
+                    "EnableImages": "false",
+                    "EnableUserData": "false",
+                },
+            )
+            if any(
+                str(person.get("Id")) == str(ident)
+                for item in data["Items"]
+                for person in item.get("People", [])
+            ):
+                return True
+        return False
+
     async def item(self, ident):
         async with self.user_lock:
             if self.user is None:
