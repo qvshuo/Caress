@@ -23,10 +23,7 @@ class Source:
     def __init__(self, client: Client, settings: Settings) -> None:
         self.client = client
         self.settings = settings
-        settings = settings.sites.get(self.id)
-        self.base = (
-            settings.base_url if settings and settings.base_url else self.default_url
-        ).rstrip("/")
+        self.base = self.default_url.rstrip("/")
 
     @property
     def rules(self) -> CatalogRules:
@@ -42,7 +39,7 @@ class Source:
             != urlparse(self.base).netloc.lower().removesuffix(":443")
         ):
             raise FetchError(
-                Status.UNSUPPORTED, f"URL must belong to the configured {self.id} origin"
+                Status.UNSUPPORTED, f"URL must belong to the {self.id} origin"
             )
         return value
 

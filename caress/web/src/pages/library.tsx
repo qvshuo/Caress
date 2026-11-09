@@ -143,8 +143,11 @@ export function Library({
   return (
     <div className="space-y-4">
       <div className="flex min-h-9 flex-wrap items-center justify-between gap-3">
-        <p className="text-sm tabular-nums text-muted-foreground">
-          {total} 部作品{selected.size ? ` · 已选 ${selected.size}` : ""}
+        <p className="text-base tabular-nums text-muted-foreground">
+          {total} 部作品
+          {selected.size > 0 && (
+            <span className="text-sm"> · 已选 {selected.size}</span>
+          )}
         </p>
         <RefreshButton
           onClick={refresh}

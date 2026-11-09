@@ -36,7 +36,7 @@ class Scraper:
         runtime=None,
     ):
         self.settings = settings or Settings()
-        self.client = client or WebClient(self.settings, runtime=runtime)
+        self.client = client or WebClient(runtime=runtime)
         self._owns_client = client is None
         self._source_locks = {}
         self.prefix_locks = {}

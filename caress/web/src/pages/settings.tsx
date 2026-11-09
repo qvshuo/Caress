@@ -27,15 +27,6 @@ export default function Settings({
   saved: (value: Preferences) => void;
   busy: boolean;
 }) {
-  function sourceUrls(settings: Preferences) {
-    return Object.fromEntries(
-      sources.map((source) => [
-        source,
-        settings.sites[source]?.base_url ?? settings.source_defaults[source],
-      ]),
-    ) as Record<Source, string>;
-  }
-  const [urls, setUrls] = useState(() => sourceUrls(initial));
   const [value, setValue] = useState(() => structuredClone(initial));
   const [routes, setRoutes] = useState(() =>
     Object.fromEntries(
@@ -114,23 +105,12 @@ export default function Settings({
         list.some((s) => !sources.includes(s as Source)) ||
         new Set(list).size !== list.length
       )
-        throw new Error(
-          `${categories[category]}来源无效：请用英文逗号分隔有效来源，且不要重复`,
-        );
+        throw new Error(`${categories[category]}来源无效`);
       if (category === "censored" && list.includes("avsox"))
-        throw new Error("AVSOX 不支持有码作品，请从有码来源中移除");
+        throw new Error("AVSOX 不支持有码作品");
       next[category] = list as Source[];
     }
-    const sites = Object.fromEntries(
-      sources
-        .filter(
-          (source) =>
-            urls[source].trim() &&
-            urls[source].trim() !== value.source_defaults[source],
-        )
-        .map((source) => [source, { base_url: urls[source].trim() }]),
-    );
-    return { ...value, sites, routes: next };
+    return { ...value, routes: next };
   }
   return (
     <form
@@ -146,7 +126,6 @@ export default function Settings({
           );
           if (signal.aborted) return "";
           setValue(next);
-          setUrls(sourceUrls(next));
           setRoutes(
             Object.fromEntries(
               Object.entries(next.routes).map(([key, route]) => [
@@ -335,37 +314,6 @@ export default function Settings({
             />
           </Field>
         ))}
-        <details className="group border-t pt-4">
-          <summary className="cursor-pointer text-sm">高级设置</summary>
-          <p className="mt-3 text-xs leading-5 text-muted-foreground">
-            可用来源：{sources.join(", ")}
-          </p>
-          <div className="mt-4 grid gap-4 sm:grid-cols-2">
-            <Field label="FlareSolverr 地址" wide>
-              <Input
-                type="url"
-                value={value.flaresolverr_url || ""}
-                onChange={(e) =>
-                  setValue((v) => ({
-                    ...v,
-                    flaresolverr_url: e.target.value || null,
-                  }))
-                }
-              />
-            </Field>
-            {sources.map((source) => (
-              <Field key={source} label={`${source} 地址`}>
-                <Input
-                  type="url"
-                  value={urls[source]}
-                  onChange={(event) =>
-                    setUrls((old) => ({ ...old, [source]: event.target.value }))
-                  }
-                />
-              </Field>
-            ))}
-          </div>
-        </details>
       </fieldset>
       <StickyActions>
         {message("save")}

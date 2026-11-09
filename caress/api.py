@@ -19,7 +19,6 @@ from .library import filter_works, navigation_order
 from .models import SourceId
 from .service import Service
 from .settings import Settings
-from .sources import SOURCES
 from .translation import Translator
 
 
@@ -42,9 +41,6 @@ def safe_settings(settings):
     data = settings.model_dump(mode="json")
     for name in ("emby", "translation"):
         data[name]["has_api_key"] = bool(data[name].pop("api_key"))
-    data["source_defaults"] = {
-        str(ident): source.default_url for ident, source in SOURCES.items()
-    }
     data["configured"] = bool(
         settings.emby.url and settings.emby.api_key and settings.emby.library_ids
     )
@@ -55,7 +51,6 @@ def updated_settings(current, body):
     data = current.model_dump(mode="json")
     body = dict(body)
     body.pop("configured", None)
-    body.pop("source_defaults", None)
     for key in ("emby", "translation"):
         if key in body:
             value = {**body[key]}

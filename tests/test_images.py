@@ -13,13 +13,21 @@ def image_bytes(color="red", size=(120, 90)):
     return output.getvalue()
 
 
-def test_crop_is_lossless_two_by_three_without_resampling():
-    data = image_bytes()
+@pytest.mark.parametrize(
+    "format,mode", [("PNG", "RGBA"), ("JPEG", "RGB"), ("JPEG", "CMYK"), ("WEBP", "RGB")]
+)
+def test_crop_is_lossless_two_by_three_without_resampling(format, mode):
+    output = BytesIO()
+    Image.new(mode, (120, 90), "red").save(output, format=format)
+    data = output.getvalue()
     result = crop_poster(data, (20, 0, 60, 90))
     saved = Image.open(BytesIO(result["content"]))
     assert saved.size == (60, 90)
     assert saved.format == "PNG"
-    assert saved.tobytes() == Image.open(BytesIO(data)).crop((20, 0, 80, 90)).tobytes()
+    source = Image.open(BytesIO(data))
+    if mode == "CMYK":
+        source = source.convert("RGB")
+    assert saved.tobytes() == source.crop((20, 0, 80, 90)).tobytes()
 
 
 @pytest.mark.parametrize(

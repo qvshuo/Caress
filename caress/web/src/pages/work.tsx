@@ -143,6 +143,7 @@ export default function Work({
                   onClick={() => setViewer(0)}
                 >
                   <ArtworkImage
+                    key={work.poster}
                     src={work.poster}
                     alt="封面"
                     className="w-full rounded-lg"
@@ -268,6 +269,7 @@ export default function Work({
                     <div className="mb-2 flex aspect-[2/3] w-full items-center justify-center overflow-hidden rounded-md bg-muted text-muted-foreground">
                       {person.image ? (
                         <ArtworkImage
+                          key={person.image}
                           src={person.image}
                           alt={person.name}
                           loading="lazy"

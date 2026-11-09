@@ -99,16 +99,6 @@ export interface Settings {
     has_api_key: boolean;
   };
   routes: Record<string, Source[]>;
-  source_defaults: Record<Source, string>;
-  sites: Partial<
-    Record<
-      Source,
-      {
-        base_url?: string | null;
-      }
-    >
-  >;
-  flaresolverr_url: string | null;
 }
 export type Box = [number, number, number, number];
 export interface Crop {

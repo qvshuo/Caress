@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 from weakref import WeakKeyDictionary
 
 import httpx
+from curl_cffi import CurlError
 from pydantic import JsonValue
 from scrapling.engines.toolbelt.custom import Response
 from scrapling.fetchers import FetcherSession
@@ -23,8 +24,8 @@ from scrapling.parser import Selector
 
 from .logging import report_progress
 from .models import SourceId, Status
-from .settings import Settings
 
+FLARESOLVERR_URL = "http://flaresolverr:8191/v1"
 REQUEST_TIMEOUT_SECONDS = 25
 NETWORK_RETRIES = 1
 RETRY_DELAY_SECONDS = 5
@@ -178,8 +179,7 @@ class WebClient:
 
     _budgets = WeakKeyDictionary()
 
-    def __init__(self, settings: Settings, *, runtime=None) -> None:
-        self.settings = settings
+    def __init__(self, *, runtime=None) -> None:
         self.runtime = runtime
         self._cooldowns = {}
         self._stack = AsyncExitStack()
@@ -227,7 +227,7 @@ class WebClient:
 
     @property
     def cooldowns(self):
-        # Read shared state at request boundaries so manual resets reach active batches.
+        # Batches and manual previews read the same cooldown state.
         return self.runtime.cooldowns() if self.runtime is not None else self._cooldowns
 
     def _save_cooldown(self, source, row):
@@ -289,11 +289,11 @@ class WebClient:
 
     async def __aexit__(self, *exc: Any) -> None:
         try:
-            if self._control and self.settings.flaresolverr_url:
+            if self._control:
                 for session in self._solver_sessions.values():
                     try:
                         await self._control.post(
-                            self.settings.flaresolverr_url,
+                            FLARESOLVERR_URL,
                             json={"cmd": "sessions.destroy", "session": session},
                             timeout=10,
                         )
@@ -467,13 +467,7 @@ class WebClient:
                         if method == "GET"
                         else await session.post(url, json=payload, **kwargs)
                     )
-                    page = Page(str(response.url), response.status, response.body)
-                    report_progress(
-                        "response", source=source, message=f"HTTP {page.status}"
-                    )
-                except (
-                    Exception
-                ) as exc:  # Scrapling wraps several curl transport exception types.
+                except CurlError as exc:
                     if attempt < NETWORK_RETRIES:
                         report_progress(
                             "retry", source=source, message="网络请求失败，准备重试"
@@ -483,6 +477,10 @@ class WebClient:
                     raise FetchError(
                         Status.NETWORK_ERROR, f"transport failed ({type(exc).__name__})"
                     ) from exc
+                page = Page(str(response.url), response.status, response.body)
+                report_progress(
+                    "response", source=source, message=f"HTTP {page.status}"
+                )
                 if is_cloudflare(page):
                     if binary:
                         raise FetchError(
@@ -537,14 +535,10 @@ class WebClient:
         raise AssertionError("unreachable")
 
     async def _solver_call(self, data: dict[str, JsonValue]) -> dict[str, JsonValue]:
-        if not self._control or not self.settings.flaresolverr_url:
-            raise FetchError(
-                Status.BLOCKED, "FlareSolverr is disabled or client is not open"
-            )
+        if not self._control:
+            raise FetchError(Status.BLOCKED, "FlareSolverr client is not open")
         try:
-            response = await self._control.post(
-                self.settings.flaresolverr_url, json=data
-            )
+            response = await self._control.post(FLARESOLVERR_URL, json=data)
             payload = response.json()
         except (httpx.HTTPError, ValueError) as exc:
             raise FetchError(

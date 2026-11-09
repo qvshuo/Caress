@@ -16,19 +16,17 @@ export function ArtworkImage({
   retryable = false,
   ...props
 }: ComponentProps<"img"> & { fallback?: ReactNode; retryable?: boolean }) {
-  const [request, setRequest] = useState({ src, nonce: "", failed: false });
-  const current =
-    request.src === src ? request : { src, nonce: "", failed: false };
-  if (current !== request) setRequest(current);
+  const [retry, setRetry] = useState(0);
+  const [failed, setFailed] = useState(false);
   let imageSrc = src;
-  if (current.nonce && typeof src === "string") {
+  if (retry > 0 && typeof src === "string") {
     const url = new URL(src, location.href);
     if (url.protocol === "http:" || url.protocol === "https:") {
-      url.searchParams.set("retry", current.nonce);
+      url.searchParams.set("retry", String(retry));
       imageSrc = url.href;
     }
   }
-  if (src && current.failed)
+  if (src && failed)
     return (
       <span
         role="img"
@@ -46,13 +44,10 @@ export function ArtworkImage({
               <Button
                 size="sm"
                 variant="ghost"
-                onClick={() =>
-                  setRequest({
-                    src,
-                    nonce: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-                    failed: false,
-                  })
-                }
+                onClick={() => {
+                  setFailed(false);
+                  setRetry((value) => Math.max(value + 1, Date.now()));
+                }}
               >
                 重试
               </Button>
@@ -68,7 +63,7 @@ export function ArtworkImage({
       alt={alt}
       className={className}
       onError={(event) => {
-        setRequest({ ...current, failed: true });
+        setFailed(true);
         props.onError?.(event);
       }}
     />

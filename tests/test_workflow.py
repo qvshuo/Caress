@@ -603,18 +603,39 @@ def test_navigation_order_uses_current_filter():
     ]
 
 
-def test_settings_returns_real_source_defaults_without_storing_them():
+def test_settings_public_format_roundtrips_without_extra_configuration(tmp_path):
     from caress.api import safe_settings, updated_settings
-    from caress.sources import SOURCES
 
-    settings = Settings()
+    settings = Settings(
+        database=tmp_path / "db",
+        emby={"url": "http://emby", "api_key": "secret", "library_ids": ["lib"]},
+    )
     public = safe_settings(settings)
-    assert public["source_defaults"] == {
-        str(key): factory.default_url for key, factory in SOURCES.items()
-    }
+    assert set(public) == {"configured", "emby", "translation", "routes"}
+    assert "api_key" not in public["emby"]
     saved = updated_settings(settings, public)
-    assert "source_defaults" not in saved.model_dump()
-    assert saved == settings
+    saved.save()
+    assert Settings.load(settings.database) == settings
+
+
+@pytest.mark.parametrize(
+    "invalid", ["missing", "empty", "duplicate", "unknown", "avsox"]
+)
+def test_invalid_source_routes_are_rejected(invalid):
+    from pydantic import ValidationError
+
+    routes = Settings().model_dump()["routes"]
+    if invalid == "missing":
+        del routes["unknown"]
+    else:
+        routes["censored"] = {
+            "empty": [],
+            "duplicate": ["dmm", "dmm"],
+            "unknown": ["invalid"],
+            "avsox": ["avsox"],
+        }[invalid]
+    with pytest.raises(ValidationError):
+        Settings(routes=routes)
 
 
 @pytest.mark.asyncio

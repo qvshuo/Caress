@@ -17,31 +17,6 @@ from pydantic import (
 from .models import SourceId
 
 
-class SiteSettings(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    base_url: str | None = None
-
-    @field_validator("base_url")
-    @classmethod
-    def address(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        parsed = urlparse(value)
-        if (
-            value != value.strip()
-            or parsed.scheme != "https"
-            or not parsed.hostname
-            or parsed.username
-            or parsed.password
-            or parsed.query
-            or parsed.fragment
-        ):
-            raise ValueError(
-                "source address requires an HTTPS URL without credentials or query"
-            )
-        return value.rstrip("/")
-
-
 class ApiSettings(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     base_url: str = "https://jdforrepam.com"
@@ -104,8 +79,6 @@ class EmbySettings(BaseModel):
 
 class Settings(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    flaresolverr_url: str | None = "http://flaresolverr:8191/v1"
-    sites: dict[SourceId, SiteSettings] = Field(default_factory=dict)
     javdb_api: ClassVar[ApiSettings] = ApiSettings()
     database: Path = Field(default=Path("/data/caress.sqlite3"), exclude=True)
     emby: EmbySettings = Field(default_factory=EmbySettings)
@@ -145,29 +118,15 @@ class Settings(BaseModel):
         }
     )
 
-    @field_validator("flaresolverr_url")
-    @classmethod
-    def solver_address(cls, value: str | None) -> str | None:
-        value = value.strip() if value else None
-        if not value:
-            return None
-        if not value.startswith(("http://", "https://")):
-            raise ValueError("FlareSolverr requires an HTTP or HTTPS address")
-        return value
-
     @model_validator(mode="after")
     def validate_routes(self) -> Settings:
         if set(self.routes) != {"censored", "uncensored", "fc2", "unknown"}:
-            raise ValueError("routes must contain exactly the four catalog categories")
-        self.routes["censored"] = [
-            source for source in self.routes["censored"] if source != SourceId.AVSOX
-        ]
-        for name in ("censored", "uncensored", "fc2", "unknown"):
-            route = self.routes.get(name, [])
-            if not route or len(set(route)) != len(route):
-                raise ValueError(
-                    f"route {name} must be nonempty without duplicate sources"
-                )
+            raise ValueError("来源分类不完整")
+        for category, route in self.routes.items():
+            if not route or len(route) != len(set(route)):
+                raise ValueError(f"{category} 来源为空或重复")
+        if SourceId.AVSOX in self.routes["censored"]:
+            raise ValueError("AVSOX 不支持有码作品")
         return self
 
     def save(self):

@@ -7,28 +7,12 @@ const settings = {
     model: "",
     has_api_key: false,
   },
-  sites: {},
-  source_defaults: Object.fromEntries(
-    [
-      "dmm",
-      "javdb",
-      "javbus",
-      "fc2",
-      "avsox",
-      "airav",
-      "1pondo",
-      "caribbeancom",
-      "heyzo",
-      "avbase",
-    ].map((source) => [source, `https://${source}.example`]),
-  ),
   routes: {
     censored: ["javdb", "javbus"],
     uncensored: ["javdb"],
     fc2: ["fc2"],
     unknown: ["javdb"],
   },
-  flaresolverr_url: null,
 };
 const work = {
   id: "1",
@@ -329,12 +313,20 @@ test("settings align with works and configured secrets never submit the mask", a
   await expect(key).toHaveValue("********");
   const form = await page.locator("form").boundingBox();
   expect(Math.abs(form!.width - table!.width)).toBeLessThan(3);
-  await page.getByText("高级设置", { exact: true }).click();
-  await expect(page.getByLabel("dmm 地址", { exact: true })).toHaveValue(
-    "https://dmm.example",
-  );
+  await expect(page.locator("legend")).toHaveText([
+    "Emby",
+    "翻译",
+    "来源优先级",
+  ]);
+  await expect(page.locator("details")).toHaveCount(0);
   await page.getByRole("button", { name: "保存", exact: true }).click();
   await expect.poll(() => body).toBeDefined();
+  expect(Object.keys(body!).sort()).toEqual([
+    "configured",
+    "emby",
+    "routes",
+    "translation",
+  ]);
   expect((body!.emby as Record<string, unknown>).api_key).toBeUndefined();
   expect(JSON.stringify(body)).not.toContain("********");
 });
@@ -741,4 +733,34 @@ test("image retry bypasses failed cache and a new URL starts cleanly", async ({
   ).toBeVisible();
   expect(requests.at(-1)!.searchParams.get("tag")).toBe("new");
   expect(requests.at(-1)!.searchParams.has("retry")).toBe(false);
+});
+
+test("work count hierarchy and invalid source order", async ({ page }) => {
+  await page.goto("/");
+  const count = page.getByText("1 部作品", { exact: true });
+  await expect(count).toBeVisible();
+  expect(await count.evaluate((e) => getComputedStyle(e).fontSize)).toBe(
+    "16px",
+  );
+  await page.getByRole("checkbox", { name: "选择本页" }).click();
+  const selected = page.getByText(" · 已选 1", { exact: true });
+  expect(await selected.evaluate((e) => getComputedStyle(e).fontSize)).toBe(
+    "14px",
+  );
+  await page
+    .getByRole("navigation")
+    .getByRole("button", { name: "设置" })
+    .click();
+  let saves = 0;
+  await page.route("**/api/settings", (route) => {
+    saves++;
+    return route.fulfill({ json: settings });
+  });
+  await page.getByLabel("有码", { exact: true }).fill("avsox");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(page.getByRole("alert")).toHaveText("AVSOX 不支持有码作品");
+  await page.getByLabel("有码", { exact: true }).fill("dmm,dmm");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(page.getByRole("alert")).toHaveText("有码来源无效");
+  expect(saves).toBe(0);
 });

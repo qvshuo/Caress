@@ -32,19 +32,18 @@ export default function CropEditor({
 }) {
   const [crop, setCrop] = useState<Crop | null>(null),
     [selection, setSelection] = useState<PercentCrop>(),
-    [pending, setPending] = useState(true),
+    [pending, setPending] = useState<"source" | "preview" | null>("source"),
     [error, setError] = useState(""),
     [saving, setSaving] = useState(false);
   const session = useRef(""),
     version = useRef(0);
   const base = `works/${id}/crop`;
   const active = useRef(true);
-  const [loadingSource, setLoadingSource] = useState(true);
+  const loadingSource = pending === "source";
   const acquire = useCallback(
     async (fetchSource = false) => {
       const ticket = ++version.current;
-      setPending(true);
-      setLoadingSource(true);
+      setPending("source");
       setError("");
       const query = new URLSearchParams();
       if (source) query.set("source", source);
@@ -65,8 +64,7 @@ export default function CropEditor({
           setError(e instanceof Error ? e.message : "原图获取失败");
       } finally {
         if (active.current && ticket === version.current) {
-          setPending(false);
-          setLoadingSource(false);
+          setPending(null);
         }
       }
     },
@@ -85,7 +83,7 @@ export default function CropEditor({
   async function preview(box?: Crop["box"], center = false) {
     if (!crop) return;
     const ticket = ++version.current;
-    setPending(true);
+    setPending("preview");
     setError("");
     try {
       const value = await api<Crop>(`${base}/preview`, "POST", {
@@ -105,7 +103,7 @@ export default function CropEditor({
       if (ticket === version.current)
         setError(e instanceof Error ? e.message : "裁剪失败");
     } finally {
-      if (ticket === version.current) setPending(false);
+      if (ticket === version.current) setPending(null);
     }
   }
   const [frame, setFrame] = useState<HTMLDivElement | null>(null);
@@ -148,7 +146,7 @@ export default function CropEditor({
         <div className="flex flex-wrap items-center gap-2">
           <Button
             variant="outline"
-            disabled={!crop || pending || saving || busy}
+            disabled={!crop || !!pending || saving || busy}
             onClick={() => void preview()}
           >
             <ScanFace className="size-4" />
@@ -159,7 +157,7 @@ export default function CropEditor({
             size="icon"
             aria-label="重置选框"
             title="重置选框"
-            disabled={!crop || pending || saving || busy}
+            disabled={!crop || !!pending || saving || busy}
             onClick={() => void preview(undefined, true)}
           >
             <RotateCcw />
@@ -169,7 +167,7 @@ export default function CropEditor({
             className="ml-auto"
             aria-label="重新获取原图"
             aria-busy={loadingSource}
-            disabled={saving || busy || pending}
+            disabled={saving || busy || !!pending}
             onClick={() => void acquire(true)}
           >
             <RefreshCw
@@ -191,7 +189,7 @@ export default function CropEditor({
                 disabled={saving || busy || loadingSource}
                 onChange={(_, p) => {
                   version.current++;
-                  setPending(true);
+                  setPending("preview");
                   setSelection(p);
                 }}
                 onComplete={(_, p) =>
@@ -264,7 +262,7 @@ export default function CropEditor({
           </Button>
           <Button
             aria-busy={saving}
-            disabled={!crop || pending || saving || busy || !!error}
+            disabled={!crop || !!pending || saving || busy || !!error}
             onClick={() => {
               if (!crop) return;
               setSaving(true);

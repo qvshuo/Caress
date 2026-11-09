@@ -84,14 +84,13 @@ def test_direct_numeric_and_fc2_families_are_never_persisted_as_prefixes(tmp_pat
     assert CatalogRules.load(path).model_dump() == before
 
 
-def test_cooldowns_are_keyed_by_source_and_hostname_and_rebuild(store, tmp_path):
+def test_cooldowns_are_keyed_by_source_and_hostname_and_rebuild(store):
     from caress.http import FetchError, WebClient
 
-    settings = Settings(database=tmp_path / "caress.sqlite3")
-    client = WebClient(settings, runtime=store)
+    client = WebClient(runtime=store)
     key = client.cooldown_key(SourceId.JAVDB, "https://one.invalid/a")
     client.cool_down(key, 60, "blocked")
-    rebuilt = WebClient(settings, runtime=store)
+    rebuilt = WebClient(runtime=store)
     with pytest.raises(FetchError):
         rebuilt.check_cooldown(key)
     rebuilt.check_cooldown(
@@ -123,7 +122,7 @@ async def test_separate_scrapers_share_whole_source_work_gate(tmp_path):
                 metadata=SourceMetadata(code=request.code, title="source"),
             )
 
-    scrapers = [Scraper(settings, client=WebClient(settings)) for _ in range(2)]
+    scrapers = [Scraper(settings, client=WebClient()) for _ in range(2)]
     for scraper in scrapers:
         scraper.sources = {SourceId.DMM: Stub()}
     await asyncio.gather(*(scraper.scrape("TESTABC-123") for scraper in scrapers))
@@ -141,7 +140,7 @@ async def test_pacing_is_shared_between_clients_but_not_within_one_work(monkeypa
         async def get(self, url, **kwargs):
             return SimpleNamespace(url=url, status=200, body=b"{}", headers={})
 
-    batch, preview = WebClient(Settings()), WebClient(Settings())
+    batch, preview = WebClient(), WebClient()
     batch._session = AsyncMock(return_value=Session())
     preview._session = AsyncMock(return_value=Session())
     sleep = AsyncMock()
@@ -167,7 +166,7 @@ async def test_images_share_one_second_budget_by_hostname_across_ports(monkeypat
         async def get(self, url, **kwargs):
             return SimpleNamespace(url=url, status=200, body=b"image", headers={})
 
-    first, second = WebClient(Settings()), WebClient(Settings())
+    first, second = WebClient(), WebClient()
     first._session = AsyncMock(return_value=Session())
     second._session = AsyncMock(return_value=Session())
     sleep = AsyncMock()
@@ -213,3 +212,85 @@ async def test_identity_mismatch_tries_next_source_and_stops(tmp_path):
     assert calls == [SourceId.DMM, SourceId.JAVDB]
     assert result.results[0].status == Status.IDENTITY_MISMATCH
     assert result.selected_source == SourceId.JAVDB
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["transport", "programming", "response"])
+async def test_only_curl_transport_failures_are_retried(monkeypatch, failure):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from curl_cffi import CurlError
+
+    from caress.http import FetchError, WebClient
+
+    problem = (
+        CurlError("connection failed") if failure == "transport" else TypeError("bug")
+    )
+    response = SimpleNamespace(
+        url="https://example.invalid/", status=200, body=b"{}", headers={}
+    )
+    if failure == "response":
+        response = object()
+    session = SimpleNamespace(
+        get=AsyncMock(
+            side_effect=problem if failure != "response" else None,
+            return_value=response,
+        )
+    )
+    client = WebClient()
+    client._session = AsyncMock(return_value=session)
+    sleep = AsyncMock()
+    monkeypatch.setattr("caress.http.asyncio.sleep", sleep)
+    expected = (
+        FetchError
+        if failure == "transport"
+        else AttributeError
+        if failure == "response"
+        else TypeError
+    )
+    with pytest.raises(expected):
+        await client.get(SourceId.DMM, "https://example.invalid/")
+    assert session.get.await_count == (2 if failure == "transport" else 1)
+    assert sleep.await_count == (1 if failure == "transport" else 0)
+
+
+@pytest.mark.asyncio
+async def test_solver_uses_builtin_address_and_destroys_session():
+    from unittest.mock import AsyncMock
+
+    import httpx
+
+    from caress.http import FLARESOLVERR_URL, WebClient
+
+    commands = []
+
+    def handler(request):
+        import json
+
+        assert str(request.url) == FLARESOLVERR_URL
+        command = json.loads(request.content)
+        commands.append(command["cmd"])
+        return httpx.Response(
+            200,
+            json={
+                "status": "ok",
+                "solution": {
+                    "url": "https://example.invalid/",
+                    "status": 200,
+                    "response": "<title>Work</title>",
+                },
+            },
+        )
+
+    client = WebClient()
+    async with client:
+        await client._control.aclose()
+        client._control = await client._stack.enter_async_context(
+            httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        )
+        client._session = AsyncMock()
+        page = await client.get(SourceId.DMM, "https://example.invalid/", rendered=True)
+        assert page.fetcher == "flaresolverr" and page.status == 200
+        client._session.assert_not_awaited()
+    assert commands == ["sessions.create", "request.get", "sessions.destroy"]
