@@ -453,13 +453,17 @@ test("portraits reserve space and gallery supports buttons and keyboard", async 
   await page.getByRole("button", { name: "查看图片 1" }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByText("2 / 3", { exact: true })).toBeVisible();
+  const close = dialog.getByRole("button", { name: "关闭", exact: true });
+  const closeBox = await close.boundingBox();
+  expect(closeBox!.width).toBeGreaterThanOrEqual(36);
+  expect(closeBox!.height).toBeGreaterThanOrEqual(36);
   await page.evaluate(() =>
     window.dispatchEvent(
       new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }),
     ),
   );
   await expect(dialog.getByText("2 / 3", { exact: true })).toBeVisible();
-  await dialog.getByRole("button", { name: "关闭", exact: true }).focus();
+  await close.focus();
   await page.keyboard.press("ArrowLeft");
   await expect(dialog.getByText("2 / 3", { exact: true })).toBeVisible();
   await dialog.getByRole("button", { name: "下一张" }).click();

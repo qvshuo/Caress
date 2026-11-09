@@ -186,72 +186,73 @@ def crop_poster(
 
     if len(data) > 32 * 1024 * 1024:
         raise ValueError("artwork exceeds 32 MiB")
-    with Image.open(BytesIO(data)) as source:
-        if source.width * source.height > 40_000_000:
+    with Image.open(BytesIO(data)) as image:
+        if image.width * image.height > 40_000_000:
             raise ValueError("image exceeds 40 megapixels")
-        ImageOps.exif_transpose(source, in_place=True)
-        image = source.copy()
-    if image.mode == "CMYK":
-        image = image.convert("RGB")
-    width, height = image.size
-    faces = []
-    if box is None and not center:
-        import cv2
-        import numpy as np
+        ImageOps.exif_transpose(image, in_place=True)
+        if image.mode == "CMYK":
+            image = image.convert("RGB")
+        width, height = image.size
+        faces = []
+        if box is None and not center:
+            import cv2
+            import numpy as np
 
-        scale = min(1, 960 / max(width, height))
-        small = image.resize(
-            (max(32, round(width * scale)), max(32, round(height * scale)))
-        )
-        frame = cv2.cvtColor(np.asarray(small.convert("RGB")), cv2.COLOR_RGB2BGR)
-        try:
-            detector = cv2.FaceDetectorYN.create(
-                str(Path(__file__).parent / "data/yunet.onnx"),
-                "",
-                frame.shape[1::-1],
-                0.75,
-                0.3,
-                5000,
+            scale = min(1, 960 / max(width, height))
+            small = image.resize(
+                (max(32, round(width * scale)), max(32, round(height * scale)))
             )
-            _, detected = detector.detect(frame)
-        except cv2.error as exc:
-            raise ValueError("face detection failed; check the YuNet model") from exc
-        if detected is not None:
-            sx, sy = width / frame.shape[1], height / frame.shape[0]
-            faces = [
-                [
-                    float(f[0] * sx),
-                    float(f[1] * sy),
-                    float(f[2] * sx),
-                    float(f[3] * sy),
-                    float(f[14]),
+            frame = cv2.cvtColor(np.asarray(small.convert("RGB")), cv2.COLOR_RGB2BGR)
+            try:
+                detector = cv2.FaceDetectorYN.create(
+                    str(Path(__file__).parent / "data/yunet.onnx"),
+                    "",
+                    frame.shape[1::-1],
+                    0.75,
+                    0.3,
+                    5000,
+                )
+                _, detected = detector.detect(frame)
+            except cv2.error as exc:
+                raise ValueError(
+                    "face detection failed; check the YuNet model"
+                ) from exc
+            if detected is not None:
+                sx, sy = width / frame.shape[1], height / frame.shape[0]
+                faces = [
+                    [
+                        float(f[0] * sx),
+                        float(f[1] * sy),
+                        float(f[2] * sx),
+                        float(f[3] * sy),
+                        float(f[14]),
+                    ]
+                    for f in detected
+                    if f[2] > 0 and f[3] > 0
                 ]
-                for f in detected
-                if f[2] > 0 and f[3] > 0
-            ]
-    box = box or crop_box(width, height, faces)
-    x, y, w, h = box
-    if (
-        min(x, y) < 0
-        or min(w, h) < 1
-        or x + w > width
-        or y + h > height
-        or w * 3 != h * 2
-    ):
-        raise ValueError("crop must be an in-bounds 2:3 rectangle")
-    cropped = image.crop((x, y, x + w, y + h))
-    output = PngOutput()
-    # Preserve the selected source pixels; JPEG/WebP encoding would add loss.
-    cropped.save(output, format="PNG")
-    preview = BytesIO()
-    cropped.thumbnail((640, 960))
-    cropped.save(preview, format="PNG")
-    return {
-        "content": output.getvalue(),
-        "preview": preview.getvalue(),
-        "box": box,
-        "faces": faces,
-        "width": width,
-        "height": height,
-        "extension": ".png",
-    }
+        box = box or crop_box(width, height, faces)
+        x, y, w, h = box
+        if (
+            min(x, y) < 0
+            or min(w, h) < 1
+            or x + w > width
+            or y + h > height
+            or w * 3 != h * 2
+        ):
+            raise ValueError("crop must be an in-bounds 2:3 rectangle")
+        cropped = image.crop((x, y, x + w, y + h))
+        output = PngOutput()
+        # Preserve the selected source pixels; JPEG/WebP encoding would add loss.
+        cropped.save(output, format="PNG")
+        preview = BytesIO()
+        cropped.thumbnail((640, 960))
+        cropped.save(preview, format="PNG")
+        return {
+            "content": output.getvalue(),
+            "preview": preview.getvalue(),
+            "box": box,
+            "faces": faces,
+            "width": width,
+            "height": height,
+            "extension": ".png",
+        }
