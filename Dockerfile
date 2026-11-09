@@ -13,7 +13,7 @@ FROM python:3.15.2-slim-trixie
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /app
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt && useradd -u 1000 caress && mkdir -p /data /media && chown caress:caress /data
+RUN pip install --no-cache-dir -r requirements.txt && useradd -u 1000 caress && mkdir -p /data && chown caress:caress /data
 COPY --from=backend --chown=1000:1000 /backend/caress ./caress
 COPY --from=frontend --chown=1000:1000 /build/dist ./caress/web/dist
 RUN python -c "from caress.images import validate_resources; from caress.emby import EmbyClient; validate_resources()"

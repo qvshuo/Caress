@@ -8,14 +8,14 @@ from ..http import FetchError, Page
 from ..models import (
     Actor,
     Candidate,
-    Metadata,
     ScrapeRequest,
     SourceId,
+    SourceMetadata,
     SourceResult,
     Status,
 )
-from .parsing import artwork, parse_date, text
 from .base import Source
+from .parsing import artwork, parse_date, text
 
 
 class AVbase(Source):
@@ -97,7 +97,7 @@ class AVbase(Source):
         ]
         return self.found(
             request,
-            Metadata(
+            SourceMetadata(
                 code=work["work_id"],
                 title=work["title"],
                 original_title=work["title"],

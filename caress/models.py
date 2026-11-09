@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 from enum import StrEnum
-from typing import Any, Literal
+from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -58,21 +59,14 @@ class Actor(BaseModel):
     name: str
 
 
-class ActorMapping(BaseModel):
-    original_name: str
-    name: str
-    actor_id: str | None = None
-    type: int | None = None
-
-
-class Artwork(BaseModel):
+class ArtworkCandidate(BaseModel):
     url: str
     role: Literal["cover", "poster", "sample"]
     source: SourceId
     referer: str
 
 
-class Metadata(BaseModel):
+class WorkMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
     code: str
     title: str
@@ -86,7 +80,12 @@ class Metadata(BaseModel):
     actors: list[Actor] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     genres: list[str] = Field(default_factory=list)
-    artwork: list[Artwork] = Field(default_factory=list)
+
+
+class SourceMetadata(WorkMetadata):
+    """Unprocessed source fields and artwork candidates; never final work output."""
+
+    artwork: list[ArtworkCandidate] = Field(default_factory=list)
 
 
 class Candidate(BaseModel):
@@ -98,24 +97,14 @@ class Candidate(BaseModel):
 
 class SourceResult(BaseModel):
     actor_ids: dict[str, str] = Field(default_factory=dict)
-    translated_fields: list[str] = Field(default_factory=list)
-    original_fields: dict[str, Any] = Field(default_factory=dict)
     elapsed_seconds: float | None = None
     source: SourceId
     requested_code: str
     status: Status
-    metadata: Metadata | None = None
+    metadata: SourceMetadata | None = None
     message: str | None = None
     warnings: list[str] = Field(default_factory=list)
     fetched_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-
-    def report(self) -> dict:
-        metadata = self.metadata
-        return {"source": self.source.value, "status": self.status.value, "message": self.message,
-                "elapsed_seconds": self.elapsed_seconds, "fetched_at": self.fetched_at.isoformat() if self.fetched_at else None,
-                "has_plot": bool(metadata and metadata.plot),
-                "has_cover": bool(metadata and any(a.role in ("cover", "poster") for a in metadata.artwork)),
-                "sample_count": sum(a.role == "sample" for a in metadata.artwork) if metadata else 0}
 
 
 class ScrapeRequest(BaseModel):
@@ -130,19 +119,15 @@ class ScrapeResult(BaseModel):
     code: str
     status: Status
     classification: Classification
-    metadata: Metadata | None = None
+    metadata: SourceMetadata | None = None
     selected_source: SourceId | None = None
     results: list[SourceResult] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
 
-class SourceVariant(SourceResult):
-    fetched_at: datetime | None = None
-    translation_fingerprints: dict[str, str] = Field(default_factory=dict)
-    translation_errors: list[dict] = Field(default_factory=list)
-    processed_fields: dict[str, Any] = Field(default_factory=dict)
-    actor_mappings: list[ActorMapping] = Field(default_factory=list)
-    mapping_fingerprint: str = ""
-    title_text: str | None = None
-
-EDITABLE_FIELDS = ("title", "original_title", "plot", "release_date", "year", "actors", "directors", "studio", "genres", "tags")
+class MediaFile(BaseModel):
+    path: Path
+    filename: str
+    subtitles: bool = False
+    uncensored: bool = False
+    part: int | None = None

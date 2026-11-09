@@ -10,22 +10,13 @@ from urllib.parse import quote, urlsplit
 import httpx
 
 from .actors import comparison_name
+from .http import NETWORK_RETRIES, REQUEST_TIMEOUT_SECONDS, RETRY_DELAY_SECONDS
 from .images import validate_image
 from .logging import report_progress
-from .storage import atomic_write
+from .storage import atomic_write, file_transaction
 
 
-def actor_image_index(output: Path) -> dict[str, Path]:
-    folder = output.resolve() / "actors"
-    index = {}
-    if folder.is_dir() and not folder.is_symlink():
-        for image in folder.iterdir():
-            if image.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".gif"} and image.is_file() and not image.is_symlink():
-                index.setdefault(image.stem, image)
-    return index
-
-
-def actor_image(output: Path, name: str, *, index=None) -> Path | None:
+def actor_image(output: Path, name: str) -> Path | None:
     folder = output.resolve() / "actors"
     if (
         not name
@@ -36,8 +27,6 @@ def actor_image(output: Path, name: str, *, index=None) -> Path | None:
         raise ValueError("invalid actor name")
     if folder.is_symlink():
         raise ValueError("actor image directory must not be a symlink")
-    if index is not None:
-        return index.get(name)
     for suffix in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
         image = folder / (name + suffix)
         if image.is_file() and not image.is_symlink():
@@ -60,10 +49,10 @@ class Gfriends:
 
     base = "https://raw.githubusercontent.com/gfriends/gfriends/master/"
 
-    def __init__(self, settings, names, output: Path, client=None):
-        self.settings, self.names, self.output = settings, names, output
+    def __init__(self, names, output: Path, client=None):
+        self.names, self.output = names, output
         self.client = client or httpx.AsyncClient(
-            timeout=settings.timeout_seconds, follow_redirects=True, trust_env=False
+            timeout=REQUEST_TIMEOUT_SECONDS, follow_redirects=True, trust_env=False
         )
         self.owns_client = client is None
         self.index = None
@@ -80,7 +69,7 @@ class Gfriends:
             await self.client.aclose()
 
     async def document(self, url: str, limit: int) -> bytes:
-        for attempt in range(self.settings.retries + 1):
+        for attempt in range(NETWORK_RETRIES + 1):
             await asyncio.sleep(max(0, 1 - (time.monotonic() - self.last_request)))
             self.last_request = time.monotonic()
             try:
@@ -94,11 +83,13 @@ class Gfriends:
                     return bytes(data)
             except httpx.HTTPStatusError as exc:
                 if exc.response.status_code < 500 and exc.response.status_code != 429:
-                    raise ValueError(f"gfriends HTTP {exc.response.status_code}") from None
+                    raise ValueError(
+                        f"gfriends HTTP {exc.response.status_code}"
+                    ) from None
             except httpx.RequestError:
                 pass
-            if attempt < self.settings.retries:
-                await asyncio.sleep(self.settings.retry_delay_seconds)
+            if attempt < NETWORK_RETRIES:
+                await asyncio.sleep(RETRY_DELAY_SECONDS)
         raise ValueError("gfriends request failed")
 
     def select(self, name: str, kind: int | None = None) -> str | None:
@@ -140,7 +131,9 @@ class Gfriends:
                 )
         return None
 
-    async def save(self, actors, replace: bool = False, *, kind: int | None = None) -> list[dict]:
+    async def save(
+        self, actors, replace: bool = False, *, kind: int | None = None
+    ) -> list[dict]:
         async with self.save_lock:
             return await self._save(actors, replace, kind)
 
@@ -162,7 +155,11 @@ class Gfriends:
                 report_progress("portraits", source="gfriends")
                 if self.index is None and self.index_error is None:
                     try:
-                        tree = json.loads(await self.document(self.base + "Filetree.json", 16 * 1024 * 1024))
+                        tree = json.loads(
+                            await self.document(
+                                self.base + "Filetree.json", 16 * 1024 * 1024
+                            )
+                        )
                         if not isinstance(tree, dict):
                             raise ValueError("invalid gfriends file tree")
                         self.index = tree["Content"]
@@ -176,17 +173,25 @@ class Gfriends:
                 if not url:
                     records.append({"name": name, "status": "not_found"})
                     self.completed[(name, replace, kind)] = records[-1]
-                    report_progress("portraits", "not_found", source="gfriends", message=name)
+                    report_progress(
+                        "portraits", "not_found", source="gfriends", message=name
+                    )
                     continue
-                image = await asyncio.to_thread(validate_image, await self.document(url, 32 * 1024 * 1024))
+                image = await asyncio.to_thread(
+                    validate_image, await self.document(url, 32 * 1024 * 1024)
+                )
                 extension = ".jpg" if image.format == "jpeg" else "." + image.format
                 target = self.output / "actors" / (name + extension)
-                atomic_write(target, image.content)
-                if existing and existing != target:
-                    existing.unlink()
+                with file_transaction(self.output / "actors"):
+                    atomic_write(target, image.content)
+                    if existing and existing != target:
+                        existing.unlink()
                 records.append({"name": name, "status": "saved"})
             except (ValueError, OSError) as exc:
                 records.append({"name": name, "status": "error", "error": str(exc)})
-            self.completed[(name, replace, kind)] = records[-1]
-            report_progress("portraits", records[-1]["status"], source="gfriends", message=name)
+            if records[-1]["status"] != "error":
+                self.completed[(name, replace, kind)] = records[-1]
+            report_progress(
+                "portraits", records[-1]["status"], source="gfriends", message=name
+            )
         return records

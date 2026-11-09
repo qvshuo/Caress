@@ -1,39 +1,32 @@
 # Caress
 
-## Runtime and delivery
-- Use Docker Compose for builds, deployment and restarts. Python 3.15/pip; local checks use `uv run --no-project --python 3.15`. Keep environments, caches, tests, fixtures, checks and backups outside the repository.
-- `caress/` owns sources, processing, SQLite, tasks, REST API and Emby synchronization. `caress/web/` uses strict React/TypeScript, Tailwind CSS 4, shared shadcn/ui and Bun. Python serves the built static frontend; production has no frontend runtime.
-- `scraper.py` coordinates sources; `sources/parsing.py` owns source parsing; `portraits.py` owns gfriends; `emby.py` owns exact-path association and synchronization. Web `pages/` owns routes, `components/` shared renderers, `hooks/` shared state, and `lib/` transport, labels, types and utilities.
-- Use Caress for branding and lowercase caress for packages and protocol identifiers. Python and web versions are 1.6.2. Publish source releases from matching version tags. Track `bun.lock`, used YuNet model and license. No built binaries, dist, caches, real settings, databases, logs or screenshots in Git. Ship only `docker-compose.example.yml`.
+## 产品与数据契约
+- Caress 是 Emby 的 JAV 刮削和图像加工工具。Emby 是唯一媒体库、元数据和图片事实来源；列表分页读取 Emby，详情按 Item ID 最新读取，离线必须报连接错误。
+- SQLite `/data/caress.sqlite3` 只保存设置、番号/演员规则、服务器身份与 Item ID 的处理记录、来源冷却和当前批次。不得重新引入完整作品副本、本地媒体清单、来源候选、字段溯源、翻译指纹或阶段历史。
+- 身份使用 Emby 服务器 ID、Item ID、创建时间及规范番号。不得猜测关联；视频/STRM 按文件名主干识别，只剥离末尾 `-C`、`-U`、`-UC`、`-cdN`，忽略大小写。播放 URL 和父目录不参与番号识别。
+- 普通刮削跳过有成功记录的 Item；失败重试执行完整流程；强制重刮必须明确确认。手动裁剪是独立写入，不改变来源或成功记录。
+- 写前读完整 Item，只更新来源实际返回的受管字段，保留无关 Provider ID、人物类型、标签、系统和用户字段。不主动启用或解除 LockData/LockedFields。写后回读验证；HTTP 成功不代表持久化，不得声称未发生的回滚。
+- Primary 可替换；背景按内容去重追加，不猜测旧图归属，不删除未知旧图。人物头像只在身份可靠且 Emby 无头像时获取。原图、裁剪图、头像均只临时处理，最终保存到 Emby。
 
-## Data contract
-- SQLite at `/data/caress.sqlite3` is the sole structured runtime source, including settings, works, media, actors/rules, tasks, candidates, selections, provenance, cooldowns and sync states. Bundled JSON is initialization data only; successful lookups merge transactionally into SQLite.
-- Local files contain images only, under `/data/images`, grouped by standard code; portraits are separate. Media is read-only. No plugins, NFO, migrations, compatibility aliases, ORM, general plugin framework or cross-work translation cache.
-- Identify media by filename stem only. Strip only case-insensitive terminal `-C`, `-U`, `-UC`, `-cdN`; retain original filenames, paths and suffix attributes. No fuzzy matching, other suffix cleanup or renaming. Keep existing recognized media extensions. Group all versions and parts by standard code, with independent media IDs and Emby sync states. Invalid filenames remain visible and cannot be scraped.
-- Store only verified Emby-writable metadata: code, title, original title, overview, release date/year, maker, actors, directors, genres and tags. Runtime is media-probed; movie SeriesName is not writable. Source IDs/URLs and classification are request/routing diagnostics, not editable metadata.
-- Keep raw candidates and processed fields separate. Preserve pinned original title/plot/actor inputs, actor IDs, translation/mapping fingerprints and manually selected sources. Manual saves use the complete current form; drafts remain in memory.
-- Fill missing updates automatic fields/images from the first successful route source while preserving manual edits, explicit empty values and pinned choices. Refresh replaces all managed fields/images. Failed translation, image processing or scraping must retain valid prior output.
-- Use the service writer lock, per-work locks, transactions, atomic image replacement and handled file rollback. Never report a rollback that did not happen. Keep file and database updates consistent.
+## 工程边界
+- `emby.py` 管 REST 和验证；`library.py` 管实时只读投影；`identifiers.py` 管文件名；`scraper.py` 顺序调度来源，准确命中即停；`sources/` 管适配和解析。
+- `processing.py` 管刮削、翻译、演员和临时图像加工；`images.py` 管验证及 YuNet；`portraits.py` 只用于批次临时头像；`runtime.py` 管最小 SQLite；`tasks.py` 管一个轻量批次；`service.py` 管生命周期、Item 互斥和临时裁剪会话；`api.py` 管 HTTP 边界。
+- 保留现有有效来源；失败不能作为删除来源的依据。四类分类、精确匹配、来源独占/限速、Scrapling/FlareSolverr、连接复用继续保留。翻译只在刮削时执行，每批先用无害文本验证，每次只发一个翻译请求，保护演员名与简介边界空白。
+- 超时、重试、间隔使用内部固定策略，不作为设置字段/API 暴露；不支持用户配置 JavDB Cookie。设置按 Emby、翻译、来源优先级排列，来源以英文逗号输入；连接测试与媒体库读取分开。作品只用表格，共享下拉、每页条数及页码选择保持一致；设置与作品等宽。刷新控件统一图标加“刷新”。详情按当前搜索/筛选顺序前后切换，居中返回且保留列表页码。
+- 手动裁剪优先直接使用 Emby 横向背景图；首次打开采用居中选框，YuNet 和来源重取按需触发。不从 Primary 假装恢复原画面。
+- 当前批次默认四并发，最多不得超过十个作品。同一 Item 的冲突写入互斥；取消和重启保留确认过的成功记录，准确标记可能已部分写入的失败。
+- 前端保持严格 React/TypeScript、Tailwind CSS 4、Bun 和现有共享控件；一级页面只有作品与设置。裁剪器懒加载，固定 2:3，保留交互预览与键盘操作。主题跟随系统；产品和版本在页脚。
+- 密钥不返回前端或写入日志；不得提供任意文件读取、任意目标 HTTP 代理。图像限制 32 MiB、40MP，临时会话有上限和过期清理。不增加账户体系。
 
-## Sources and processing
-- Retain DMM, JavDB API/web, JavBus, FC2, AVSOX, AirAV, 1Pondo, Caribbeancom, HEYZO and AVbase. Preserve user route order. Default routes place JavDB before JavBus. Search selects the first exact catalog match in source ranking; no automatic field/image borrowing. Manual field/image combinations are explicit.
-- Use Scrapling, then FlareSolverr for challenges. Reuse connections and parsed DOM. Up to ten works run concurrently; each source handles one work at a time. Pace between works, not search/detail/fallback within a work. Cooldowns are keyed by source and request hostname; images share one-second host pacing.
-- Four categories only: censored, uncensored, FC2, unknown. FC2 and numeric-numeric/numeric_numeric are direct families. Unknown letter prefixes query exact JavDB movie detail; successful supported types persist, failures do not. Never use the letters index or persist numeric prefixes.
-- Actor mappings use verified JavDB IDs, type and names/aliases only. Match within censored/uncensored type, primary names before aliases; globally unique primary is the final fallback. Ambiguous names remain original. Mapping changes do not rewrite saved works automatically. Explicit remapping uses saved IDs/originals and remains offline.
-- Validate configured translation with benign text before each batch. Translate only title/description, one request at a time. Remove exact actor names from titles first; assemble code, actors in source order and translated title. Preserve actor names and boundary whitespace in descriptions. Stage repair retries saved failed inputs, never refetches successful metadata.
-- Portraits use gfriends, primary names then safe aliases, retaining old images on failure. Missing portraits are normal. YuNet is for cover cropping only. Save 2:3 crops as lossless PNG without resampling; preserve other image bytes.
+## 运行与交付
+- 用 Docker Compose 构建、部署、重启；本地检查用 `uv run --no-project --python 3.15`。Python 3.15.2、Bun 1.4.4；使用稳定依赖。Python 与前端版本均为 1.7.0，发布标签匹配版本。
+- 测试源跟踪 Git；环境、缓存、构建产物、测试输出、临时夹具、备份、真实设置、数据库、日志、截图均在仓库外。仅交付 `docker-compose.example.yml`；生产无前端运行时，不要求媒体挂载。
+- YuNet 模型、许可和 bun.lock 跟踪 Git。透明 Logo 为 `assets/logo.png`（512px）、`caress/web/assets/favicon.png`（64px），保持原比例，不留无用母版。
+- 不兼容升级必须先备份，并通过一次性导入工具迁移可靠配置和规则；不得静默删除旧库，不维护长期兼容层。删除功能前验证 Emby 承接能力；真实联调的结果与未覆盖范围写入交付报告。
+- README 保持中文简明快速开始，明确宿主机与容器路径；挂载变化须重建容器。最终验证完整程序、自动化测试、Compose 及真实 Emby，不夸大未验证项。
 
-## Emby REST contract
-- Ground behavior in current official docs plus live server schema and write/read verification. HTTP success alone is not proof of persistence.
-- Configure URL and API key. Never commit keys or include them in errors/logs. Mount media at identical absolute paths in Caress and Emby, and match exact complete paths, never titles.
-- Emby 4.10 uses GenreItems and TagItems for taxonomy updates. People contains actors/directors. Preserve unrelated metadata, provider IDs, people and tags. Use the caress ProviderId for code and supported tags for subtitle/crack versions; parts are not tags.
-- Read full items before updates; lock managed output against automatic metadata refresh. Upload base64 image bodies with real image MIME type. Primary is poster/person image; ordered Backdrop is original cover and stills. Do not assume Screenshot provides independent movie still indexes.
-- Sync each actual media association after successful scrape/edit/image updates. Missing items remain pending; failures remain retryable. Persist stage fingerprints only after successful verified writes. Unchanged content avoids requests; relinking validates paths again. Metadata-fetch success and Emby sync status are independent.
-
-## Tasks and interface
-- Tasks/items are separate, task numbers never reuse; run one task with up to ten works. Only running works lock editing. Queued tasks read predecessor output. Settings apply between batches. Scans must not overwrite newer output or running identities.
-- Keep fill, refresh, portrait and actor-remap tasks. Actor tasks require explicit nonempty selections. Cancellation retains successful output and durable records. Task deletion requires confirmation and never deletes metadata. Historical progress is immutable execution evidence, separate from current-file and sync problems.
-- Preserve works/actors/tasks/settings navigation, list/grid views, keyboard access and system theme. Shared controls own styling; lazy-load optional editors. Display media versions, subtitles, parts, Emby associations and actionable sync errors in work details.
-- Keep copy contextual and concise. Empty fields stay blank; errors and save/test results remain actionable. Product/version belong in the footer. Keep processed/original title, plot and actor provenance visible without duplicated headings.
-- README remains concise Chinese quick start with host/container paths distinguished. Compose mount changes require recreation. Transparent logos stay at `assets/logo.png` (512px) and `caress/web/assets/favicon.png` (64px), with original proportions and no unused master copies.
-- Fix confirmed problems where they belong. Remove redundant state, dead parameters and obsolete branches. Comments explain reasons, boundaries and necessary tradeoffs. Validate full candidate files and the complete program before delivery.
+## 最终打磨约束
+- 关联 Item 不继承父项授权：复用批次开始时的所选库 ID 集合展开、去重，越界项单独跳过；写前再次定向复核归属。详情使用定向归属查询，不重建整库投影；导航复用列表返回的轻量顺序。
+- Service 拥有 Emby 连接池，批次及 HTTP 请求仅租用；配置变更后旧连接等待活动租用结束再关闭。图片禁止重定向，不把图片 tag 当作内容去重依据。
+- 历史成功和最近结果独立，派生“重刮失败”；普通刮削仍保护成功记录。当前批次保留写入开始边界，取消及重启准确说明可能部分写入。
+- 人物头像锁内处理，只有成功或确认无需处理才标记完成，每人物每批最多两次尝试。裁剪原图无 EXIF 变换时保留原编码；图片摘要以条带处理，来源摘要只在当前批次复用。

@@ -7,9 +7,9 @@ from ..catalog import CatalogRules
 from ..http import Client, FetchError
 from ..models import (
     Candidate,
-    Metadata,
     ScrapeRequest,
     SourceId,
+    SourceMetadata,
     SourceResult,
     Status,
 )
@@ -69,7 +69,7 @@ class Source:
                 message=f"source document changed ({type(exc).__name__})",
             )
 
-    def found(self, request: ScrapeRequest, metadata: Metadata, **kwargs: object) -> SourceResult:
+    def found(self, request: ScrapeRequest, metadata: SourceMetadata, **kwargs: object) -> SourceResult:
         return SourceResult(
             source=self.id,
             requested_code=request.code,

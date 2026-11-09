@@ -15,11 +15,6 @@ export interface Confirmation {
   resolve: (answer: boolean) => void;
 }
 
-export type Confirm = (
-  title: string,
-  description: ReactNode,
-) => Promise<boolean>;
-
 export function ConfirmationDialog({
   value,
   close,
@@ -37,10 +32,11 @@ export function ConfirmationDialog({
       <DialogContent className="max-h-[85dvh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{value?.title}</DialogTitle>
-          <DialogDescription asChild>
-            <div className="whitespace-pre-wrap break-words">
-              {value?.description}
-            </div>
+          <DialogDescription
+            render={<div />}
+            className="whitespace-pre-wrap break-words"
+          >
+            {value?.description}
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>

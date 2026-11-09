@@ -1,7 +1,11 @@
 {
   "compilerOptions": {
     "target": "ESNext",
-    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "lib": [
+      "ESNext",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "module": "Preserve",
     "moduleResolution": "Bundler",
     "jsx": "react-jsx",
@@ -10,7 +14,17 @@
     "skipLibCheck": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "paths": { "@/*": ["./src/*"] }
+    "paths": {
+      "@/*": [
+        "./src/*"
+      ]
+    }
   },
-  "include": ["src", "dev.ts", "build.ts"]
+  "include": [
+    "src",
+    "dev.ts",
+    "build.ts",
+    "tests",
+    "playwright.config.ts"
+  ]
 }

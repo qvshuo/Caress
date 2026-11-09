@@ -14,14 +14,14 @@ from ..models import (
     Actor,
     Candidate,
     Category,
-    Metadata,
     ScrapeRequest,
     SourceId,
+    SourceMetadata,
     SourceResult,
     Status,
 )
-from .parsing import artwork, parse_date
 from .base import Source
+from .parsing import artwork, parse_date
 
 
 class JavDBApi(Source):
@@ -132,7 +132,7 @@ class JavDBApi(Source):
                     if item["name"] in actor_ids and actor_ids[item["name"]] != ident:
                         raise FetchError(Status.PARSE_ERROR, "JavDB API returned different actor IDs for the same name")
                     actor_ids[item["name"]] = ident
-        metadata = Metadata(
+        metadata = SourceMetadata(
             code=code,
             title=title,
             original_title=work.get("origin_title") or None,

@@ -5,14 +5,14 @@ from urllib.parse import urljoin
 
 from ..http import FetchError
 from ..models import (
-    Metadata,
     ScrapeRequest,
     SourceId,
+    SourceMetadata,
     SourceResult,
     Status,
 )
-from .parsing import artwork, first, parse_date, text, texts
 from .base import Source
+from .parsing import artwork, first, parse_date, text, texts
 
 
 class FC2(Source):
@@ -70,7 +70,7 @@ class FC2(Source):
                     warnings.append("FC2 description is a translation placeholder")
             except FetchError as exc:
                 warnings.append(f"description iframe unavailable: {exc.status}")
-        metadata = Metadata(
+        metadata = SourceMetadata(
             code="FC2PPV-" + match[1],
             title=title,
             original_title=title,

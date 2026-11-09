@@ -7,10 +7,13 @@ export function useListState<T extends object>(
   const [value, setValue] = useState<T>(() => {
     const defaults = initial();
     try {
-      return {
-        ...defaults,
-        ...JSON.parse(sessionStorage.getItem(`caress:${key}`) ?? "{}"),
-      };
+      const saved = JSON.parse(sessionStorage.getItem(`caress:${key}`) ?? "{}");
+      return Object.fromEntries(
+        Object.entries(defaults).map(([key, value]) => [
+          key,
+          Object.hasOwn(saved, key) ? saved[key] : value,
+        ]),
+      ) as T;
     } catch {
       return defaults;
     }

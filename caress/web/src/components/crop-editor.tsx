@@ -6,6 +6,8 @@ import {
   useState,
 } from "react";
 import ReactCrop, { type PercentCrop } from "react-image-crop";
+import { LoaderCircle, RotateCcw, ScanFace } from "lucide-react";
+import { RefreshButton } from "@/components/refresh-button";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -13,40 +15,103 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { ArtworkImage } from "@/components/image-viewer";
-import { errorText } from "@/lib/messages";
 import { api } from "@/lib/api";
 import { cropBox, percentCrop } from "@/lib/crop";
-import type { Box, Crop, ImageChoice } from "@/lib/types";
-
+import type { Crop, Source } from "@/lib/types";
 export default function CropEditor({
-  code,
-  input,
-  image,
-  originalImage,
-  applyLabel,
-  coverPreview,
+  id,
+  source,
   busy,
   close,
   applied,
 }: {
-  code: string;
-  input: ImageChoice;
-  image: string;
-  originalImage: string;
-  applyLabel: "应用裁剪" | "设为封面";
-  coverPreview?: string;
+  id: string;
+  source?: Source;
   busy: boolean;
   close: () => void;
-  applied: (crop: Crop) => void;
+  applied: () => void;
 }) {
-  const [result, setResult] = useState<Crop | null>(null);
-  const [loadedImage, setLoadedImage] = useState<string>();
-  const [showOriginal, setShowOriginal] = useState(false);
-  const displayImage = showOriginal ? originalImage : image;
+  const [crop, setCrop] = useState<Crop | null>(null),
+    [selection, setSelection] = useState<PercentCrop>(),
+    [pending, setPending] = useState(true),
+    [error, setError] = useState(""),
+    [saving, setSaving] = useState(false);
+  const session = useRef(""),
+    version = useRef(0);
+  const base = `works/${id}/crop`;
+  const active = useRef(true);
+  const [loadingSource, setLoadingSource] = useState(true);
+  const acquire = useCallback(
+    async (fetchSource = false) => {
+      const ticket = ++version.current;
+      setPending(true);
+      setLoadingSource(true);
+      setError("");
+      const query = new URLSearchParams();
+      if (source) query.set("source", source);
+      if (fetchSource) query.set("fetch_source", "true");
+      try {
+        const value = await api<Crop>(`${base}/source?${query}`, "POST");
+        if (!active.current || ticket !== version.current) {
+          void api(`${base}/${value.token}`, "DELETE").catch(() => {});
+          return;
+        }
+        const old = session.current;
+        session.current = value.token;
+        setCrop(value);
+        setSelection(percentCrop(value.box, value.width, value.height));
+        if (old) void api(`${base}/${old}`, "DELETE").catch(() => {});
+      } catch (e) {
+        if (active.current && ticket === version.current)
+          setError(e instanceof Error ? e.message : "原图获取失败");
+      } finally {
+        if (active.current && ticket === version.current) {
+          setPending(false);
+          setLoadingSource(false);
+        }
+      }
+    },
+    [base, source],
+  );
+  useEffect(() => {
+    active.current = true;
+    void acquire();
+    return () => {
+      active.current = false;
+      version.current++;
+      if (session.current)
+        void api(`${base}/${session.current}`, "DELETE").catch(() => {});
+    };
+  }, [acquire, base]);
+  async function preview(box?: Crop["box"], center = false) {
+    if (!crop) return;
+    const ticket = ++version.current;
+    setPending(true);
+    setError("");
+    try {
+      const value = await api<Crop>(`${base}/preview`, "POST", {
+        token: crop.token,
+        box,
+        center,
+      });
+      if (ticket !== version.current) return;
+      const next = {
+        ...value,
+        token: crop.token,
+        origin: crop.origin,
+      };
+      setCrop(next);
+      setSelection(percentCrop(next.box, next.width, next.height));
+    } catch (e) {
+      if (ticket === version.current)
+        setError(e instanceof Error ? e.message : "裁剪失败");
+    } finally {
+      if (ticket === version.current) setPending(false);
+    }
+  }
   const [frame, setFrame] = useState<HTMLDivElement | null>(null);
-  const [bounds, setBounds] = useState({ width: 0, height: 0 });
-  const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
+  const [bounds, setBounds] = useState({ width: 0, height: 0 }),
+    [dimensions, setDimensions] = useState({ width: 0, height: 0 });
   useLayoutEffect(() => {
     if (!frame) return;
     const observer = new ResizeObserver(([entry]) => {
@@ -67,189 +132,147 @@ export default function CropEditor({
           bounds.height / dimensions.height,
         )
       : 0;
-  const [selection, setSelection] = useState<PercentCrop>();
-  const [pending, setPending] = useState(false);
-  const [confirmed, setConfirmed] = useState(false);
-  const [error, setError] = useState("");
-  const request = useRef(0);
-  const controller = useRef<AbortController | null>(null);
-  const base = `works/${encodeURIComponent(code)}/crop`;
-  const preview = useCallback(
-    async (body: { center?: boolean; box?: Box; fingerprint?: string }) => {
-      controller.current?.abort();
-      const abort = new AbortController();
-      controller.current = abort;
-      const ticket = ++request.current;
-      setPending(true);
-      setShowOriginal(true);
-      setConfirmed(false);
-      setError("");
-      try {
-        const value = await api<Crop>(
-          base,
-          "POST",
-          { ...input, ...body },
-          abort.signal,
-        );
-        if (abort.signal.aborted || ticket !== request.current) return;
-        setResult(value);
-        setSelection(percentCrop(value.box, value.width, value.height));
-        setConfirmed(true);
-      } catch (e) {
-        if (!abort.signal.aborted && ticket === request.current)
-          setError(errorText(e));
-      } finally {
-        if (!abort.signal.aborted && ticket === request.current)
-          setPending(false);
-      }
-    },
-    [base, input],
-  );
-  useEffect(() => {
-    setResult(null);
-    setSelection(undefined);
-    setConfirmed(false);
-    setPending(false);
-    setError("");
-    setShowOriginal(false);
-    return () => {
-      controller.current?.abort();
-      request.current++;
-    };
-  }, [input]);
-  const locked = busy || loadedImage !== displayImage;
   return (
     <Dialog
       open
       onOpenChange={(open) => {
-        if (!open) close();
+        if (!open && !saving) close();
       }}
     >
       <DialogContent
         aria-describedby={undefined}
-        className="h-[90dvh] max-h-[90dvh] grid-rows-[auto_auto_minmax(0,1fr)_auto_auto] overflow-hidden sm:max-w-4xl"
+        className="h-[90dvh] grid-rows-[auto_auto_minmax(0,1fr)_auto] overflow-hidden sm:max-w-4xl"
       >
         <DialogHeader>
-          <DialogTitle>调整封面</DialogTitle>
+          <DialogTitle>裁剪封面</DialogTitle>
         </DialogHeader>
-        <div className="flex flex-wrap gap-3">
+        <div className="flex flex-wrap items-center gap-2">
           <Button
             variant="outline"
-            disabled={locked || pending}
-            onClick={() => void preview({})}
+            disabled={!crop || pending || saving || busy}
+            onClick={() => void preview()}
           >
-            人脸裁剪
+            <ScanFace className="size-4" />
+            自动裁剪
           </Button>
           <Button
             variant="outline"
-            disabled={locked || pending}
-            onClick={() => void preview({ center: true })}
+            size="icon"
+            aria-label="重置选框"
+            title="重置选框"
+            disabled={!crop || pending || saving || busy}
+            onClick={() => void preview(undefined, true)}
           >
-            居中裁剪
+            <RotateCcw />
           </Button>
+          <span className="ml-auto"/>
+        <RefreshButton
+            label="刷新原图"
+            pending={loadingSource}
+            disabled={saving || busy || pending}
+            onClick={() => void acquire(true)}
+          />
         </div>
-        <div className="grid min-h-0 gap-4 sm:grid-cols-[minmax(0,1fr)_140px]">
-          <div
-            ref={setFrame}
-            className="flex min-h-0 min-w-0 items-center justify-center overflow-hidden rounded-md border bg-muted/30 p-2"
-          >
-            <ReactCrop
-              crop={selection}
-              aspect={2 / 3}
-              keepSelection
-              disabled={locked || !result}
-              minWidth={16}
-              minHeight={24}
-              ariaLabels={{
-                cropArea: "裁剪选框",
-                nwDragHandle: "左上缩放",
-                nDragHandle: "上侧缩放",
-                neDragHandle: "右上缩放",
-                eDragHandle: "右侧缩放",
-                seDragHandle: "右下缩放",
-                sDragHandle: "下侧缩放",
-                swDragHandle: "左下缩放",
-                wDragHandle: "左侧缩放",
-              }}
-              onChange={(_, percent) => {
-                controller.current?.abort();
-                request.current++;
-                setPending(false);
-                setConfirmed(false);
-                setSelection(percent);
-              }}
-              onComplete={(_, percent) => {
-                if (result && !locked)
-                  void preview({
-                    box: cropBox(percent, result.width, result.height),
-                    fingerprint: result.fingerprint,
-                  });
-              }}
+        {crop ? (
+          <div className="grid min-h-0 grid-rows-[minmax(0,1fr)_112px] gap-4 sm:grid-cols-[minmax(0,1fr)_144px] sm:grid-rows-1">
+            <div
+              ref={setFrame}
+              className="flex min-h-0 min-w-0 items-center justify-center overflow-hidden rounded-md bg-muted p-2"
             >
-              <ArtworkImage
-                src={displayImage}
-                onLoad={(event) => {
-                  setLoadedImage(displayImage);
-                  setDimensions({
-                    width: event.currentTarget.naturalWidth,
-                    height: event.currentTarget.naturalHeight,
-                  });
+              <ReactCrop
+                crop={selection}
+                aspect={2 / 3}
+                keepSelection
+                disabled={saving || busy || loadingSource}
+                onChange={(_, p) => {
+                  version.current++;
+                  setPending(true);
+                  setSelection(p);
                 }}
-                onError={() => {
-                  setLoadedImage(undefined);
-                  setError("原图加载失败，请返回后重试");
-                }}
-                alt="裁剪原图"
-                className="block max-h-full max-w-full object-contain"
-                style={
-                  scale > 0
-                    ? {
-                        width: dimensions.width * scale,
-                        height: dimensions.height * scale,
-                      }
-                    : undefined
+                onComplete={(_, p) =>
+                  void preview(cropBox(p, crop.width, crop.height))
                 }
-                draggable={false}
-              />
-            </ReactCrop>
-          </div>
-          {(result || coverPreview) && (
-            <div className="hidden min-h-0 flex-col items-center gap-2 sm:flex">
-              <ArtworkImage
-                src={result?.preview ?? coverPreview}
-                className="max-h-[calc(100%-1.5rem)] w-auto max-w-32 rounded-md object-contain"
-                alt="裁剪预览"
-              />
-              <p className="text-center text-xs text-muted-foreground">
-                2:3 预览
-              </p>
+                ariaLabels={{
+                  cropArea: "裁剪选框",
+                  nwDragHandle: "左上缩放",
+                  nDragHandle: "上侧缩放",
+                  neDragHandle: "右上缩放",
+                  eDragHandle: "右侧缩放",
+                  seDragHandle: "右下缩放",
+                  sDragHandle: "下侧缩放",
+                  swDragHandle: "左下缩放",
+                  wDragHandle: "左侧缩放",
+                }}
+              >
+                <img
+                  src={`/api/${base}/${crop.token}/image`}
+                  alt="裁剪原图"
+                  className="block max-h-full max-w-full object-contain"
+                  style={
+                    scale > 0
+                      ? {
+                          width: dimensions.width * scale,
+                          height: dimensions.height * scale,
+                        }
+                      : undefined
+                  }
+                  onLoad={(event) =>
+                    setDimensions({
+                      width: event.currentTarget.naturalWidth,
+                      height: event.currentTarget.naturalHeight,
+                    })
+                  }
+                  draggable={false}
+                  onError={() => setError("原图加载失败，请刷新重试")}
+                />
+              </ReactCrop>
             </div>
+            <div className="flex min-h-0 items-center justify-center gap-3 sm:flex-col">
+              <img
+                src={crop.preview}
+                alt="裁剪预览"
+                className="max-h-full max-w-28 rounded-md object-contain sm:max-w-full"
+              />
+              <span className="text-xs text-muted-foreground">2:3</span>
+            </div>
+          </div>
+        ) : (
+          <div
+            role="status"
+            className="flex min-h-0 items-center justify-center gap-2 text-sm text-muted-foreground"
+          >
+            {pending && <LoaderCircle className="size-4 animate-spin" />}
+            {pending ? "加载中…" : ""}
+          </div>
+        )}
+        <div className="flex flex-wrap items-center justify-end gap-3">
+          <span className="mr-auto text-xs text-muted-foreground">
+            {crop?.origin}
+          </span>
+          {error && (
+            <p role="alert" className="mr-auto text-sm text-destructive">
+              {error}
+            </p>
           )}
-        </div>
-        <p
-          role={error ? "alert" : "status"}
-          className={`min-h-5 break-words text-sm ${error ? "text-destructive" : "text-muted-foreground"}`}
-        >
-          {error ||
-            (busy
-              ? "作品处理中，暂不能修改"
-              : pending
-                ? "正在生成预览…"
-                : loadedImage !== displayImage
-                  ? "正在加载图片…"
-                  : "\u00a0")}
-        </p>
-        <div className="flex justify-end gap-3">
-          <Button variant="outline" onClick={close}>
-            返回
+          <Button variant="outline" disabled={saving} onClick={close}>
+            取消
           </Button>
           <Button
-            disabled={locked || pending || !confirmed || !result || !!error}
+            aria-busy={saving}
+            disabled={!crop || pending || saving || busy || !!error}
             onClick={() => {
-              if (result && confirmed) applied(result);
+              if (!crop) return;
+              setSaving(true);
+              void api(`${base}/apply`, "POST", {
+                token: crop.token,
+                box: crop.box,
+              })
+                .then(applied)
+                .catch((e: Error) => setError(e.message))
+                .finally(() => setSaving(false));
             }}
           >
-            {applyLabel}
+            {saving && <LoaderCircle className="size-4 animate-spin" />}保存
           </Button>
         </div>
       </DialogContent>

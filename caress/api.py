@@ -1,712 +1,266 @@
-from __future__ import annotations
+"""HTTP boundary: live reads and a small set of explicit processing operations."""
 
 import asyncio
-import base64
-import hashlib
-import re
-import sqlite3
-import time
-
 from contextlib import asynccontextmanager
-from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
 import httpx
-
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from starlette.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from . import __version__
-from .models import EDITABLE_FIELDS
-from .actors import ActorAliases, actor_type, library_actors
-from .catalog import CatalogRules
-from .directories import Directories
-from .images import crop_poster, save_image_choices, selected_image, validate_resources
-from .portraits import Gfriends, actor_image
-from .models import Actor, ActorMapping, Category, Metadata, SourceId
-from .storage import image_stems, target_folder
-
-from .processing import complete_report, prepare_variant, manual_fields
-from .http import FetchError
-from .scanner import Work
-from .runtime import now
-from .settings import SOURCE_INTERVALS, Settings, TranslationSettings
+from .emby import EmbyClient, sync_error
+from .library import filter_works, navigation_order
+from .models import SourceId
+from .service import Service
+from .settings import Settings
 from .sources import SOURCES
-from .storage import file_transaction
-from .tasks import TaskQueue, TaskRequest
-from .translation import Translator, variant_metadata
+from .translation import Translator
 
 
-def redact(value: object) -> object:
-    if isinstance(value, dict):
-        return {
-            key: "***"
-            if key in {"api_key", "cookie", "signature_prefix"} and item
-            else redact(item)
-            for key, item in value.items()
-        }
-    if isinstance(value, list):
-        return [redact(item) for item in value]
-    return value
+class BatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    ids: list[str] = Field(min_length=1, max_length=5000)
+    action: Literal["scrape", "force", "retry"] = "scrape"
+    source: SourceId | None = None
+    confirmed: bool = False
 
 
 class CropRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    file: str | None = None
-    source: SourceId | Literal["custom"] | None = None
-    index: int | None = None
+    token: str = Field(max_length=64)
     box: tuple[int, int, int, int] | None = None
     center: bool = False
-    fingerprint: str | None = None
 
 
-class FieldInputs(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    original_fields: dict = Field(default_factory=dict)
-    actor_mappings: list[ActorMapping] = Field(default_factory=list)
-    title_text: str | None = None
-    mapping_fingerprint: str = ""
+def safe_settings(settings):
+    data = settings.model_dump(mode="json")
+    for name in ("emby", "translation"):
+        data[name]["has_api_key"] = bool(data[name].pop("api_key"))
+    data["source_defaults"] = {
+        str(ident): source.default_url for ident, source in SOURCES.items()
+    }
+    data["configured"] = bool(
+        settings.emby.url and settings.emby.api_key and settings.emby.library_ids
+    )
+    return data
 
 
-def create_app(
-    settings: Settings,
-    *,
-    runner_factory=TaskQueue,
-    settings_path: Path | None = None,
-    directories: Directories | None = None,
-) -> FastAPI:
+def updated_settings(current, body):
+    data = current.model_dump(mode="json")
+    body = dict(body)
+    body.pop("configured", None)
+    body.pop("source_defaults", None)
+    for key in ("emby", "translation"):
+        if key in body:
+            value = {**body[key]}
+            value.pop("has_api_key", None)
+            if value.get("api_key") is None:
+                value["api_key"] = getattr(current, key).api_key
+            body[key] = value
+    data.update(body)
+    try:
+        return Settings.model_validate({**data, "database": current.database})
+    except ValidationError, ValueError:
+        raise ValueError(
+            "设置无效，请检查地址、来源顺序和参数；密钥不会在错误中显示"
+        ) from None
+
+
+def create_app(settings: Settings | None = None):
+    settings = settings or Settings()
+    service = None
+
     @asynccontextmanager
-    async def lifespan(app: FastAPI):
-        validate_resources()
-        app.state.settings = settings
-        app.state.configuring = False
-        app.state.runner = None
-        if directories:
-            directories.validate(settings)
-        if settings.media_directories:
-            app.state.runner = runner_factory(settings)
-            if not app.state.runner.runtime.has_scan():
-                await app.state.runner.scan_async()
+    async def lifespan(app):
+        nonlocal service
+        service = Service(settings)
+        app.state.service = service
         try:
             yield
         finally:
-            if app.state.runner:
-                await app.state.runner.close()
+            await service.close()
 
-    app = FastAPI(title="Caress", lifespan=lifespan)
-    web = Path(__file__).parent / "web/dist"
-    app.mount(
-        "/assets",
-        GZipMiddleware(StaticFiles(directory=web), minimum_size=1024, compresslevel=5),
-        name="assets",
-    )
+    app = FastAPI(title="Caress", version=__version__, lifespan=lifespan)
 
-    @app.get("/", response_class=HTMLResponse, include_in_schema=False)
-    async def home():
-        return HTMLResponse(
-            (web / "index.html").read_text(encoding="utf-8"),
-            headers={"Cache-Control": "no-cache"},
-        )
-
-    @app.exception_handler(ValidationError)
     @app.exception_handler(RequestValidationError)
-    async def validation_error(_request, exc):
-        return JSONResponse(
-            status_code=422,
-            content={
-                "detail": [
-                    {key: item[key] for key in ("loc", "msg", "type") if key in item}
-                    for item in exc.errors()
-                ]
-            },
-        )
-
-    def runner() -> TaskQueue:
-        if app.state.configuring:
-            raise ValueError("configuration change in progress")
-        if app.state.runner is None:
-            raise ValueError("configure media directories first")
-        return app.state.runner
-
-    def current_settings():
-        return (app.state.runner.pending_settings or app.state.runner.settings) if app.state.runner else app.state.settings
-
-    def public_settings():
-        return {
-            **redact(current_settings().model_dump(mode="json")),
-            "configured": app.state.runner is not None,
-            "pending_settings": bool(app.state.runner and app.state.runner.pending_settings),
-            "translation_status": {"valid": app.state.runner.translator.available, "message": app.state.runner.translator.validation_error} if app.state.runner else {"valid": None, "message": "尚未验证"},
-            "default_routes": Settings().model_dump(mode="json")["routes"],
-            "source_defaults": {
-                source.value: factory.default_url for source, factory in SOURCES.items()
-            },
-            "source_intervals": {
-                source.value: interval for source, interval in SOURCE_INTERVALS.items()
-            },
-        }
-
-    @app.exception_handler(OSError)
-    async def filesystem_error(_request, _exc):
-        return JSONResponse(status_code=409, content={"detail": "filesystem access failed"})
-
-    @app.exception_handler(sqlite3.Error)
-    async def database_error(_request, _exc):
-        return JSONResponse(status_code=503, content={"detail": "runtime storage unavailable"})
+    async def bad_request(request, exc):
+        return JSONResponse({"detail": "请求参数无效，请检查输入"}, status_code=422)
 
     @app.exception_handler(ValueError)
-    async def invalid_request(_request, exc):
-        return JSONResponse(status_code=409, content={"detail": str(exc)})
+    async def invalid(request, exc):
+        return JSONResponse({"detail": str(exc)}, status_code=400)
 
-    @app.exception_handler(KeyError)
-    async def not_found(_request, _exc):
-        return JSONResponse(status_code=404, content={"detail": "not found"})
+    @app.exception_handler(httpx.HTTPError)
+    async def upstream(request, exc):
+        return JSONResponse({"detail": sync_error(exc)}, status_code=502)
 
     @app.get("/api/health")
     async def health():
-        return {"status": "ok", "version": __version__, "storage": "sqlite"}
+        return {"status": "ok", "version": __version__}
 
     @app.get("/api/settings")
-    async def read_settings():
-        return public_settings()
-
-    @app.get("/api/sources/cooldowns")
-    async def source_cooldowns():
-        if app.state.runner is None:
-            return {}
-        return {key: value for key, value in runner().runtime.cooldowns().items()
-                if value.get("cooldown_until", 0) > time.time()}
-
-    @app.delete("/api/sources/{source}/cooldown")
-    async def clear_source_cooldown(source: SourceId):
-        runner().runtime.clear_cooldown(source)
-        return await source_cooldowns()
-
-    @app.post("/api/translation/test")
-    async def test_translation(value: dict):
-        options = {**current_settings().translation.model_dump(), **value}
-        if options.get("api_key") == "***":
-            options["api_key"] = current_settings().translation.api_key
-        translator = Translator(TranslationSettings.model_validate(options))
-        started = time.monotonic()
-        try:
-            valid = await translator.verify(force=True)
-            if app.state.runner and not app.state.runner.active() and translator.settings.model_dump() == app.state.runner.settings.translation.model_dump():
-                app.state.runner.translator.available = valid
-                app.state.runner.translator.validation_error = translator.validation_error
-            return {"valid": valid, "message": "测试通过" if valid else translator.validation_error, "sample": translator.validation_sample if valid else None, "elapsed_seconds": time.monotonic() - started}
-        finally:
-            await translator.close()
+    async def get_settings():
+        return safe_settings(service.settings)
 
     @app.put("/api/settings")
-    async def save_settings(value: dict):
-        if app.state.configuring:
-            raise ValueError("configuration change in progress")
-        service = app.state.runner
-        if service and service.task_lock.locked():
-            raise ValueError("cannot change configuration while metadata is being edited")
+    async def save_settings(body: dict):
+        async with service.writer_lock:
+            value = updated_settings(service.settings, body)
+            if service.batches.running and value.emby != service.settings.emby:
+                raise ValueError("批次运行期间不能更换 Emby 连接或目标媒体库")
+            value.save()
+            await service.configure(value)
+            return safe_settings(value)
 
-        def merge(old, new):
-            if isinstance(old, dict) and isinstance(new, dict):
-                return {
-                    **old,
-                    **{
-                        k: old.get(k)
-                        if k in {"api_key", "cookie"} and v == "***"
-                        else merge(old.get(k), v)
-                        for k, v in new.items()
-                    },
-                }
-            return new
-
-        previous = current_settings()
-        updated = Settings.model_validate(merge(previous.model_dump(mode="json"), value))
-        updated.database = previous.database
-        if directories:
-            directories.validate(updated)
-        ready = bool(updated.media_directories)
-        path = settings_path or Path("/data/caress.sqlite3")
-        reuse_service = bool(service and ready)
-        if service and service.active():
-            updated.save(path)
-            service.pending_settings = updated
-            app.state.settings = updated
-            async def activate_saved_settings():
-                pending = service.pending_settings
-                if pending is not None:
-                    await save_settings(pending.model_dump(mode="json"))
-            service.on_idle = activate_saved_settings
-            return public_settings()
-        app.state.configuring = True
-        candidate = None
+    @app.post("/api/settings/test/emby")
+    async def test_emby(body: dict):
+        value = updated_settings(service.settings, body)
+        client = EmbyClient(value.emby)
         try:
-            if ready:
-                if reuse_service:
-                    preview = await service.scan_async(settings=updated, persist=False)
-                else:
-                    candidate = runner_factory(updated)
-                    await candidate.scan_async()
-            previous_catalog = service.runtime.works_data if reuse_service else None
-            had_scan = service.runtime.has_scan() if reuse_service else False
-            scan_saved = False
-            try:
-                if reuse_service:
-                    with service.runtime.transaction():
-                        service.runtime.save_scan([Work.model_validate(row) for row in preview])
-                        scan_saved = True
-                        updated.save(connection=service.runtime.connection)
-                else:
-                    updated.save(path)
-            except (OSError, ValueError, sqlite3.Error):
-                if scan_saved:
-                    service.runtime.works_data = previous_catalog if had_scan else []
-                    service.runtime._index_works()
-                raise
-            if reuse_service:
-                old_translator = service.translator
-                service.settings = updated
-                for row in service.runtime.works():
-                    if row["status"] != "invalid_key":
-                        service.refresh_work(row["code"])
-                service.pending_settings = None
-                if service._artwork_client is not None:
-                    service._artwork_client.settings = updated
-                service.translator = Translator(updated.translation, database=updated.database)
-                app.state.settings = updated
-                await old_translator.close()
-            else:
-                if service:
-                    await service.close()
-                app.state.runner = candidate
-                app.state.settings = updated
-                candidate = None
-        finally:
-            if candidate:
-                await candidate.close()
-            app.state.configuring = False
-        return public_settings()
-
-    @app.get("/api/directories")
-    async def directory_list(kind: str = "media", path: Path | None = None):
-        if directories is None:
-            raise ValueError("directory browser is not configured")
-        return directories.list(kind, path)
-
-    @app.post("/api/scan")
-    async def scan(request: Request):
-        if await request.body():
-            raise HTTPException(422, "scan does not accept a request body")
-        service = runner()
-        return await service.scan_async()
-
-    @app.get("/api/works")
-    async def works(status: str | None = None):
-        return runner().runtime.works(status) if app.state.runner else []
-
-    @app.get("/api/works/updates")
-    async def work_updates(task_ids: str, after: datetime | None = None):
-        service = runner()
-        if after is not None and after.tzinfo is None:
-            raise HTTPException(422, "progress timestamp requires a timezone")
-        timestamp = now()
-        codes = set()
-        for ident in task_ids.split(","):
-            task = service.runtime.task_data.get(ident)
-            if task is None:
-                continue
-            for item in task["items"]:
-                event = item.get("stage")
-                if item["status"] == "running" or (event and (after is None or datetime.fromisoformat(event["time"]) >= after)):
-                    codes.add(item["code"])
-        return {"time": timestamp, "works": service.runtime.works(codes=sorted(codes))}
-
-    @app.get("/api/works/detail")
-    async def work_details(code: str, task_id: str | None = None):
-        service = runner()
-        row = service.runtime.find_work(code)
-        if row is None:
-            raise HTTPException(404, "work not found")
-        metadata, artwork = None, []
-        artwork_versions = {}
-        editable = row["status"] != "invalid_key"
-        if editable:
-            work = service.runtime.work(row["code"])
-            saved = service.runtime.metadata(work.code)
-            metadata = saved.model_dump(mode="json") if saved else None
-            folder = target_folder(service.output, work.code)
-            if folder.is_dir():
-                for image in folder.iterdir():
-                    if not image_file(work, image):
-                        continue
-                    try:
-                        version = image.stat()
-                    except FileNotFoundError:
-                        continue
-                    artwork.append(image.name)
-                    artwork_versions[image.name] = f"{version.st_mtime_ns}-{version.st_size}"
-        tasks = ([service.runtime.task_data[task_id]] if task_id in service.runtime.task_data else []) if task_id else sorted(service.runtime.task_data.values(), key=lambda t: t["created_at"], reverse=True)
-        process = next(({"task_id": t["id"], "type": t["type"], "sequence": t.get("sequence"), "created_at": t["created_at"], "finished_at": t.get("finished_at"), **item} for t in tasks for item in t["items"] if item["code"] == row["code"]), None)
-        route = service.settings.routes.get(row["category"], service.settings.routes["unknown"])
-        route_sources = route
-        if process:
-            if sources := (process.get("result") or {}).get("sources"):
-                route_sources = [source["source"] for source in sources]
-            if process["type"] == "remap_actors":
-                route_sources = []
-        selection = service.runtime.selection(row["code"])
-        return {
-            **row,
-            "media": service.runtime.media(row["code"]),
-            "metadata": metadata,
-            "variants": sorted(service.runtime.variants(row["code"]), key=lambda v: route.index(v["source"]) if v["source"] in route else 999),
-            "selection": selection,
-            "route_sources": route_sources,
-            "artwork": sorted(artwork),
-            "artwork_versions": artwork_versions,
-            "editable": editable and not service.work_running(row["code"]),
-            "last_result": service.runtime.results.get(row["code"]),
-            "process": process,
-        }
-
-    def image_file(work, path):
-        return (
-            path.is_file()
-            and not path.is_symlink()
-            and path.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".gif"}
-            and any(path.stem.startswith(stem + "-") for stem in image_stems(work))
-        )
-
-    def artwork_file(service, key, file):
-        work = service.runtime.work(key)
-        folder = target_folder(service.output, key)
-        path = folder / file
-        if Path(file).name != file or not image_file(work, path):
-            raise HTTPException(404, "image not found")
-        return work, path
-
-    @app.put("/api/works/{key}/metadata")
-    async def save_metadata(key: str, value: dict):
-        service = runner()
-        inputs = FieldInputs.model_validate(value.pop("field_inputs")) if "field_inputs" in value else None
-        if inputs and set(inputs.original_fields) - {"title", "plot", "actors"}:
-            raise HTTPException(422, "invalid original fields")
-        fields = set(EDITABLE_FIELDS)
-        field_sources = value.pop("field_sources", {})
-        image_choices = value.pop("image_choices", {})
-        sample_source = value.pop("sample_source", None)
-        if sample_source is not None and (not isinstance(sample_source, str) or sample_source not in SourceId):
-            raise HTTPException(422, "剧照来源不可用")
-        if not isinstance(field_sources, dict) or set(field_sources) - fields or not isinstance(image_choices, dict) or len(image_choices) > 102:
-            raise HTTPException(422, "invalid field or image selection")
-        if any(not isinstance(source, str) for source in field_sources.values()) or any(not isinstance(choice, dict) for choice in image_choices.values()):
-            raise HTTPException(422, "invalid selection")
-        if any(set(choice) - {"source", "index", "file", "box", "fingerprint"} for choice in image_choices.values()):
-            raise HTTPException(422, "invalid image selection")
-        image_choices = {role: CropRequest.model_validate(choice).model_dump(exclude_none=True, exclude={"center"}) for role, choice in image_choices.items()}
-        if set(value) != fields:
-            raise HTTPException(422, "完整填写可编辑字段，番号不可编辑")
-        if service.work_running(key):
-            raise ValueError("该作品正在刮削")
-        async with service.task_lock, service.work_lock(key):
-            work = service.runtime.work(key)
-            saved = service.runtime.metadata(key)
-            previous = saved.model_dump() if saved else {"code": key, "title": key}
-            selection = service.runtime.selection(key)
-            variants = {v["source"]: v for v in service.runtime.variants(key)}
-            if sample_source:
-                variant = variants.get(sample_source)
-                items = (variant.get("metadata") or {}).get("artwork", []) if variant and variant.get("status") == "found" else []
-                indexes = [i for i, item in enumerate(items) if item["role"] == "sample"][:100]
-                if not indexes:
-                    raise HTTPException(422, "剧照来源不可用")
-                image_choices = {role: choice for role, choice in image_choices.items() if not re.fullmatch(r"fanart[1-9][0-9]{0,2}", role)}
-                image_choices.update({f"fanart{i+1}": {"source": sample_source, "index": index} for i, index in enumerate(indexes)})
-            metadata = Metadata.model_validate({"code": key, "original_title": previous.get("original_title"), **value})
-            if inputs:
-                validated_inputs = Metadata.model_validate({**metadata.model_dump(), **inputs.original_fields}).model_dump(mode="json")
-                inputs.original_fields = {key: validated_inputs[key] for key in inputs.original_fields}
-            if not metadata.title.strip():
-                raise HTTPException(422, "title must not be empty")
-            before = Metadata.model_validate(previous)
-            changed = set(field_sources) | {field for field in fields if getattr(metadata, field) != getattr(before, field)}
-            provenance = dict(selection.get("field_sources", {}))
-            translated = set(selection.get("translated_fields", []))
-            pinned = inputs.model_dump(mode="json") if inputs else selection
-            originals = dict(pinned.get("original_fields", {}))
-            mappings = pinned.get("actor_mappings", [])
-            mapping_fingerprint = pinned.get("mapping_fingerprint", "")
-            title_text = pinned.get("title_text")
-            if "title" in changed and field_sources.get("title", "custom") == "custom":
-                title_text = None
-            fingerprints = dict(selection.get("translation_fingerprints", {}))
-            errors = {error["field"]: error for error in service.runtime.results.get(key, {}).get("translation_errors", [])}
-            for field in changed:
-                source = field_sources.get(field, "custom")
-                variant = variants.get(source)
-                if source != "custom" and (not variant or variant.get("status") != "found" or not variant.get("metadata")):
-                    raise HTTPException(422, "字段来源不可用")
-                provenance[field] = source
-                translated.discard(field)
-                fingerprints.pop(field, None)
-                errors.pop(field, None)
-                if source != "custom":
-                    # Preview inputs stay pinned when later candidates arrive.
-                    same_input = inputs is None or field not in {"title", "plot", "actors"} or inputs.original_fields.get(field) == variant.get("original_fields", {}).get(field)
-                    if same_input and variant_metadata(variant).model_dump(mode="json").get(field) == value[field]:
-                        if field in variant.get("translated_fields", []):
-                            translated.add(field)
-                        if inputs is None and field in ("title", "plot", "actors"):
-                            originals[field] = variant.get("original_fields", {}).get(field)
-                        if inputs is None and field == "title":
-                            metadata.original_title = originals[field]
-                            title_text = variant.get("title_text")
-                        if inputs is None and field == "actors":
-                            mappings = variant.get("actor_mappings", [])
-                            mapping_fingerprint = variant.get("mapping_fingerprint", "")
-                        if field in variant.get("translation_fingerprints", {}):
-                            fingerprints[field] = variant["translation_fingerprints"][field]
-                        errors.update({error["field"]: error for error in variant.get("translation_errors", []) if error["field"] == field})
-            folder = target_folder(service.output, key)
-            # File rollback encloses the single SQLite output commit as well.
-            with file_transaction(folder):
-                records = []
-                if image_choices:
-                    try:
-                        records = await save_image_choices(await service.artwork_client(), image_choices, variants,
-                            folder, image_stems(work), replace_samples=bool(sample_source))
-                    except (FetchError, ValueError, OSError) as exc:
-                        raise HTTPException(502, "图片保存失败，保留旧图：" + str(exc)) from exc
-                    if sample_source:
-                        selection["image_choices"] = {role: choice for role, choice in selection.get("image_choices", {}).items() if not re.fullmatch(r"fanart[1-9][0-9]{0,2}", role)}
-                    selection["image_choices"] = {**selection.get("image_choices", {}), **{role: {"source": "custom"} if choice.get("box") is not None or choice.get("file") else choice for role, choice in image_choices.items()}}
-                with service.runtime.transaction():
-                    service.runtime.save_metadata(key, metadata)
-                    selection.update(field_sources=provenance,
-                        translated_fields=sorted(translated), original_fields=originals, translation_fingerprints=fingerprints,
-                        manual_fields=sorted(manual_fields(selection) | changed), actor_mappings=mappings,
-                        mapping_fingerprint=mapping_fingerprint, title_text=title_text,
-                        manual_image_roles=sorted(set(selection.get("manual_image_roles", [])) | set(image_choices)))
-                    if sample_source:
-                        selection["manual_image_roles"] = sorted(set(selection["manual_image_roles"]) | {"samples"})
-                    report = {**service.runtime.results.get(key, {}), "status": "found"}
-                    report.pop("error", None)
-                    report["stages"] = {**report.get("stages", {}), "metadata": "success"}
-                    if image_choices:
-                        replaced = set(image_choices)
-                        if sample_source:
-                            replaced.update(f"fanart{i}" for i in range(1, 101))
-                        def replaced_image(record):
-                            name = record.get("file", "")
-                            return name in replaced or any(Path(name).stem == f"{stem}-{role}"
-                                for stem in image_stems(work) for role in replaced)
-                        report["images"] = [record for record in report.get("images", []) if not replaced_image(record)] + records
-                        pending_images = selection.get("pending_images")
-                        if any(record.get("status") == "error" for record in report["images"]):
-                            report["stages"]["images"] = "failed"
-                        elif not pending_images or report["stages"].get("images") not in ("pending", "cancelled"):
-                            report["stages"]["images"] = "success"
-                            selection.pop("pending_images", None)
-                        if selection.get("pending_images"):
-                            # A later repair must not overwrite groups explicitly selected in this save.
-                            pending_images["protected_roles"] = sorted(set(pending_images.get("protected_roles", [])) | replaced)
-                    report["translation_errors"] = list(errors.values())
-                    report["stages"]["translation"] = "failed" if errors else "success" if translated else "skipped"
-                    service.runtime.record_result(key, complete_report(report), selection=selection)
-        await service.emby.sync(key)
-        service.refresh_work(key)
-        return await work_details(work.code)
-
-    @app.post("/api/works/{key}/variants/{source}/preview")
-    async def preview_variant(key: str, source: SourceId):
-        service = runner()
-        if service.work_running(key):
-            raise ValueError("该作品正在刮削")
-        async with service.task_lock, service.work_lock(key):
-            variant = next((v for v in service.runtime.variants(key) if v["source"] == source), None)
-            if not variant or variant["status"] != "found" or not variant.get("metadata") or "processed_fields" not in variant:
-                raise HTTPException(422, "source variant unavailable")
-            category = CatalogRules.load(service.settings.database).classify(key).category
-            names = ActorAliases.load(service.settings.database)
-            await service.resolve_actors(Metadata.model_validate(variant["metadata"]).actors, names, category, variant.get("actor_ids", {}))
-            variant, _issues = prepare_variant(variant, names, category, code=key)
-            await service.translator.verify()
-            variant = await service.translator.variant(variant)
-            service.runtime.save_variant(key, variant)
-        return variant
-
-    @app.get("/api/works/{key}/variants/{source}/artwork")
-    async def variant_artwork(key: str, source: SourceId, index: int, poster: bool = False):
-        service = runner()
-        variant = next((v for v in service.runtime.variants(key) if v["source"] == source), None)
-        items = (variant.get("metadata") or {}).get("artwork", []) if variant else []
-        if not 0 <= index < len(items):
-            raise HTTPException(404, "图片候选不存在")
-        item = items[index]
-        from .images import validate_image
-        client = await service.artwork_client()
-        data = await client.image_bytes(source, item["url"], item["referer"])
-        image = await asyncio.to_thread(validate_image, data, source)
-        if poster:
-            image = await asyncio.to_thread(validate_image, (await asyncio.to_thread(crop_poster, image.content))["preview"])
-        return Response(image.content, media_type="image/" + image.format, headers={"Cache-Control": "private, max-age=60"})
-
-    @app.get("/api/works/{key}/artwork")
-    async def artwork(key: str, file: str):
-        _, path = artwork_file(runner(), key, file)
-        return FileResponse(path, headers={"Cache-Control": "no-store"})
-
-    async def cropped_image(service, key, request):
-        work = service.runtime.work(key)
-        choice = request.model_dump(exclude_none=True, exclude={"box", "center"})
-        if request.file:
-            artwork_file(service, key, request.file)
-            choice["source"] = "custom"
-        variants = {v["source"]: v for v in service.runtime.variants(key)}
-        image = await selected_image(await service.artwork_client(), choice, variants, target_folder(service.output, key), image_stems(work))
-        data = image.content
-        fingerprint = hashlib.sha256(data).hexdigest()
-        result = await asyncio.to_thread(crop_poster, data, request.box, request.center)
-        return fingerprint, result
-
-    @app.post("/api/works/{key}/crop")
-    async def preview_crop(key: str, request: CropRequest):
-        fingerprint, result = await cropped_image(runner(), key, request)
-        return {
-            **{name: result[name] for name in ("box", "faces", "width", "height")},
-            "fingerprint": fingerprint,
-            "preview": "data:image/png;base64," + base64.b64encode(result["preview"]).decode(),
-        }
-
-    @app.post("/api/emby/test")
-    async def test_emby(value: dict):
-        from .emby import EmbyClient, sync_error
-        from .settings import EmbySettings
-        options = {**current_settings().emby.model_dump(), **value}
-        if options.get("api_key") == "***":
-            options["api_key"] = current_settings().emby.api_key
-        client = EmbyClient(EmbySettings.model_validate(options))
-        try:
-            try:
-                return await client.test()
-            except (httpx.HTTPError, ValueError) as exc:
-                return {"valid": False, "message": sync_error(exc)}
+            return await client.test()
         finally:
             await client.close()
 
-    @app.post("/api/works/{key}/sync")
-    async def sync_work(key: str, relink: bool = False):
-        service = runner()
-        service.runtime.work_row(key)
-        if service.runtime.metadata(key) is None:
-            raise ValueError("尚无作品元数据")
-        async with service.work_lock(key):
-            return await service.emby.sync(key, relink=relink, force=True)
+    @app.post("/api/settings/libraries")
+    async def read_libraries(body: dict):
+        value = updated_settings(service.settings, body)
+        client = EmbyClient(value.emby)
+        try:
+            return [
+                {
+                    "id": str(v["ItemId"]),
+                    "name": v["Name"],
+                    "type": v.get("CollectionType"),
+                }
+                for v in await client.libraries()
+                if v.get("ItemId")
+            ]
+        finally:
+            await client.close()
 
-    @app.post("/api/tasks")
-    async def create_task(request: TaskRequest):
-        return runner().create(request)
+    @app.post("/api/settings/test/translation")
+    async def test_translation(body: dict):
+        value = updated_settings(service.settings, body)
+        translator = Translator(value.translation)
+        try:
+            valid = await translator.verify()
+            return {
+                "valid": valid,
+                "sample": translator.validation_sample,
+                "error": translator.validation_error,
+            }
+        finally:
+            await translator.close()
 
-    @app.get("/api/tasks")
-    async def tasks(ids: str | None = None):
-        return runner().runtime.tasks(ids.split(",") if ids is not None else None) if app.state.runner else []
-
-    @app.get("/api/tasks/{task_id}")
-    async def task(task_id: str, page: int | None = None, page_size: int = 100, status: str = "all", query: str = ""):
-        record = runner().runtime.task(task_id)
-        if page is None:
-            return record
-        if page < 1 or page_size not in (100, 1000, 10000) or status not in (
-            "all",
-            "success",
-            "failed",
-            "pending",
-            "running",
-            "cancelled",
-            "skipped",
-            "partial",
-            "todo",
-            "done",
-        ):
-            raise HTTPException(422, "invalid task result filter")
-        items = sorted(
-            record.pop("items"),
-            key=lambda item: (item["status"] != "failed", item["code"]),
-        )
-        groups = {"todo": {"pending", "failed", "partial", "cancelled"}, "done": {"success", "skipped"}}
-        search = query.casefold()
-        def matches_query(item):
-            if not search:
-                return True
-            rows = runner().runtime.works(codes=[item["code"]])
-            row = rows[0] if len(rows) == 1 else {}
-            return search in " ".join([item["code"], row.get("title") or "", *[media["path"] for media in row.get("media", [])], *row.get("actors", [])]).casefold()
-        items = [
-            item
-            for item in items
-            if (status == "all" or item["status"] in groups.get(status, {status}))
-            and matches_query(item)
-        ]
-        pages = max(1, (len(items) + page_size - 1) // page_size)
-        page = min(page, pages)
+    @app.get("/api/works")
+    async def works(
+        q: str = "",
+        status: str = "",
+        offset: int = Query(0, ge=0),
+        limit: int = Query(100, ge=1, le=10000),
+    ):
+        rows = await service.works()
+        rows = filter_works(rows, q, status)
         return {
-            **record,
-            "items": items[(page - 1) * page_size : page * page_size],
-            "page": page,
-            "pages": pages,
-            "matched": len(items),
+            "items": rows[offset : offset + limit],
+            "total": len(rows),
+            "order": navigation_order(rows),
         }
 
-    @app.delete("/api/tasks/{task_id}")
-    async def delete_task(task_id: str):
-        return runner().delete(task_id)
+    @app.get("/api/works/{ident}")
+    async def detail(ident: str):
+        return await service.detail(ident)
 
-    @app.post("/api/tasks/{task_id}/cancel")
-    async def cancel_task(task_id: str):
-        return await runner().cancel(task_id)
+    @app.get("/api/batch")
+    async def batch():
+        return service.runtime.batch()
 
-    @app.post("/api/tasks/{task_id}/retry")
-    async def retry(task_id: str):
-        return runner().retry(task_id)
+    @app.post("/api/batch")
+    async def start(body: BatchRequest):
+        if not (
+            service.settings.emby.url
+            and service.settings.emby.api_key
+            and service.settings.emby.library_ids
+        ):
+            raise ValueError("请先配置 Emby 并选择目标媒体库")
+        if body.action == "force" and not body.confirmed:
+            raise ValueError("强制重刮会覆盖相关手动修改，必须明确确认")
+        if body.action == "retry" and not body.confirmed:
+            # A failed force operation can already have changed some fields.
+            raise ValueError("重试可能继续此前的部分写入，必须明确确认")
+        ids = list(dict.fromkeys(body.ids))
+        if any(not i.isalnum() for i in ids):
+            raise ValueError("无效的 Emby Item ID")
+        return service.batches.start(ids, body.action, body.source)
 
-    @app.get("/api/actors/library")
-    async def actors_library(query: str = ""):
-        service = runner()
-        works = [service.runtime.work(row["code"]) for row in service.runtime.works() if row["status"] != "invalid_key"]
-        return await asyncio.to_thread(library_actors, works, service.output, ActorAliases.load(service.settings.database), query)
+    @app.post("/api/batch/cancel")
+    async def cancel():
+        await service.batches.cancel()
+        return service.runtime.batch()
 
-    @app.get("/api/actors/{name}/portrait")
-    async def actor_portrait(name: str):
-        path = actor_image(runner().output, name)
-        if not path:
-            raise HTTPException(404, "暂无头像")
-        return FileResponse(path, headers={"Cache-Control": "no-store"})
+    @app.get("/api/images/{ident}/{kind}/{index}")
+    async def image(
+        ident: str, kind: Literal["Primary", "Backdrop"], index: int, tag: str = ""
+    ):
+        if not ident.isalnum() or not 0 <= index <= 1000:
+            raise HTTPException(404)
+        async with service.emby() as client:
+            data = await client.image(ident, kind, index, tag=tag)
+        from .images import validate_image
 
-    @app.post("/api/actors/{name}/portrait")
-    async def update_actor_portrait(name: str):
-        service = runner()
-        async with service.task_lock:
-            if service.active():
-                raise ValueError("cannot update portraits while tasks are active")
-            names = ActorAliases.load(service.settings.database)
-            works = [service.runtime.work(row["code"]) for row in service.runtime.works() if row["status"] != "invalid_key"]
-            rows = await asyncio.to_thread(library_actors, works, service.output, names, name)
-            row = next((r for r in rows if r["name"] == name), None)
-            if not row or not row["portrait_eligible"]:
-                raise HTTPException(422, "演员身份不明确或不适用")
-            kinds = {actor_type(work.category) for work in works if work.code in row["codes"]}
-            kind = next(iter(kinds)) if len(kinds) == 1 else None
-            actors = [Actor(name=n) for n in (row["actors"] or [name])]
-            await service.resolve_actors(actors, names, {0: Category.CENSORED, 1: Category.UNCENSORED}.get(kind, Category.UNKNOWN), {})
-            async with Gfriends(service.settings, names, service.output) as portraits:
-                records = await portraits.save(actors, replace=True, kind=kind)
-            if any(record["status"] == "saved" for record in records):
-                for code in row["codes"]:
-                    await service.emby.sync(code)
-            return {"portraits": records}
+        info = await asyncio.to_thread(validate_image, data)
+        mime = "image/jpeg" if info.format == "jpeg" else "image/" + info.format
+        return Response(data, media_type=mime, headers={"Cache-Control": "no-cache"})
+
+    @app.post("/api/works/{ident}/crop/source")
+    async def crop_source(
+        ident: str, source: SourceId | None = None, fetch_source: bool = False
+    ):
+        return await service.crop_source(ident, source, fetch_source=fetch_source)
+
+    @app.get("/api/works/{ident}/crop/{token}/image")
+    async def crop_image(ident: str, token: str):
+        from .images import validate_image
+
+        data = service.crop_session(ident, token).data
+        info = await asyncio.to_thread(validate_image, data)
+        return Response(
+            data,
+            media_type="image/jpeg"
+            if info.format == "jpeg"
+            else "image/" + info.format,
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.delete("/api/works/{ident}/crop/{token}")
+    async def crop_close(ident: str, token: str):
+        service.crop_session(ident, token)
+        service.crops.pop(token, None)
+        return {"closed": True}
+
+    @app.post("/api/works/{ident}/crop/preview")
+    async def crop_preview(ident: str, body: CropRequest):
+        return await service.crop_preview(ident, body.token, body.box, body.center)
+
+    @app.post("/api/works/{ident}/crop/apply")
+    async def crop_apply(ident: str, body: CropRequest):
+        if body.box is None:
+            raise ValueError("请选择裁剪范围")
+        return await service.crop_apply(ident, body.token, body.box)
+
+    static = Path(__file__).parent / "web/dist"
+    if static.is_dir():
+        app.mount("/assets", StaticFiles(directory=static), name="assets")
+
+        @app.get("/")
+        async def index():
+            return FileResponse(
+                static / "index.html", headers={"Cache-Control": "no-cache"}
+            )
 
     return app

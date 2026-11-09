@@ -9,14 +9,14 @@ from ..models import (
     Actor,
     Candidate,
     Category,
-    Metadata,
     ScrapeRequest,
     SourceId,
+    SourceMetadata,
     SourceResult,
     Status,
 )
-from .parsing import artwork, parse_date, text, texts
 from .base import Source
+from .parsing import artwork, parse_date, text, texts
 
 
 class AVSOX(Source):
@@ -101,7 +101,7 @@ class AVSOX(Source):
             raise FetchError(Status.PARSE_ERROR, "AVSOX detail markers missing after rendering")
         title = re.sub(r"^" + re.escape(code) + r"\s*", "", title).strip()
         code = normalize_code(code)
-        metadata = Metadata(
+        metadata = SourceMetadata(
             code=code,
             title=title,
             original_title=title,

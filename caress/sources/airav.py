@@ -7,14 +7,14 @@ from ..http import FetchError
 from ..models import (
     Actor,
     Candidate,
-    Metadata,
     ScrapeRequest,
     SourceId,
+    SourceMetadata,
     SourceResult,
     Status,
 )
-from .parsing import artwork, parse_date, text, texts
 from .base import Source
+from .parsing import artwork, parse_date, text, texts
 
 
 class AirAV(Source):
@@ -63,7 +63,7 @@ class AirAV(Source):
         )
         return self.found(
             request,
-            Metadata(
+            SourceMetadata(
                 code=code,
                 title=title,
                 # Chinese editorial titles are not the Japanese original title.

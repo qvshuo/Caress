@@ -1,25 +1,20 @@
 from __future__ import annotations
 
-import asyncio
-import hashlib
-import re
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
-from urllib.parse import urlsplit, unquote
+from urllib.parse import unquote, urlsplit
 
 from PIL import Image, UnidentifiedImageError
 
-from .http import FetchError, WebClient
-from .logging import report_progress
-from .models import Artwork, SourceId
-from .storage import atomic_write, file_transaction
+from .models import SourceId
 
 
 def validate_resources() -> None:
+    import cv2
+
     from .actors import ActorAliases
     from .catalog import CatalogRules
-    import cv2
 
     CatalogRules.load()
     ActorAliases.load()
@@ -42,16 +37,19 @@ class ImageData:
 
 
 def image_signature(data: bytes) -> bool:
-    return data.startswith((b"\xff\xd8\xff", b"\x89PNG\r\n\x1a\n", b"GIF87a", b"GIF89a")) or (
-        data.startswith(b"RIFF") and data[8:12] == b"WEBP"
-    )
+    return data.startswith(
+        (b"\xff\xd8\xff", b"\x89PNG\r\n\x1a\n", b"GIF87a", b"GIF89a")
+    ) or (data.startswith(b"RIFF") and data[8:12] == b"WEBP")
 
 
 def placeholder_url(source, url):
     if source != SourceId.DMM:
         return False
     path = unquote(urlsplit(url).path).lower()
-    return any(marker in path for marker in ("now_printing", "nowprinting", "noimage", "no_image"))
+    return any(
+        marker in path
+        for marker in ("now_printing", "nowprinting", "noimage", "no_image")
+    )
 
 
 def validate_image(data: bytes, source: SourceId | None = None) -> ImageData:
@@ -70,52 +68,25 @@ def validate_image(data: bytes, source: SourceId | None = None) -> ImageData:
         with Image.open(BytesIO(data)) as image:
             width, height = image.size
             image_format = image.format
+            if width * height > 40_000_000:
+                raise ValueError("image exceeds 40 megapixels")
             image.verify()
         # Header verification alone can accept JPEGs whose pixel stream is corrupt.
         with Image.open(BytesIO(data)) as image:
             image.load()
-        if not image_format or width < 1 or height < 1:
+        if not image_format or width < 1 or height < 1 or width * height > 40_000_000:
             raise ValueError("invalid image dimensions")
         return ImageData(data, image_format.lower(), width, height, decoded)
-    except (UnidentifiedImageError, OSError, SyntaxError, Image.DecompressionBombError) as exc:
+    except (
+        UnidentifiedImageError,
+        OSError,
+        SyntaxError,
+        Image.DecompressionBombError,
+    ) as exc:
         raise ValueError("artwork is corrupt") from exc
 
 
-async def save_images(client, items, target, stems, missing_only=False, previous_files=(), protected_roles=()):
-    from tempfile import TemporaryDirectory
-    if not items:
-        return []
-    if missing_only:
-        return await _save_images(client, items, target, stems, missing_only=True, protected_roles=protected_roles)
-    # Stage the complete selection before replacing any existing image.
-    with TemporaryDirectory(prefix="caress-images-") as temporary:
-        staged = Path(temporary)
-        records = await _save_images(client, items, staged, stems, protected_roles=protected_roles)
-        if any(record["status"] == "error" for record in records):
-            return [record for record in records if record["status"] == "error"]
-        written = {record["file"] for record in records}
-        try:
-            with file_transaction(target):
-                for name in sorted(written):
-                    atomic_write(target / name, (staged / name).read_bytes())
-                for name in previous_files:
-                    old = target / name
-                    if name not in written and Path(name).name == name and old.is_file() and not old.is_symlink():
-                        old.unlink()
-        except (ValueError, OSError) as exc:
-            return [{"file": "images", "status": "error", "message": str(exc)}]
-        return records
-
-
-async def _save_images(
-    client: WebClient,
-    items: list[Artwork],
-    target: Path,
-    stems: list[str],
-    missing_only: bool = False,
-    protected_roles=(),
-) -> list[dict]:
-    """Write work images; crop posters and preserve other originals."""
+def image_plan(items):
     covers = [item for item in items if item.role == "cover"]
     posters = [item for item in items if item.role == "poster"]
     plan = []
@@ -123,69 +94,34 @@ async def _save_images(
         plan.append((covers[0] if covers else posters[0], "poster"))
     if covers or posters:
         plan.append((covers[0] if covers else posters[0], "fanart"))
-    samples = list({(item.source, item.url): item for item in items if item.role == "sample"}.values())
+    samples = list(
+        {
+            (item.source, item.url): item for item in items if item.role == "sample"
+        }.values()
+    )
     plan.extend((item, f"fanart{i + 1}") for i, item in enumerate(samples[:100]))
-    records, downloaded, download_errors = [], {}, {}
+    return plan
 
-    def existing(base):
-        return (
-            [
-                path
-                for path in base.parent.iterdir()
-                if path.stem == base.name
-                and path.suffix.lower() in {".jpg", ".jpeg", ".png", ".gif", ".webp"}
-                and path.is_file()
-                and not path.is_symlink()
-            ]
-            if base.parent.is_dir()
-            else []
+
+async def fetch_artwork(client, candidate):
+    if placeholder_url(candidate.source, candidate.url):
+        raise ValueError("来源返回占位图")
+    import asyncio
+
+    return (
+        await asyncio.to_thread(
+            validate_image,
+            await client.image_bytes(
+                candidate.source, candidate.url, candidate.referer
+            ),
+            candidate.source,
         )
-
-    for item, role in plan:
-        if role in protected_roles:
-            continue
-        paths = [target / f"{stem}-{role}" for stem in stems]
-        if missing_only and all(existing(path) for path in paths):
-            continue
-        try:
-            if placeholder_url(item.source, item.url):
-                raise ValueError("来源返回占位图")
-            identity = (item.source, item.url)
-            if identity in download_errors:
-                raise ValueError(download_errors[identity])
-            if identity not in downloaded:
-                report_progress("images", source=item.source, message=f"下载 {role}")
-                try:
-                    downloaded[identity] = await asyncio.to_thread(validate_image,
-                        await client.image_bytes(item.source, item.url, item.referer),
-                        item.source,
-                    )
-                except (FetchError, ValueError, OSError) as exc:
-                    download_errors[identity] = str(exc)
-                    raise
-            image = downloaded[identity]
-            if role == "poster":
-                report_progress("crop")
-                cropped = await asyncio.to_thread(crop_poster, image.content)
-                image = await asyncio.to_thread(validate_image, cropped["content"], item.source)
-            extension = ".jpg" if image.format == "jpeg" else "." + image.format
-            for base in paths:
-                if missing_only and existing(base):
-                    continue
-                # Add the extension after the shared work code and image role.
-                path = base.parent / (base.name + extension)
-                if not missing_only or not path.is_file():
-                    atomic_write(path, image.content)
-                    for old in existing(base):
-                        if old != path and old.is_file() and not old.is_symlink():
-                            old.unlink()
-                records.append({"file": path.name, "status": "saved"})
-        except (FetchError, ValueError, OSError) as exc:
-            records.append({"file": role, "status": "error", "message": str(exc)})
-    return records
+    ).content
 
 
-def crop_box(width: int, height: int, faces: list[list[float]]) -> tuple[int, int, int, int]:
+def crop_box(
+    width: int, height: int, faces: list[list[float]]
+) -> tuple[int, int, int, int]:
     """Keep the largest 2:3 window; protect the main face with hair/chin margins."""
     unit = min(width // 2, height // 3)
     if unit < 1:
@@ -215,23 +151,48 @@ def crop_box(width: int, height: int, faces: list[list[float]]) -> tuple[int, in
     return round(min(max(x, 0), width - w)), round(min(max(y, 0), height - h)), w, h
 
 
-def crop_poster(data: bytes, box: tuple[int, int, int, int] | None = None, center: bool = False) -> dict:
-    import cv2
-    import numpy as np
+def crop_source_image(data: bytes) -> bytes:
+    """Keep original encoding unless EXIF actually changes browser pixel coordinates."""
+    from PIL import ImageOps
+
+    validate_image(data)
+    with Image.open(BytesIO(data)) as image:
+        if image.getexif().get(274, 1) not in range(2, 9):
+            return data
+        output = BytesIO()
+        ImageOps.exif_transpose(image, in_place=True)
+        image.save(output, format="PNG")
+        result = output.getvalue()
+        if len(result) > 32 * 1024 * 1024:
+            raise ValueError("原始封面超过裁剪资源限制")
+        return result
+
+
+def crop_poster(
+    data: bytes, box: tuple[int, int, int, int] | None = None, center: bool = False
+) -> dict:
     from PIL import ImageOps
 
     if len(data) > 32 * 1024 * 1024:
         raise ValueError("artwork exceeds 32 MiB")
     with Image.open(BytesIO(data)) as source:
-        image = ImageOps.exif_transpose(source).copy()
+        if source.width * source.height > 40_000_000:
+            raise ValueError("image exceeds 40 megapixels")
+        ImageOps.exif_transpose(source, in_place=True)
+        image = source.copy()
     if image.mode == "CMYK":
         image = image.convert("RGB")
     width, height = image.size
     faces = []
     if box is None and not center:
+        import cv2
+        import numpy as np
+
         scale = min(1, 960 / max(width, height))
-        frame = cv2.cvtColor(np.asarray(image.convert("RGB")), cv2.COLOR_RGB2BGR)
-        frame = cv2.resize(frame, (max(32, round(width * scale)), max(32, round(height * scale))))
+        small = image.resize(
+            (max(32, round(width * scale)), max(32, round(height * scale)))
+        )
+        frame = cv2.cvtColor(np.asarray(small.convert("RGB")), cv2.COLOR_RGB2BGR)
         try:
             detector = cv2.FaceDetectorYN.create(
                 str(Path(__file__).parent / "data/yunet.onnx"),
@@ -259,7 +220,13 @@ def crop_poster(data: bytes, box: tuple[int, int, int, int] | None = None, cente
             ]
     box = box or crop_box(width, height, faces)
     x, y, w, h = box
-    if min(x, y) < 0 or min(w, h) < 1 or x + w > width or y + h > height or w * 3 != h * 2:
+    if (
+        min(x, y) < 0
+        or min(w, h) < 1
+        or x + w > width
+        or y + h > height
+        or w * 3 != h * 2
+    ):
         raise ValueError("crop must be an in-bounds 2:3 rectangle")
     cropped = image.crop((x, y, x + w, y + h))
     output = BytesIO()
@@ -277,73 +244,3 @@ def crop_poster(data: bytes, box: tuple[int, int, int, int] | None = None, cente
         "height": height,
         "extension": ".png",
     }
-
-
-async def selected_image(client, choice, variants, target, stems):
-    """Resolve saved artwork or a source candidate without writing any files."""
-    file = choice.get("file")
-    if file is not None:
-        path = target / file if isinstance(file, str) else target
-        if (not isinstance(file, str) or Path(file).name != file or choice.get("source") != "custom"
-            or choice.get("index") is not None or not path.is_file() or path.is_symlink()
-            or not any(re.fullmatch(re.escape(stem) + r"-(?:poster|fanart(?:[1-9][0-9]{0,2})?)", path.stem) for stem in stems)):
-            raise ValueError("图片文件不可用")
-        if path.stat().st_size > 32 * 1024 * 1024:
-            raise ValueError("artwork exceeds 32 MiB")
-        image = await asyncio.to_thread(lambda: validate_image(path.read_bytes()))
-    else:
-        source = choice.get("source")
-        variant = variants.get(source)
-        if not variant or variant.get("status") != "found":
-            raise ValueError("图片来源不可用")
-        items = (variant.get("metadata") or {}).get("artwork", [])
-        index = choice.get("index")
-        if not isinstance(index, int) or isinstance(index, bool) or not 0 <= index < len(items):
-            raise ValueError("图片候选不可用")
-        item = items[index]
-        if placeholder_url(source, item["url"]):
-            raise ValueError("来源返回占位图")
-        image = await asyncio.to_thread(validate_image, await client.image_bytes(SourceId(source), item["url"], item["referer"]), SourceId(source))
-    if choice.get("fingerprint") and hashlib.sha256(image.content).hexdigest() != choice["fingerprint"]:
-        raise ValueError("source image changed; preview again")
-    return image
-
-
-async def save_image_choices(client, choices, variants, target, stems, *, replace_samples=False):
-    """Validate all chosen images before replacing any current image."""
-    staged, downloaded = [], {}
-    for role, choice in choices.items():
-        if not re.fullmatch(r"poster|fanart(?:[1-9][0-9]{0,2})?", role):
-            raise ValueError("invalid artwork role")
-        identity = (choice.get("file"), choice.get("source"), choice.get("index"))
-        if identity not in downloaded:
-            downloaded[identity] = await selected_image(client, choice, variants, target, stems)
-        image = downloaded[identity]
-        if choice.get("fingerprint") and hashlib.sha256(image.content).hexdigest() != choice["fingerprint"]:
-            raise ValueError("source image changed; preview again")
-        box = choice.get("box")
-        if box is not None and (role != "poster" or not choice.get("fingerprint")):
-            raise ValueError("invalid crop selection")
-        if role == "poster":
-            image = await asyncio.to_thread(validate_image, (await asyncio.to_thread(crop_poster, image.content, tuple(box) if box is not None else None))["content"])
-        extension = ".jpg" if image.format == "jpeg" else "." + image.format
-        staged.append((role, extension, image.content))
-    records = []
-    with file_transaction(target):
-        for role, extension, content in staged:
-            for stem in stems:
-                base = f"{stem}-{role}"
-                name = base + extension
-                atomic_write(target / name, content)
-                for old in target.iterdir():
-                    if old.stem == base and old.name != name and old.suffix.lower() in {".jpg", ".jpeg", ".png", ".gif", ".webp"} and old.is_file() and not old.is_symlink():
-                        old.unlink()
-                records.append({"file": name, "status": "saved"})
-        if replace_samples:
-            written = {record["file"] for record in records}
-            for old in target.iterdir():
-                if (old.name not in written and old.is_file() and not old.is_symlink()
-                    and old.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".gif"}
-                    and any(re.fullmatch(re.escape(stem) + r"-fanart[1-9][0-9]{0,2}", old.stem) for stem in stems)):
-                    old.unlink()
-    return records
