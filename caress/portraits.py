@@ -189,7 +189,8 @@ class Gfriends:
                 records.append({"name": name, "status": "saved"})
             except (ValueError, OSError) as exc:
                 records.append({"name": name, "status": "error", "error": str(exc)})
-            self.completed[(name, replace, kind)] = records[-1]
+            if records[-1]["status"] != "error":
+                self.completed[(name, replace, kind)] = records[-1]
             report_progress(
                 "portraits", records[-1]["status"], source="gfriends", message=name
             )

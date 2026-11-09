@@ -20,12 +20,11 @@ import {
   type Source,
   type Work as WorkRecord,
   type WorkNeighbor,
-  type LibraryPreferences,
 } from "@/lib/types";
 const CropEditor = lazy(() => import("@/components/crop-editor"));
 export default function Work({
   id,
-  context,
+  order,
   open,
   revision,
   busy,
@@ -37,7 +36,7 @@ export default function Work({
   emby,
 }: {
   id: string;
-  context: LibraryPreferences;
+  order: WorkNeighbor[];
   open: (neighbor: WorkNeighbor) => void;
   revision: number;
   busy: boolean;
@@ -57,11 +56,7 @@ export default function Work({
     const abort = new AbortController();
     setError("");
     setWork(null);
-    const query = new URLSearchParams({
-      q: context.query,
-      status: context.filter,
-    });
-    void api<WorkRecord>(`works/${id}?${query}`, "GET", undefined, abort.signal)
+    void api<WorkRecord>(`works/${id}`, "GET", undefined, abort.signal)
       .then((value) => {
         if (!abort.signal.aborted) setWork(value);
       })
@@ -69,9 +64,10 @@ export default function Work({
         if (!abort.signal.aborted) setError(e.message);
       });
     return () => abort.abort();
-  }, [id, revision, context.query, context.filter]);
-  const previous = work?.navigation?.previous,
-    next = work?.navigation?.next;
+  }, [id, revision]);
+  const position = order.findIndex((row) => row.id === id);
+  const previous = position > 0 ? order[position - 1] : null,
+    next = position >= 0 ? order[position + 1] || null : null;
   const images = work
     ? [
         ...(work.poster ? [{ src: work.poster, title: "封面" }] : []),
@@ -164,6 +160,11 @@ export default function Work({
               {work.original_title && work.original_title !== work.title && (
                 <p className="text-sm text-muted-foreground">
                   {work.original_title}
+                </p>
+              )}
+              {work.status === "rescrape_failed" && (
+                <p className="text-sm text-muted-foreground">
+                  已有成功记录，普通刮削仍会跳过此作品。
                 </p>
               )}
               {work.error && <Alert role="alert">{work.error}</Alert>}
@@ -298,6 +299,9 @@ export default function Work({
               </div>
             </section>
           )}
+          {work.related_errors?.map((message, index) => (
+            <Alert key={index}>{message}</Alert>
+          ))}
           <ul
             aria-label="媒体文件"
             className="space-y-3 border-t pt-4 text-sm text-muted-foreground"

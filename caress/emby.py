@@ -26,24 +26,20 @@ def sync_error(exc):
 
 
 def image_pixels_match(expected_bytes, actual_bytes):
-    validate_image(expected_bytes)
-    validate_image(actual_bytes)
-    with (
-        Image.open(io.BytesIO(expected_bytes)) as expected,
-        Image.open(io.BytesIO(actual_bytes)) as actual,
-    ):
-        return (
-            actual.size == expected.size
-            and actual.convert("RGBA").tobytes() == expected.convert("RGBA").tobytes()
-        )
+    return pixel_digest(expected_bytes) == pixel_digest(actual_bytes)
 
 
 def pixel_digest(data):
-    validate_image(data)
+    if len(data) > 32 * 1024 * 1024:
+        raise ValueError("artwork exceeds 32 MiB")
     with Image.open(io.BytesIO(data)) as image:
-        return hashlib.sha256(
-            str(image.size).encode() + image.convert("RGBA").tobytes()
-        ).digest()
+        if image.width * image.height > 40_000_000:
+            raise ValueError("image exceeds 40 megapixels")
+        digest = hashlib.sha256(str(image.size).encode())
+        for y in range(0, image.height, 128):
+            with image.crop((0, y, image.width, min(y + 128, image.height))) as strip:
+                digest.update(strip.convert("RGBA").tobytes())
+        return digest.digest()
 
 
 def field_value(key, value):
@@ -122,6 +118,7 @@ def metadata_update(original, metadata, media):
 class EmbyClient:
     def __init__(self, settings, *, transport=None):
         self.settings = settings
+        self.user_lock = asyncio.Lock()
         self.user = None
         self.server = None
         self.client = httpx.AsyncClient(
@@ -129,6 +126,7 @@ class EmbyClient:
             headers={"X-Emby-Token": settings.api_key},
             timeout=30,
             trust_env=False,
+            follow_redirects=False,
             transport=transport,
         )
 
@@ -182,15 +180,36 @@ class EmbyClient:
                 if not data["Items"] or start >= data["TotalRecordCount"]:
                     break
 
-    async def item(self, ident):
-        if self.user is None:
-            users = await self.request("GET", "Users")
-            admin = next(
-                (u for u in users if u.get("Policy", {}).get("IsAdministrator")), None
+    async def contains(self, ident):
+        for library in self.settings.library_ids:
+            data = await self.request(
+                "GET",
+                "Items",
+                params={
+                    "ParentId": library,
+                    "Recursive": "true",
+                    "Ids": str(ident),
+                    "IncludeItemTypes": "Movie",
+                    "Limit": 1,
+                    "EnableImages": "false",
+                    "EnableUserData": "false",
+                },
             )
-            if admin is None:
-                raise ValueError("Emby API Key 无管理员用户")
-            self.user = admin["Id"]
+            if any(str(row["Id"]) == str(ident) for row in data["Items"]):
+                return True
+        return False
+
+    async def item(self, ident):
+        async with self.user_lock:
+            if self.user is None:
+                users = await self.request("GET", "Users")
+                admin = next(
+                    (u for u in users if u.get("Policy", {}).get("IsAdministrator")),
+                    None,
+                )
+                if admin is None:
+                    raise ValueError("Emby API Key 无管理员用户")
+                self.user = admin["Id"]
         item = await self.request(
             "GET", f"Users/{self.user}/Items/{quote(str(ident), safe='')}"
         )
@@ -202,7 +221,7 @@ class EmbyClient:
         if item.get("PartCount", 1) <= 1:
             return []
         data = await self.request("GET", f"Videos/{item['Id']}/AdditionalParts")
-        return [await self.item(row["Id"]) for row in data["Items"]]
+        return data["Items"]
 
     async def image_info(self, ident):
         return await self.request("GET", f"Items/{ident}/Images")
@@ -266,15 +285,18 @@ class EmbyClient:
         return current
 
     async def backdrop_signatures(self, ident):
-        signatures = set()
+        signatures, decoded = set(), {}
         for row in await self.image_info(ident):
             if row["ImageType"] == "Backdrop":
                 data = await self.image(ident, "Backdrop", row.get("ImageIndex", 0))
-                signatures.add(await asyncio.to_thread(pixel_digest, data))
+                raw = hashlib.sha256(data).digest()
+                if raw not in decoded:
+                    decoded[raw] = await asyncio.to_thread(pixel_digest, data)
+                signatures.add(decoded[raw])
         return signatures
 
-    async def append_backdrop(self, ident, data, signatures):
-        digest = await asyncio.to_thread(pixel_digest, data)
+    async def append_backdrop(self, ident, data, signatures, digest=None):
+        digest = digest or await asyncio.to_thread(pixel_digest, data)
         if digest not in signatures:
             await self.upload(ident, "Backdrop", data)
             signatures.add(digest)

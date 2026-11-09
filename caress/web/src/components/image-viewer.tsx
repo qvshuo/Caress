@@ -100,7 +100,8 @@ export function ImageViewer({
             size="icon"
             variant="ghost"
             aria-label="上一张"
-            disabled={index === 0}
+            aria-disabled={index === 0}
+            className="aria-disabled:opacity-50"
             onClick={() => move(-1)}
           >
             <ArrowLeft />
@@ -117,7 +118,8 @@ export function ImageViewer({
             size="icon"
             variant="ghost"
             aria-label="下一张"
-            disabled={index === images.length - 1}
+            aria-disabled={index === images.length - 1}
+            className="aria-disabled:opacity-50"
             onClick={() => move(1)}
           >
             <ArrowRight />

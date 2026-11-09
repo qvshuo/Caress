@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .actors import ActorAliases, actor_type, map_actor_names
+from .emby import pixel_digest
 from .http import FetchError
 from .images import crop_poster, fetch_artwork, image_plan
 from .models import ScrapeRequest, Status
@@ -24,6 +25,7 @@ class Prepared:
     warnings: list[str] = field(default_factory=list)
     mappings: list = field(default_factory=list)
     kind: int | None = None
+    digests: dict = field(default_factory=dict)
 
 
 class WorkProcessor:
@@ -37,6 +39,7 @@ class WorkProcessor:
         self.prepared = {}
         self.people_lock = asyncio.Lock()
         self.people_done = set()
+        self.people_attempts = {}
 
     async def __aenter__(self):
         await self.scraper.__aenter__()
@@ -134,6 +137,8 @@ class WorkProcessor:
                     data = (await asyncio.to_thread(crop_poster, data))["content"]
                     path = folder / "poster.png"
                     await asyncio.to_thread(path.write_bytes, data)
+                if role != "poster":
+                    prepared.digests[path] = await asyncio.to_thread(pixel_digest, data)
                 prepared.images.append(
                     ("Primary" if role == "poster" else "Backdrop", path)
                 )
@@ -153,7 +158,9 @@ class WorkProcessor:
             if kind == "Primary":
                 await client.upload(ident, kind, data)
             else:
-                await client.append_backdrop(ident, data, signatures)
+                await client.append_backdrop(
+                    ident, data, signatures, prepared.digests.get(path)
+                )
         # Portraits are optional and require a verified mapping, an Emby ID and no existing image.
         warnings = list(prepared.warnings)
         async with self.people_lock:
@@ -172,23 +179,30 @@ class WorkProcessor:
                     not person
                     or not person.get("Id")
                     or person["Id"] in self.people_done
+                    or self.people_attempts.get(person["Id"], 0) >= 2
                 ):
                     continue
-                self.people_done.add(person["Id"])
+                self.people_attempts[person["Id"]] = (
+                    self.people_attempts.get(person["Id"], 0) + 1
+                )
                 try:
                     if any(
                         i["ImageType"] == "Primary"
                         for i in await client.image_info(person["Id"])
                     ):
+                        self.people_done.add(person["Id"])
                         continue
                     from .models import Actor
 
                     records = await self.portraits.save(
                         [Actor(name=person["Name"])], kind=prepared.kind
                     )
-                    if records and records[0]["status"] == "saved":
+                    if records and records[0]["status"] in ("saved", "existing"):
                         image = actor_image(self.portraits.output, person["Name"])
                         await client.upload(person["Id"], "Primary", image.read_bytes())
+                        self.people_done.add(person["Id"])
+                    elif records and records[0]["status"] == "not_found":
+                        self.people_done.add(person["Id"])
                 except (ValueError, OSError, FetchError) as exc:
                     warnings.append(f"演员头像：{exc}")
                 except Exception as exc:

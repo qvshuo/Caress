@@ -2,6 +2,8 @@ export const statuses = {
   pending: "待刮削",
   success: "已刮削",
   failed: "失败",
+  rescrape_failed: "重刮失败",
+  cancelled: "已取消",
   unsupported: "不支持",
   running: "处理中",
 };

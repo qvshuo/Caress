@@ -5,7 +5,9 @@ import uuid
 from collections import Counter
 from tempfile import TemporaryDirectory
 
-from .emby import EmbyClient, sync_error
+import httpx
+
+from .emby import sync_error
 from .library import identify
 from .logging import task_id, work_code
 from .processing import WorkProcessor
@@ -55,7 +57,8 @@ class BatchRunner:
     async def _run(self, batch, settings):
         service, runtime = self.service, self.service.runtime
         task_token = task_id.set(batch["id"])
-        client = EmbyClient(settings.emby)
+        lease = service.emby()
+        client = None
         processor = None
 
         def save():
@@ -65,7 +68,7 @@ class BatchRunner:
             runtime.save_batch(batch)
 
         try:
-            await client.test()
+            client = await lease.__aenter__()
             # Resolve live parts/versions once and deduplicate Item IDs before any write.
             allowed = {str(i["Id"]) async for i in client.items()}
             expanded, seen = [], set()
@@ -74,7 +77,28 @@ class BatchRunner:
                 if ident in seen:
                     return
                 seen.add(ident)
-                item = await client.item(ident)
+                if ident not in allowed:
+                    expanded.append(
+                        {
+                            "id": ident,
+                            "status": "skipped",
+                            "code": None,
+                            "error": "关联项目不属于已选择的媒体库或无法确认归属",
+                        }
+                    )
+                    return
+                try:
+                    item = await client.item(ident)
+                except (httpx.HTTPError, ValueError) as exc:
+                    expanded.append(
+                        {
+                            "id": ident,
+                            "status": "skipped",
+                            "code": None,
+                            "error": "无法确认关联项目：" + sync_error(exc),
+                        }
+                    )
+                    return
                 try:
                     code = identify(item)[0]
                 except ValueError:
@@ -82,7 +106,11 @@ class BatchRunner:
                 expanded.append(
                     {"id": ident, "status": "pending", "code": code, "error": None}
                 )
-                others = [str(p["Id"]) for p in await client.parts(item)]
+                try:
+                    others = [str(p["Id"]) for p in await client.parts(item)]
+                except (httpx.HTTPError, ValueError) as exc:
+                    expanded[-1]["warnings"] = ["无法读取附加分集：" + sync_error(exc)]
+                    others = []
                 others += [
                     str(m["ItemId"])
                     for m in item.get("MediaSources", [])
@@ -93,8 +121,6 @@ class BatchRunner:
                         await expand(other)
 
             for row in batch["items"]:
-                if row["id"] not in allowed:
-                    raise ValueError("项目不属于已选择的 Emby 媒体库，请刷新后重试")
                 await expand(row["id"])
             batch["items"] = sorted(expanded, key=lambda row: row["code"] or "")
             remaining = Counter(row["code"] for row in expanded)
@@ -106,7 +132,10 @@ class BatchRunner:
                     semaphore = asyncio.Semaphore(4)
 
                     async def work(row):
+                        if row["status"] == "skipped":
+                            return
                         server, identity, code = client.server, None, None
+                        writing = False
                         work_token = work_code.set(row["code"])
                         async with semaphore, service.item_lock(server, row["id"]):
                             try:
@@ -136,6 +165,8 @@ class BatchRunner:
                                     code, batch["source"]
                                 )
                                 # Revalidate identity immediately before the write, after potentially slow scraping.
+                                if not await client.contains(row["id"]):
+                                    raise ValueError("项目已离开所选媒体库，未执行写入")
                                 live_code, live_identity, live_media = identify(
                                     await client.item(row["id"])
                                 )
@@ -143,6 +174,17 @@ class BatchRunner:
                                     raise ValueError(
                                         "刮削期间 Emby 项目身份变化，请刷新后重试"
                                     )
+                                writing = True
+                                row["writing"] = True
+                                runtime.save_record(
+                                    server,
+                                    row["id"],
+                                    identity,
+                                    code,
+                                    "running",
+                                    error="写入已开始，可能部分完成",
+                                )
+                                save()
                                 warnings = await processor.write(
                                     client, row["id"], prepared, live_media
                                 )
@@ -154,11 +196,16 @@ class BatchRunner:
                                     "success",
                                     source=prepared.source,
                                 )
-                                row.update(status="success", warnings=warnings)
+                                row.update(
+                                    status="success",
+                                    warnings=[*row.get("warnings", []), *warnings],
+                                )
                             except asyncio.CancelledError:
                                 row.update(
                                     status="cancelled",
-                                    error="已取消；此前的写入可能已部分完成",
+                                    error="已取消；写入可能已部分完成"
+                                    if writing
+                                    else "已取消；尚未开始写入",
                                 )
                                 if identity:
                                     runtime.save_record(
@@ -171,7 +218,11 @@ class BatchRunner:
                                     )
                                 raise
                             except Exception as exc:
-                                row.update(status="failed", error=sync_error(exc))
+                                row.update(
+                                    status="failed",
+                                    error=("写入可能已部分完成：" if writing else "")
+                                    + sync_error(exc),
+                                )
                                 if identity:
                                     runtime.save_record(
                                         server,
@@ -213,6 +264,7 @@ class BatchRunner:
             batch["finished_at"] = now()
             save()
             try:
-                await client.close()
+                if client is not None:
+                    await lease.__aexit__(None, None, None)
             finally:
                 task_id.reset(task_token)

@@ -41,14 +41,17 @@ class Runtime:
                     "CREATE TABLE IF NOT EXISTS cooldowns (id TEXT PRIMARY KEY, data TEXT NOT NULL)"
                 )
                 self.connection.execute(
-                    "UPDATE scrapes SET status='failed',error='服务重启，处理被中断' WHERE status='running'"
+                    "UPDATE scrapes SET status='failed',error=CASE WHEN error IS NOT NULL THEN '服务重启，写入可能已部分完成' ELSE '服务重启，尚未开始写入' END WHERE status='running'"
                 )
                 batch = self.batch()
                 if batch and batch["status"] == "running":
                     for item in batch["items"]:
                         if item["status"] in ("pending", "running"):
                             item.update(
-                                status="cancelled", error="服务重启，处理被中断"
+                                status="cancelled",
+                                error="服务重启，写入可能已部分完成"
+                                if item.get("writing")
+                                else "服务重启，尚未开始写入",
                             )
                     batch.update(status="interrupted", current=[])
                     self.connection.execute(
@@ -77,12 +80,13 @@ class Runtime:
     ):
         old = self.record(server, item, identity, code)
         success = now() if status == "success" else old["succeeded_at"] if old else None
+        source = source or (old["source"] if old else None)
         with self.connection:
             self.connection.execute(
                 """INSERT INTO scrapes VALUES (?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(server,item) DO UPDATE SET identity=excluded.identity,code=excluded.code,
                 succeeded_at=excluded.succeeded_at,status=excluded.status,error=excluded.error,
-                source=coalesce(excluded.source,scrapes.source),updated_at=excluded.updated_at""",
+                source=excluded.source,updated_at=excluded.updated_at""",
                 (server, item, identity, code, success, status, error, source, now()),
             )
 

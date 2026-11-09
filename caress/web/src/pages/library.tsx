@@ -24,6 +24,7 @@ import type {
   Source,
   Work,
   LibraryPreferences,
+  WorkNeighbor,
 } from "@/lib/types";
 import { statuses, actions } from "@/lib/labels";
 import { RefreshButton } from "@/components/refresh-button";
@@ -31,6 +32,7 @@ import { Status } from "@/components/status";
 export function Library({
   state,
   setState,
+  setOrder,
   revision,
   configured,
   batch,
@@ -42,6 +44,7 @@ export function Library({
 }: {
   state: LibraryPreferences;
   setState: Dispatch<SetStateAction<LibraryPreferences>>;
+  setOrder: (order: WorkNeighbor[]) => void;
   revision: number;
   configured: boolean;
   batch: Batch | null;
@@ -66,7 +69,7 @@ export function Library({
     setSelected(new Set());
     const timer = setTimeout(
       () => {
-        void api<{ items: Work[]; total: number }>(
+        void api<{ items: Work[]; total: number; order: WorkNeighbor[] }>(
           `works?${new URLSearchParams({ q: query, status: filter, offset: String((page - 1) * pageSize), limit: String(pageSize) })}`,
           "GET",
           undefined,
@@ -75,6 +78,7 @@ export function Library({
           .then((result) => {
             if (controller.signal.aborted) return;
             setRows(result.items);
+            setOrder(result.order || []);
             setTotal(result.total);
             const pages = Math.max(1, Math.ceil(result.total / pageSize));
             if (page > pages) setState((s) => ({ ...s, page: pages }));
@@ -92,7 +96,7 @@ export function Library({
       clearTimeout(timer);
       controller.abort();
     };
-  }, [query, filter, page, pageSize, revision, setState]);
+  }, [query, filter, page, pageSize, revision, setState, setOrder]);
   const busy = batch?.status === "running",
     pages = Math.max(1, Math.ceil(total / pageSize));
   function select(ids: string[], checked: boolean) {

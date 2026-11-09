@@ -15,11 +15,6 @@ export interface Confirmation {
   resolve: (answer: boolean) => void;
 }
 
-export type Confirm = (
-  title: string,
-  description: ReactNode,
-) => Promise<boolean>;
-
 export function ConfirmationDialog({
   value,
   close,

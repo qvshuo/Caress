@@ -5,16 +5,14 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from io import BytesIO
 from weakref import WeakValueDictionary
 
 import httpx
-from PIL import Image, ImageOps
 
 from .emby import EmbyClient
 from .http import FetchError
-from .images import crop_poster
-from .library import filter_works, identify, neighbors, project
+from .images import crop_poster, crop_source_image
+from .library import identify, project
 from .runtime import Runtime
 from .scraper import Scraper
 from .tasks import BatchRunner
@@ -38,6 +36,8 @@ class Service:
         self.batches = BatchRunner(self)
         self.crops = {}
         self.crop_pending = 0
+        self.emby_lock = asyncio.Lock()
+        self.clients = {}
 
     def item_lock(self, server, item):
         key = (server, item)
@@ -50,18 +50,49 @@ class Service:
     async def close(self):
         await self.batches.cancel()
         self.crops.clear()
+        for client, _ in self.clients.values():
+            await client.close()
+        self.clients.clear()
         self.runtime.close()
 
     @asynccontextmanager
     async def emby(self):
         if not self.settings.emby.url or not self.settings.emby.api_key:
             raise ValueError("请先配置 Emby 地址和 API Key")
-        client = EmbyClient(self.settings.emby.model_copy(deep=True))
+        snapshot = self.settings.emby.model_copy(deep=True)
+        key = (snapshot.url, snapshot.api_key, tuple(snapshot.library_ids))
+        async with self.emby_lock:
+            if key not in self.clients:
+                client = EmbyClient(snapshot)
+                try:
+                    await client.test()
+                except BaseException:
+                    await client.close()
+                    raise
+                self.clients[key] = [client, 0]
+            entry = self.clients[key]
+            entry[1] += 1
         try:
-            await client.test()
-            yield client
+            yield entry[0]
         finally:
-            await client.close()
+            async with self.emby_lock:
+                entry[1] -= 1
+                await self.retire_clients()
+
+    async def retire_clients(self):
+        # Active leases retain their snapshot until completion; new requests use new settings.
+        current = self.settings.emby
+        key = (current.url, current.api_key, tuple(current.library_ids))
+        for old, (client, users) in list(self.clients.items()):
+            if old != key and not users:
+                del self.clients[old]
+                await client.close()
+
+    async def configure(self, settings):
+        self.settings = settings
+        self.crops.clear()
+        async with self.emby_lock:
+            await self.retire_clients()
 
     async def works(self):
         async with self.emby() as client:
@@ -71,37 +102,35 @@ class Service:
             ]
 
     async def scoped_item(self, client, ident):
-        # Validate scope using Emby's authoritative recursive library membership.
-        found = False
-        async for item in client.items():
-            if str(item["Id"]) == ident:
-                found = True
-                break
-        if not found:
+        if not await client.contains(ident):
             raise ValueError("项目不属于已选择的媒体库，请刷新列表")
         return await client.item(ident)
 
-    async def detail(self, ident, query="", status=""):
+    async def detail(self, ident):
         async with self.emby() as client:
-            rows = [
-                project(item, self.runtime, client.server)
-                async for item in client.items()
-            ]
-            if not any(row["id"] == ident for row in rows):
-                raise ValueError("项目不属于已选择的媒体库，请刷新列表")
-            item = await client.item(ident)
+            item = await self.scoped_item(client, ident)
             result = project(item, self.runtime, client.server)
-            related = await client.parts(item)
-            ids = {str(item["Id"]), *(str(p["Id"]) for p in related)}
-            for source in item.get("MediaSources", []):
-                other = source.get("ItemId")
-                if other and str(other) not in ids:
-                    related.append(await client.item(other))
-                    ids.add(str(other))
-            result["navigation"] = neighbors(filter_works(rows, query, status), ident)
-            result["related"] = [
-                project(p, self.runtime, client.server) for p in related
+            related, seen = [], {str(item["Id"])}
+            candidates = await client.parts(item)
+            ids = [str(p["Id"]) for p in candidates]
+            ids += [
+                str(m["ItemId"])
+                for m in item.get("MediaSources", [])
+                if m.get("ItemId")
             ]
+            for other in ids:
+                if other in seen:
+                    continue
+                seen.add(other)
+                if await client.contains(other):
+                    related.append(
+                        project(await client.item(other), self.runtime, client.server)
+                    )
+                else:
+                    result.setdefault("related_errors", []).append(
+                        "关联项目不属于已选择的媒体库或无法确认归属"
+                    )
+            result["related"] = related
             return result
 
     def clean_crops(self):
@@ -164,16 +193,7 @@ class Service:
                     ) from exc
                 origin = "来源原始封面"
 
-            # Normalize EXIF orientation once so the browser and pixel coordinates agree.
-            def normalized(content):
-                with Image.open(BytesIO(content)) as image:
-                    output = BytesIO()
-                    ImageOps.exif_transpose(image).save(output, format="PNG")
-                    return output.getvalue()
-
-            data = await asyncio.to_thread(normalized, data)
-            if len(data) > 32 * 1024 * 1024:
-                raise ValueError("原始封面超过裁剪资源限制")
+            data = await asyncio.to_thread(crop_source_image, data)
             token = uuid.uuid4().hex
             self.crops[token] = CropSession(
                 client.server, ident, identity, data, time.monotonic() + 600

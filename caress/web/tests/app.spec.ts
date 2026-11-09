@@ -155,7 +155,7 @@ test("page controls support direct jumps and preserve position after detail", as
       },
     });
   });
-  await page.route("**/api/works/3?**", (route) =>
+  await page.route("**/api/works/3", (route) =>
     route.fulfill({ json: { ...work, id: "3" } }),
   );
   await page.goto("/");
@@ -335,7 +335,7 @@ test("start button is stable when mode changes and grid is absent", async ({
 test("detail next and previous follow current list and return has no icon", async ({
   page,
 }) => {
-  await page.route("**/api/works/*?**", (route) => {
+  await page.route("**/api/works/*", (route) => {
     const url = new URL(route.request().url());
     const id = url.pathname.split("/").at(-1)!;
     return route.fulfill({
@@ -352,7 +352,20 @@ test("detail next and previous follow current list and return has no icon", asyn
       },
     });
   });
-  await page.goto("/#library/work/1");
+  await page.route("**/api/works?**", (route) =>
+    route.fulfill({
+      json: {
+        items: [{ ...work, id: "1", code: "ABC-1" }],
+        total: 2,
+        order: [
+          { id: "1", label: "ABC-1", position: 0 },
+          { id: "2", label: "ABC-2", position: 1 },
+        ],
+      },
+    }),
+  );
+  await page.goto("/");
+  await page.getByRole("row", { name: "查看 ABC-1" }).click();
   await expect(
     page.getByRole("heading", { name: "作品 1", exact: true }),
   ).toBeVisible();
@@ -381,7 +394,7 @@ test("portraits reserve space and gallery supports buttons and keyboard", async 
   await page.route("**/fixture-*", (route) =>
     route.fulfill({ contentType: "image/svg+xml", body: svg }),
   );
-  await page.route("**/api/works/1?**", (route) =>
+  await page.route("**/api/works/1", (route) =>
     route.fulfill({
       json: {
         ...work,
@@ -414,4 +427,74 @@ test("portraits reserve space and gallery supports buttons and keyboard", async 
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
   await expect(page.getByRole("list", { name: "媒体文件" })).toBeVisible();
+});
+
+test("rescrape failure keeps ordinary scrape protected and retry confirmed", async ({
+  page,
+}) => {
+  await page.route("**/api/works/1", (route) =>
+    route.fulfill({
+      json: {
+        ...work,
+        status: "rescrape_failed",
+        last_result: "failed",
+        succeeded_at: "2026-11-09",
+        error: "写入可能已部分完成：图片失败",
+      },
+    }),
+  );
+  await page.goto("/#library/work/1");
+  await expect(page.locator("[data-slot=badge]")).toHaveText("重刮失败");
+  await expect(
+    page.getByRole("button", { name: "刮削元数据", exact: true }),
+  ).toBeDisabled();
+  await expect(
+    page.getByText("已有成功记录，普通刮削仍会跳过此作品。"),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "重试失败", exact: true }).click();
+  await expect(
+    page.getByRole("dialog", { name: "重试失败作品" }),
+  ).toBeVisible();
+});
+
+test("running batch exposes progress and cancellation", async ({ page }) => {
+  let cancelled = false;
+  await page.route("**/api/batch", (route) =>
+    route.fulfill({
+      json: {
+        id: "batch",
+        status: cancelled ? "cancelled" : "running",
+        items: [
+          {
+            id: "1",
+            code: "ABC-123",
+            status: cancelled ? "cancelled" : "running",
+          },
+        ],
+        current: cancelled ? [] : ["1"],
+      },
+    }),
+  );
+  await page.route("**/api/batch/cancel", (route) => {
+    cancelled = true;
+    return route.fulfill({
+      json: {
+        id: "batch",
+        status: "cancelled",
+        items: [
+          { id: "1", status: "cancelled", error: "已取消；尚未开始写入" },
+        ],
+        current: [],
+      },
+    });
+  });
+  await page.goto("/");
+  await expect(
+    page.getByRole("progressbar", { name: "批次进度" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "取消", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "取消", exact: true }),
+  ).toHaveCount(0);
+  expect(cancelled).toBe(true);
 });

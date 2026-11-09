@@ -271,6 +271,9 @@ class FakeClient:
     async def item(self, ident):
         return deepcopy(self.movies[ident])
 
+    async def contains(self, ident):
+        return ident in self.movies
+
     async def parts(self, item):
         return []
 
@@ -315,9 +318,16 @@ def fake_batch(tmp_path, monkeypatch):
     FakeProcessor.writes = []
     FakeProcessor.fail = set()
     FakeProcessor.block = None
-    monkeypatch.setattr(tasks, "EmbyClient", FakeClient)
+    import caress.service as service_module
+
+    monkeypatch.setattr(service_module, "EmbyClient", FakeClient)
     monkeypatch.setattr(tasks, "WorkProcessor", FakeProcessor)
-    service = Service(Settings(database=tmp_path / "db.sqlite3"))
+    service = Service(
+        Settings(
+            database=tmp_path / "db.sqlite3",
+            emby={"url": "http://emby", "api_key": "test"},
+        )
+    )
     yield service
     service.runtime.close()
 
@@ -339,7 +349,7 @@ async def test_normal_skip_force_and_partial_failure_retry(fake_batch):
     await service.batches.task
     assert service.runtime.record("s", "1", identity, code)["status"] == "failed"
     assert service.runtime.record("s", "1", identity, code)["succeeded_at"]
-    assert project(item(), service.runtime, "s")["status"] == "failed"
+    assert project(item(), service.runtime, "s")["status"] == "rescrape_failed"
     FakeProcessor.fail = set()
     service.batches.start(["1"], "retry", None)
     await service.batches.task
@@ -441,6 +451,7 @@ async def test_existing_actor_portraits_are_never_overwritten(tmp_path):
     processor = object.__new__(WorkProcessor)
     processor.people_lock = asyncio.Lock()
     processor.people_done = set()
+    processor.people_attempts = {}
     processor.portraits = SimpleNamespace(save=AsyncMock())
     prepared = Prepared(
         SourceMetadata(code="ABC-123", title="title"),
@@ -607,25 +618,17 @@ async def test_connection_test_and_library_read_are_independent(tmp_path, monkey
         assert upstream.test.await_count == 1 and upstream.libraries.await_count == 1
 
 
-def test_detail_neighbors_follow_filter_and_stop_at_boundaries():
-    from caress.library import filter_works, neighbors
+def test_navigation_order_uses_current_filter():
+    from caress.library import filter_works, navigation_order
 
     rows = [
-        {"id": "1", "code": "ABC-123", "title": "Alpha", "status": "pending"},
-        {"id": "2", "code": "ABC-124", "title": "Beta", "status": "success"},
-        {"id": "3", "code": "ABC-125", "title": "Gamma", "status": "pending"},
+        {"id": str(i), "code": "ABC-123", "title": "Title", "status": status}
+        for i, status in enumerate(["pending", "success", "pending"])
     ]
-    selected = filter_works(rows, "abc", "pending")
-    assert neighbors(selected, "1") == {
-        "previous": None,
-        "next": {"id": "3", "label": "ABC-125", "position": 1},
-    }
-    assert neighbors(selected, "3") == {
-        "previous": {"id": "1", "label": "ABC-123", "position": 0},
-        "next": None,
-    }
-    assert neighbors(selected, "2") == {"previous": None, "next": None}
-    assert filter_works(rows, "beta", "")[0]["id"] == "2"
+    assert navigation_order(filter_works(rows, "abc", "pending")) == [
+        {"id": "0", "label": "ABC-123", "position": 0},
+        {"id": "2", "label": "ABC-123", "position": 1},
+    ]
 
 
 def test_settings_returns_real_source_defaults_without_storing_them():
@@ -640,3 +643,221 @@ def test_settings_returns_real_source_defaults_without_storing_them():
     saved = updated_settings(settings, public)
     assert "source_defaults" not in saved.model_dump()
     assert saved == settings
+
+
+@pytest.mark.asyncio
+async def test_related_scope_deduplicates_without_blocking_valid_items(
+    fake_batch, monkeypatch
+):
+    async def parts(self, parent):
+        return [item("2"), item("outside"), item("2")] if parent["Id"] == "1" else []
+
+    monkeypatch.setattr(FakeClient, "parts", parts)
+    fake_batch.batches.start(["1", "2"], "scrape", None)
+    await fake_batch.batches.task
+    assert sorted(FakeProcessor.writes) == ["1", "2"]
+    rows = fake_batch.runtime.batch()["items"]
+    assert len(rows) == 3
+    excluded = next(r for r in rows if r["id"] == "outside")
+    assert excluded["status"] == "skipped" and "归属" in excluded["error"]
+
+
+@pytest.mark.asyncio
+async def test_detail_reads_only_scoped_item_and_latest_metadata(tmp_path, monkeypatch):
+    from contextlib import asynccontextmanager
+
+    service = Service(Settings(database=tmp_path / "db"))
+    client = SimpleNamespace(
+        server="s",
+        contains=AsyncMock(return_value=True),
+        item=AsyncMock(return_value=item(Name="Emby edited")),
+        parts=AsyncMock(return_value=[]),
+    )
+
+    @asynccontextmanager
+    async def connection():
+        yield client
+
+    monkeypatch.setattr(service, "emby", connection)
+    try:
+        assert (await service.detail("1"))["title"] == "Emby edited"
+        client.contains.assert_awaited_once_with("1")
+        client.contains.return_value = False
+        with pytest.raises(ValueError, match="媒体库"):
+            await service.detail("1")
+        assert client.item.await_count == 1
+    finally:
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_connection_leases_survive_configuration_change(tmp_path, monkeypatch):
+    import caress.service as module
+
+    created = []
+
+    class Client:
+        def __init__(self, settings):
+            self.test = AsyncMock()
+            self.close = AsyncMock()
+            created.append(self)
+
+    monkeypatch.setattr(module, "EmbyClient", Client)
+    settings = Settings(
+        database=tmp_path / "db", emby={"url": "http://emby", "api_key": "secret"}
+    )
+    service = Service(settings)
+    async with service.emby() as old:
+        async with service.emby() as same:
+            assert old is same
+            old.test.assert_awaited_once()
+        changed = settings.model_copy(deep=True)
+        changed.emby.url = "http://other"
+        await service.configure(changed)
+        old.close.assert_not_awaited()
+        async with service.emby() as new:
+            assert new is not old
+    old.close.assert_awaited_once()
+    await service.close()
+    new.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_portrait_failure_retries_but_success_is_shared(tmp_path):
+    from caress.models import SourceMetadata
+    from caress.processing import Prepared
+    from test_images import image_bytes
+
+    processor = WorkProcessor(Settings(database=tmp_path / "db"), None, tmp_path)
+    avatar = tmp_path / "actors" / "Name.png"
+    avatar.parent.mkdir()
+    avatar.write_bytes(image_bytes())
+    processor.portraits.save = AsyncMock(return_value=[{"status": "saved"}])
+    client = SimpleNamespace(
+        write_metadata=AsyncMock(
+            return_value={"People": [{"Name": "Name", "Id": "person", "Type": "Actor"}]}
+        ),
+        image_info=AsyncMock(return_value=[]),
+        upload=AsyncMock(side_effect=[ValueError("temporary"), None]),
+    )
+    prepared = Prepared(
+        SourceMetadata(code="ABC-123", title="title"),
+        "dmm",
+        mappings=[{"actor_id": "verified", "name": "Name"}],
+    )
+    await processor.write(client, "1", prepared, [])
+    assert "person" not in processor.people_done
+    await asyncio.gather(
+        *(processor.write(client, str(i), prepared, []) for i in range(2, 5))
+    )
+    assert client.upload.await_count == 2
+    assert "person" in processor.people_done
+    await processor.__aexit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_targeted_membership_query_and_redirect_does_not_forward_key():
+    import httpx
+
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        if request.url.path.endswith("/Items"):
+            assert request.url.params["Ids"] == "1"
+            assert request.url.params["Recursive"] == "true"
+            return httpx.Response(
+                200,
+                json={
+                    "Items": [{"Id": "1"}]
+                    if request.url.params["ParentId"] == "A"
+                    else []
+                },
+            )
+        return httpx.Response(
+            302, headers={"Location": "https://external.invalid/image"}
+        )
+
+    settings = Settings(
+        emby={"url": "http://emby", "api_key": "private", "library_ids": ["B", "A"]}
+    )
+    client = EmbyClient(settings.emby, transport=httpx.MockTransport(handler))
+    try:
+        assert await client.contains("1")
+        assert len(requests) == 2
+        with pytest.raises(httpx.HTTPStatusError):
+            await client.image("1", "Primary")
+        assert len(requests) == 3
+        assert all(r.url.host == "emby" for r in requests)
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_backdrop_dedup_compares_content_and_preserves_unknown_images():
+    from caress.emby import pixel_digest
+    from test_images import image_bytes
+
+    client = EmbyClient(Settings(emby={"url": "http://emby"}).emby)
+    red, blue = image_bytes(), image_bytes("blue")
+    client.image_info = AsyncMock(
+        return_value=[{"ImageType": "Backdrop", "ImageIndex": 0}]
+    )
+    client.image = AsyncMock(return_value=red)
+    client.upload = AsyncMock()
+    try:
+        signatures = await client.backdrop_signatures("1")
+        await client.append_backdrop("1", red, signatures, pixel_digest(red))
+        await client.append_backdrop("1", blue, signatures, pixel_digest(blue))
+        await client.append_backdrop("1", blue, signatures, pixel_digest(blue))
+        client.upload.assert_awaited_once_with("1", "Backdrop", blue)
+        assert len(signatures) == 2
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_cancellation_after_write_boundary_reports_partial(
+    fake_batch, monkeypatch
+):
+    started = asyncio.Event()
+
+    async def write(*args):
+        started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(FakeProcessor, "write", write)
+    fake_batch.batches.start(["1"], "force", None)
+    await started.wait()
+    await fake_batch.batches.cancel()
+    code, identity, _ = identify(item())
+    record = fake_batch.runtime.record("s", "1", identity, code)
+    assert record["status"] == "cancelled" and "部分" in record["error"]
+
+
+@pytest.mark.asyncio
+async def test_avatar_failure_has_bounded_attempts(tmp_path):
+    from caress.processing import Prepared
+
+    processor = WorkProcessor(Settings(database=tmp_path / "db"), None, tmp_path)
+    processor.portraits.save = AsyncMock(side_effect=ValueError("offline"))
+    client = SimpleNamespace(
+        write_metadata=AsyncMock(
+            return_value={"People": [{"Name": "Name", "Id": "person", "Type": "Actor"}]}
+        ),
+        image_info=AsyncMock(return_value=[]),
+        upload=AsyncMock(),
+    )
+    prepared = Prepared(
+        SourceMetadata(code="ABC-123", title="title"),
+        "dmm",
+        mappings=[{"actor_id": "verified", "name": "Name"}],
+    )
+    try:
+        for i in range(6):
+            await processor.write(client, str(i), prepared, [])
+        assert processor.portraits.save.await_count == 2
+        client.upload.assert_not_awaited()
+        assert not processor.people_done
+    finally:
+        await processor.__aexit__(None, None, None)

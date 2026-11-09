@@ -15,7 +15,7 @@ export function Status({
       className={
         status === "success"
           ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
-          : status === "failed"
+          : status === "failed" || status === "rescrape_failed"
             ? "border-destructive/20 bg-destructive/10 text-destructive"
             : status === "running"
               ? "border-primary/20 bg-primary/10 text-foreground"

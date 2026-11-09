@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from . import __version__
 from .emby import EmbyClient, sync_error
-from .library import filter_works
+from .library import filter_works, navigation_order
 from .models import SourceId
 from .service import Service
 from .settings import Settings
@@ -114,8 +114,7 @@ def create_app(settings: Settings | None = None):
             if service.batches.running and value.emby != service.settings.emby:
                 raise ValueError("批次运行期间不能更换 Emby 连接或目标媒体库")
             value.save()
-            service.settings = value
-            service.crops.clear()
+            await service.configure(value)
             return safe_settings(value)
 
     @app.post("/api/settings/test/emby")
@@ -167,11 +166,15 @@ def create_app(settings: Settings | None = None):
     ):
         rows = await service.works()
         rows = filter_works(rows, q, status)
-        return {"items": rows[offset : offset + limit], "total": len(rows)}
+        return {
+            "items": rows[offset : offset + limit],
+            "total": len(rows),
+            "order": navigation_order(rows),
+        }
 
     @app.get("/api/works/{ident}")
-    async def detail(ident: str, q: str = "", status: str = ""):
-        return await service.detail(ident, q, status)
+    async def detail(ident: str):
+        return await service.detail(ident)
 
     @app.get("/api/batch")
     async def batch():
@@ -222,9 +225,15 @@ def create_app(settings: Settings | None = None):
 
     @app.get("/api/works/{ident}/crop/{token}/image")
     async def crop_image(ident: str, token: str):
+        from .images import validate_image
+
+        data = service.crop_session(ident, token).data
+        info = await asyncio.to_thread(validate_image, data)
         return Response(
-            service.crop_session(ident, token).data,
-            media_type="image/png",
+            data,
+            media_type="image/jpeg"
+            if info.format == "jpeg"
+            else "image/" + info.format,
             headers={"Cache-Control": "no-store"},
         )
 

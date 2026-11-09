@@ -42,14 +42,20 @@ export interface Work {
     uncensored: boolean;
     part: number | null;
   }[];
-  status: "pending" | "success" | "failed" | "unsupported";
+  status:
+    | "pending"
+    | "success"
+    | "failed"
+    | "rescrape_failed"
+    | "cancelled"
+    | "unsupported";
   error: string | null;
   last_result: string | null;
   source: Source | null;
   succeeded_at: string | null;
   emby_url: string;
   related?: Work[];
-  navigation?: { previous: WorkNeighbor | null; next: WorkNeighbor | null };
+  related_errors?: string[];
 }
 export interface WorkNeighbor {
   id: string;

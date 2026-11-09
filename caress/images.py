@@ -151,6 +151,23 @@ def crop_box(
     return round(min(max(x, 0), width - w)), round(min(max(y, 0), height - h)), w, h
 
 
+def crop_source_image(data: bytes) -> bytes:
+    """Keep original encoding unless EXIF actually changes browser pixel coordinates."""
+    from PIL import ImageOps
+
+    validate_image(data)
+    with Image.open(BytesIO(data)) as image:
+        if image.getexif().get(274, 1) not in range(2, 9):
+            return data
+        output = BytesIO()
+        ImageOps.exif_transpose(image, in_place=True)
+        image.save(output, format="PNG")
+        result = output.getvalue()
+        if len(result) > 32 * 1024 * 1024:
+            raise ValueError("原始封面超过裁剪资源限制")
+        return result
+
+
 def crop_poster(
     data: bytes, box: tuple[int, int, int, int] | None = None, center: bool = False
 ) -> dict:
@@ -161,7 +178,8 @@ def crop_poster(
     with Image.open(BytesIO(data)) as source:
         if source.width * source.height > 40_000_000:
             raise ValueError("image exceeds 40 megapixels")
-        image = ImageOps.exif_transpose(source).copy()
+        ImageOps.exif_transpose(source, in_place=True)
+        image = source.copy()
     if image.mode == "CMYK":
         image = image.convert("RGB")
     width, height = image.size
@@ -171,10 +189,10 @@ def crop_poster(
         import numpy as np
 
         scale = min(1, 960 / max(width, height))
-        frame = cv2.cvtColor(np.asarray(image.convert("RGB")), cv2.COLOR_RGB2BGR)
-        frame = cv2.resize(
-            frame, (max(32, round(width * scale)), max(32, round(height * scale)))
+        small = image.resize(
+            (max(32, round(width * scale)), max(32, round(height * scale)))
         )
+        frame = cv2.cvtColor(np.asarray(small.convert("RGB")), cv2.COLOR_RGB2BGR)
         try:
             detector = cv2.FaceDetectorYN.create(
                 str(Path(__file__).parent / "data/yunet.onnx"),

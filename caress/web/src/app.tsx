@@ -21,6 +21,7 @@ import type {
   Batch,
   Settings as Preferences,
   Source,
+  WorkNeighbor,
 } from "@/lib/types";
 import { useListState } from "@/hooks/use-list-state";
 import type { LibraryPreferences } from "@/lib/types";
@@ -34,6 +35,7 @@ export function App() {
     page: 1,
     pageSize: 100,
   }));
+  const [order, setOrder] = useState<WorkNeighbor[]>([]);
   const [route, setRoute] = useState(location.hash.slice(1) || "library");
   const [settings, setSettings] = useState<Preferences | null>(null);
   const [batch, setBatch] = useState<Batch | null>(null);
@@ -174,7 +176,7 @@ export function App() {
             <Work
               key={ident}
               id={ident}
-              context={list}
+              order={order}
               open={(neighbor) => {
                 setList((s) => ({
                   ...s,
@@ -194,6 +196,7 @@ export function App() {
           ) : (
             <Library
               state={list}
+              setOrder={setOrder}
               setState={setList}
               revision={revision}
               configured={settings.configured}

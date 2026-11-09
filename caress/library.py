@@ -73,8 +73,10 @@ def project(item, runtime, server):
     status = "unsupported" if error else "pending"
     if record:
         status = (
-            "failed"
-            if record["status"] in ("failed", "cancelled")
+            ("rescrape_failed" if record["succeeded_at"] else "failed")
+            if record["status"] == "failed"
+            else "cancelled"
+            if record["status"] == "cancelled"
             else "success"
             if record["succeeded_at"]
             else "pending"
@@ -130,26 +132,18 @@ def filter_works(rows, query="", status=""):
             or needle in (row["code"] or "").casefold()
             or needle in row["title"].casefold()
         )
-        and (not status or row["status"] == status)
+        and (
+            not status
+            or row["status"] == status
+            or (
+                status == "failed" and row["status"] in ("rescrape_failed", "cancelled")
+            )
+        )
     ]
 
 
-def neighbors(rows, ident):
-    position = next(
-        (index for index, row in enumerate(rows) if row["id"] == ident), None
-    )
-
-    def target(index):
-        if index < 0 or index >= len(rows):
-            return None
-        row = rows[index]
-        return {
-            "id": row["id"],
-            "label": row["code"] or row["title"],
-            "position": index,
-        }
-
-    return {
-        "previous": target(position - 1) if position is not None else None,
-        "next": target(position + 1) if position is not None else None,
-    }
+def navigation_order(rows):
+    return [
+        {"id": row["id"], "label": row["code"] or row["title"], "position": index}
+        for index, row in enumerate(rows)
+    ]
