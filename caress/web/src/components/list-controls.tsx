@@ -17,7 +17,7 @@ export function SearchInput({
       <Input
         type="search"
         aria-label="搜索番号或标题"
-        placeholder="搜索番号或标题"
+        placeholder="搜索"
         className="pl-9"
         value={value}
         onChange={(e) => onChange(e.target.value)}
@@ -28,21 +28,18 @@ export function SearchInput({
 export function Pagination({
   page,
   pages,
-  total,
   onChange,
   pageSize,
   onPageSizeChange,
 }: {
   page: number;
   pages: number;
-  total: number;
   onChange: (page: number) => void;
   pageSize: number;
   onPageSizeChange: (size: number) => void;
 }) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3 text-sm tabular-nums">
-      <span className="text-muted-foreground">共 {total} 条</span>
+    <div className="flex flex-wrap items-center justify-end gap-3 border-t px-4 py-3 text-sm tabular-nums">
       <div className="flex flex-wrap items-center gap-2">
         <Select
           label="每页条数"

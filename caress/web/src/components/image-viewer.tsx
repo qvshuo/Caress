@@ -1,4 +1,9 @@
-import { useState, type ComponentProps, type ReactNode } from "react";
+import {
+  useEffect,
+  useState,
+  type ComponentProps,
+  type ReactNode,
+} from "react";
 import { ArrowLeft, ArrowRight, ImageOff } from "lucide-react";
 import {
   Dialog,
@@ -13,8 +18,9 @@ export function ArtworkImage({
   alt,
   className,
   fallback,
+  retryable = false,
   ...props
-}: ComponentProps<"img"> & { fallback?: ReactNode }) {
+}: ComponentProps<"img"> & { fallback?: ReactNode; retryable?: boolean }) {
   const [failed, setFailed] = useState<string>();
   if (src && failed === src)
     return (
@@ -30,13 +36,15 @@ export function ArtworkImage({
           <span className="grid justify-items-center gap-2 text-sm">
             <ImageOff className="size-6" />
             <span>图片加载失败</span>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => setFailed(undefined)}
-            >
-              重试
-            </Button>
+            {retryable && (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setFailed(undefined)}
+              >
+                重试
+              </Button>
+            )}
           </span>
         )}
       </span>
@@ -74,6 +82,23 @@ export function ImageViewer({
       Math.min(images.length - 1, Math.max(0, current + delta)),
     );
   }
+  useEffect(() => {
+    // A boundary button can lose focus when it becomes disabled.
+    const keyboard = (event: KeyboardEvent) => {
+      if (event.altKey || event.ctrlKey || event.metaKey) return;
+      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+        event.preventDefault();
+        setIndex((current) =>
+          Math.min(
+            images.length - 1,
+            Math.max(0, current + (event.key === "ArrowLeft" ? -1 : 1)),
+          ),
+        );
+      }
+    };
+    window.addEventListener("keydown", keyboard, true);
+    return () => window.removeEventListener("keydown", keyboard, true);
+  }, [images.length]);
   return (
     <Dialog
       open
@@ -84,30 +109,23 @@ export function ImageViewer({
       <DialogContent
         aria-describedby={undefined}
         className="h-[90dvh] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden sm:max-w-6xl"
-        onKeyDown={(event) => {
-          if (event.altKey || event.ctrlKey || event.metaKey) return;
-          if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-            event.preventDefault();
-            move(event.key === "ArrowLeft" ? -1 : 1);
-          }
-        }}
       >
         <DialogHeader>
-          <DialogTitle>封面与剧照</DialogTitle>
+          <DialogTitle>图片</DialogTitle>
         </DialogHeader>
         <div className="grid min-h-0 grid-cols-[36px_minmax(0,1fr)_36px] items-center gap-2 sm:gap-4">
           <Button
             size="icon"
             variant="ghost"
             aria-label="上一张"
-            aria-disabled={index === 0}
-            className="aria-disabled:opacity-50"
+            disabled={index === 0}
             onClick={() => move(-1)}
           >
             <ArrowLeft />
           </Button>
           <div className="flex h-full min-h-0 items-center justify-center">
             <ArtworkImage
+              retryable
               key={image.src}
               src={image.src}
               alt={image.title}
@@ -118,8 +136,7 @@ export function ImageViewer({
             size="icon"
             variant="ghost"
             aria-label="下一张"
-            aria-disabled={index === images.length - 1}
-            className="aria-disabled:opacity-50"
+            disabled={index === images.length - 1}
             onClick={() => move(1)}
           >
             <ArrowRight />

@@ -13,6 +13,7 @@ import { Status } from "@/components/status";
 import { RefreshButton } from "@/components/refresh-button";
 import { ArtworkImage, ImageViewer } from "@/components/image-viewer";
 import { Select } from "@/components/form-controls";
+import { actions } from "@/lib/labels";
 import { api } from "@/lib/api";
 import {
   sources,
@@ -50,6 +51,7 @@ export default function Work({
   const [work, setWork] = useState<WorkRecord | null>(null),
     [error, setError] = useState(""),
     [source, setSource] = useState<Source | "">(""),
+    [choosingSource, setChoosingSource] = useState(false),
     [crop, setCrop] = useState(false),
     [viewer, setViewer] = useState<number | null>(null);
   useEffect(() => {
@@ -68,12 +70,18 @@ export default function Work({
   const position = order.findIndex((row) => row.id === id);
   const previous = position > 0 ? order[position - 1] : null,
     next = position >= 0 ? order[position + 1] || null : null;
+  const action: Action =
+    work?.status === "success"
+      ? "force"
+      : ["failed", "cancelled", "rescrape_failed"].includes(work?.status || "")
+        ? "retry"
+        : "scrape";
   const images = work
     ? [
         ...(work.poster ? [{ src: work.poster, title: "封面" }] : []),
         ...work.backdrops.map((src, index) => ({
           src,
-          title: `封面与剧照 ${index + 1}`,
+          title: `图片 ${index + 1}`,
         })),
       ]
     : [];
@@ -115,18 +123,23 @@ export default function Work({
         </Button>
       </div>
       {error ? (
-        <Alert role="alert">{error}</Alert>
+        <Alert role="alert">
+          <p>{error}</p>
+          <Button variant="outline" onClick={refresh}>
+            重试
+          </Button>
+        </Alert>
       ) : !work ? (
         <Empty>正在加载…</Empty>
       ) : (
         <>
-          <div className="grid gap-6 sm:grid-cols-[200px_minmax(0,1fr)]">
+          <div className="grid grid-cols-1 gap-6 sm:grid-cols-[200px_minmax(0,1fr)]">
             <div>
               {work.poster ? (
                 <button
                   type="button"
                   aria-label="查看封面"
-                  className="block w-full max-w-64 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="block w-full max-w-40 rounded-lg sm:max-w-full outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   onClick={() => setViewer(0)}
                 >
                   <ArtworkImage
@@ -136,7 +149,7 @@ export default function Work({
                   />
                 </button>
               ) : (
-                <div className="flex aspect-[2/3] max-w-64 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+                <div className="flex aspect-[2/3] w-40 sm:w-full items-center justify-center rounded-lg bg-muted text-muted-foreground">
                   <Film className="size-10" aria-label="暂无封面" />
                 </div>
               )}
@@ -146,7 +159,7 @@ export default function Work({
                 disabled={writing || work.status === "unsupported"}
                 onClick={() => setCrop(true)}
               >
-                裁剪封面
+                裁剪
               </Button>
             </div>
             <div className="space-y-4">
@@ -156,19 +169,38 @@ export default function Work({
                 </span>
                 <Status status={writing ? "running" : work.status} />
               </div>
-              <h2 className="break-words text-xl font-medium">{work.title}</h2>
+              <h2 className="wrap-anywhere text-xl font-medium">
+                {work.title}
+              </h2>
               {work.original_title && work.original_title !== work.title && (
-                <p className="text-sm text-muted-foreground">
+                <p className="wrap-anywhere text-sm text-muted-foreground">
                   {work.original_title}
-                </p>
-              )}
-              {work.status === "rescrape_failed" && (
-                <p className="text-sm text-muted-foreground">
-                  已有成功记录，普通刮削仍会跳过此作品。
                 </p>
               )}
               {work.error && <Alert role="alert">{work.error}</Alert>}
               <div className="flex flex-wrap items-center gap-2">
+                {work.status !== "unsupported" && (
+                  <Button
+                    disabled={busy}
+                    onClick={() =>
+                      run(() => start([id], action, source || undefined))
+                    }
+                  >
+                    {actions[action]}
+                  </Button>
+                )}
+                {work.status !== "unsupported" && (
+                  <Button
+                    variant="ghost"
+                    aria-expanded={choosingSource}
+                    onClick={() => setChoosingSource((v) => !v)}
+                  >
+                    指定来源{source ? ` · ${source}` : ""}
+                  </Button>
+                )}
+                <RefreshButton onClick={refresh} label="刷新作品" />
+              </div>
+              {choosingSource && (
                 <Select
                   label="刮削来源"
                   value={source}
@@ -178,38 +210,7 @@ export default function Work({
                     ...Object.fromEntries(sources.map((s) => [s, s])),
                   }}
                 />
-                <Button
-                  disabled={
-                    busy || work.status === "unsupported" || !!work.succeeded_at
-                  }
-                  onClick={() =>
-                    run(() => start([id], "scrape", source || undefined))
-                  }
-                >
-                  刮削元数据
-                </Button>
-                {["failed", "cancelled"].includes(work.last_result || "") && (
-                  <Button
-                    variant="outline"
-                    disabled={busy}
-                    onClick={() =>
-                      run(() => start([id], "retry", source || undefined))
-                    }
-                  >
-                    重试失败
-                  </Button>
-                )}
-                <Button
-                  variant="outline"
-                  disabled={busy || work.status === "unsupported"}
-                  onClick={() =>
-                    run(() => start([id], "force", source || undefined))
-                  }
-                >
-                  重新刮削
-                </Button>
-                <RefreshButton onClick={refresh} label="刷新作品" />
-              </div>
+              )}
               <a
                 className="inline-flex items-center gap-1.5 text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
                 href={emby + work.emby_url}
@@ -219,22 +220,38 @@ export default function Work({
                 在 Emby 中打开
                 <ExternalLink className="size-3.5" />
               </a>
-              <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
-                <dt className="text-muted-foreground">发行</dt>
-                <dd>{work.release_date?.slice(0, 10) || work.year || ""}</dd>
-                <dt className="text-muted-foreground">厂商</dt>
-                <dd>{work.studios.join("、")}</dd>
-                <dt className="text-muted-foreground">类型</dt>
-                <dd>{work.genres.join("、")}</dd>
-                <dt className="text-muted-foreground">标签</dt>
-                <dd>{work.tags.join("、")}</dd>
+              <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm [&>dd]:wrap-anywhere">
+                {(work.release_date || work.year) && (
+                  <>
+                    <dt className="text-muted-foreground">发行</dt>
+                    <dd>{work.release_date?.slice(0, 10) || work.year}</dd>
+                  </>
+                )}
+                {!!work.studios.length && (
+                  <>
+                    <dt className="text-muted-foreground">厂商</dt>
+                    <dd>{work.studios.join("、")}</dd>
+                  </>
+                )}
+                {!!work.genres.length && (
+                  <>
+                    <dt className="text-muted-foreground">类型</dt>
+                    <dd>{work.genres.join("、")}</dd>
+                  </>
+                )}
+                {!!work.tags.length && (
+                  <>
+                    <dt className="text-muted-foreground">标签</dt>
+                    <dd>{work.tags.join("、")}</dd>
+                  </>
+                )}
               </dl>
             </div>
           </div>
           {work.plot && (
             <section>
               <h2 className="mb-3 font-medium">简介</h2>
-              <p className="whitespace-pre-wrap text-sm leading-7">
+              <p className="whitespace-pre-wrap text-sm leading-6">
                 {work.plot}
               </p>
             </section>
@@ -242,7 +259,7 @@ export default function Work({
           {!!work.people.length && (
             <section>
               <h2 className="mb-3 font-medium">人物</h2>
-              <div className="flex flex-wrap gap-5">
+              <div className="flex flex-wrap gap-4">
                 {work.people.map((person, index) => (
                   <div
                     key={`${person.id || person.name}-${index}`}
@@ -263,7 +280,7 @@ export default function Work({
                         </span>
                       )}
                     </div>
-                    <p className="break-words">{person.name}</p>
+                    <p className="wrap-anywhere">{person.name}</p>
                     <p className="text-xs text-muted-foreground">
                       {person.type === "Actor"
                         ? "演员"
@@ -278,8 +295,8 @@ export default function Work({
           )}
           {!!work.backdrops.length && (
             <section>
-              <h2 className="mb-3 font-medium">封面与剧照</h2>
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              <h2 className="mb-3 font-medium">图片</h2>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
                 {work.backdrops.map((url, index) => (
                   <button
                     key={url}
@@ -290,7 +307,7 @@ export default function Work({
                   >
                     <ArtworkImage
                       src={url}
-                      alt={`封面与剧照 ${index + 1}`}
+                      alt={`图片 ${index + 1}`}
                       className="aspect-video w-full object-contain"
                       loading="lazy"
                     />

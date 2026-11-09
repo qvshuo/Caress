@@ -243,11 +243,11 @@ class EmbyClient:
                 data.extend(chunk)
                 if len(data) > 32 * 1024 * 1024:
                     raise ValueError("Emby 图片超过 32 MiB")
-        return (await asyncio.to_thread(validate_image, bytes(data))).content
+        return await asyncio.to_thread(validate_image, bytes(data))
 
     async def upload(self, ident, kind, data, index=None):
         info = await asyncio.to_thread(validate_image, data)
-        mime = "image/jpeg" if info.format == "jpeg" else "image/" + info.format
+        mime = info.mime
         path = f"Items/{ident}/Images/{kind}" + (
             f"/{index}" if index is not None else ""
         )
@@ -267,7 +267,7 @@ class EmbyClient:
         ):
             raise ValueError("Emby 图片回读验证失败")
         if not await asyncio.to_thread(
-            image_pixels_match, data, await self.image(ident, kind, index)
+            image_pixels_match, data, (await self.image(ident, kind, index)).content
         ):
             raise ValueError("Emby 图片内容回读不一致")
 
@@ -288,7 +288,9 @@ class EmbyClient:
         signatures, decoded = set(), {}
         for row in await self.image_info(ident):
             if row["ImageType"] == "Backdrop":
-                data = await self.image(ident, "Backdrop", row.get("ImageIndex", 0))
+                data = (
+                    await self.image(ident, "Backdrop", row.get("ImageIndex", 0))
+                ).content
                 raw = hashlib.sha256(data).digest()
                 if raw not in decoded:
                     decoded[raw] = await asyncio.to_thread(pixel_digest, data)

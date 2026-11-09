@@ -124,3 +124,18 @@ def test_crop_source_checks_pixel_limit_before_decode(monkeypatch):
     monkeypatch.setattr(Image.Image, "load", forbidden)
     with pytest.raises(ValueError, match="40 megapixels"):
         crop_source_image(data)
+
+
+def test_crop_rejects_oversized_lossless_output(monkeypatch):
+    original = Image.Image.save
+
+    def inflated(image, stream, *args, **kwargs):
+        if kwargs.get("format") == "PNG":
+            stream.write(b"x" * (32 * 1024 * 1024 + 1))
+        else:
+            original(image, stream, *args, **kwargs)
+
+    data = image_bytes()
+    monkeypatch.setattr(Image.Image, "save", inflated)
+    with pytest.raises(ValueError, match="32 MiB"):
+        crop_poster(data, center=True)

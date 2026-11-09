@@ -35,6 +35,19 @@ class ImageData:
     height: int
     decoded: bool
 
+    @property
+    def mime(self):
+        return "image/jpeg" if self.format == "jpeg" else "image/" + self.format
+
+
+class PngOutput(BytesIO):
+    """Stop lossless encoding before an expanded image exhausts the output budget."""
+
+    def write(self, data):
+        if self.tell() + len(data) > 32 * 1024 * 1024:
+            raise ValueError("PNG 图像超过 32 MiB")
+        return super().write(data)
+
 
 def image_signature(data: bytes) -> bool:
     return data.startswith(
@@ -159,12 +172,10 @@ def crop_source_image(data: bytes) -> bytes:
     with Image.open(BytesIO(data)) as image:
         if image.getexif().get(274, 1) not in range(2, 9):
             return data
-        output = BytesIO()
+        output = PngOutput()
         ImageOps.exif_transpose(image, in_place=True)
         image.save(output, format="PNG")
         result = output.getvalue()
-        if len(result) > 32 * 1024 * 1024:
-            raise ValueError("原始封面超过裁剪资源限制")
         return result
 
 
@@ -229,7 +240,7 @@ def crop_poster(
     ):
         raise ValueError("crop must be an in-bounds 2:3 rectangle")
     cropped = image.crop((x, y, x + w, y + h))
-    output = BytesIO()
+    output = PngOutput()
     # Preserve the selected source pixels; JPEG/WebP encoding would add loss.
     cropped.save(output, format="PNG")
     preview = BytesIO()

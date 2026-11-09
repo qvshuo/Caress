@@ -95,9 +95,8 @@ export function App() {
     if (action !== "scrape") {
       const accepted = await new Promise<boolean>((resolve) => {
         const value = {
-          title: action === "force" ? "重新刮削" : "重试失败作品",
-          description:
-            "将重新执行完整刮削，并可能覆盖你在 Emby 手动修改的相关元数据及海报。无关字段和图片会保留。",
+          title: action === "force" ? "重新刮削" : "重试",
+          description: "可能覆盖 Emby 中手动修改的相关元数据和海报。继续？",
           resolve,
         };
         confirmationRef.current = value;
@@ -154,15 +153,25 @@ export function App() {
           className="mb-4 flex items-start justify-between gap-3"
         >
           <span>{notice}</span>
-          <Button size="sm" variant="ghost" onClick={() => setNotice("")}>
-            关闭
-          </Button>
+          {settings && (
+            <Button size="sm" variant="ghost" onClick={() => setNotice("")}>
+              关闭
+            </Button>
+          )}
         </Alert>
       )}
       {!settings ? (
-        <Empty>正在连接服务…</Empty>
+        notice ? (
+          <Empty>
+            <Button variant="outline" onClick={() => location.reload()}>
+              重试
+            </Button>
+          </Empty>
+        ) : (
+          <Empty>正在加载…</Empty>
+        )
       ) : (
-        <Suspense fallback={<Empty>正在载入…</Empty>}>
+        <Suspense fallback={<Empty>正在加载…</Empty>}>
           {tab === "settings" ? (
             <Settings
               initial={settings}

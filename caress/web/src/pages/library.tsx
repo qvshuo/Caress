@@ -143,7 +143,7 @@ export function Library({
   return (
     <div className="space-y-4">
       <div className="flex min-h-9 flex-wrap items-center justify-between gap-3">
-        <p className="text-base font-medium tabular-nums">
+        <p className="text-sm tabular-nums text-muted-foreground">
           {total} 部作品{selected.size ? ` · 已选 ${selected.size}` : ""}
         </p>
         <RefreshButton
@@ -157,14 +157,24 @@ export function Library({
       {batch && (
         <section
           aria-label="当前批次"
-          className="space-y-2 rounded-lg border p-4 text-sm"
+          className={
+            busy
+              ? "space-y-3 rounded-md border p-3 text-sm"
+              : "space-y-2 text-sm"
+          }
         >
-          <div className="flex items-center justify-between gap-3">
-            <p className="tabular-nums">
-              {busy ? "正在处理" : "最近批次"} · {done}/{batch.items.length} ·
-              成功 {batch.items.filter((i) => i.status === "success").length} ·
-              失败 {batch.items.filter((i) => i.status === "failed").length} ·
-              跳过 {batch.items.filter((i) => i.status === "skipped").length}
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="tabular-nums text-muted-foreground">
+              {busy
+                ? `处理中 · ${done}/${batch.items.length}`
+                : batch.status === "cancelled"
+                  ? "已取消"
+                  : batch.status === "interrupted"
+                    ? "已中断"
+                    : batch.status === "failed"
+                      ? "失败"
+                      : "已完成"}
+              {` · ${batch.items.filter((i) => i.status === "success").length} 成功 · ${batch.items.filter((i) => i.status === "failed").length} 失败 · ${batch.items.filter((i) => i.status === "skipped").length} 跳过`}
             </p>
             {busy && (
               <Button size="sm" variant="outline" onClick={() => run(cancel)}>
@@ -172,30 +182,37 @@ export function Library({
               </Button>
             )}
           </div>
-          <progress
-            className="h-2 w-full accent-primary"
-            max={batch.items.length || 1}
-            value={done}
-            aria-label="批次进度"
-          />
-          {!!batch.current.length && (
-            <p className="text-muted-foreground">
-              当前：
-              {batch.items
-                .filter((i) => batch.current.includes(i.id))
-                .map((i) => i.code || i.id)
-                .join("、")}
-            </p>
+          {busy && (
+            <>
+              <progress
+                className="h-1.5 w-full accent-primary"
+                max={batch.items.length || 1}
+                value={done}
+                aria-label="批次进度"
+              />
+              {!!batch.current.length && (
+                <p className="text-muted-foreground">
+                  当前：
+                  {batch.items
+                    .filter((i) => batch.current.includes(i.id))
+                    .map((i) => i.code || i.id)
+                    .join("、")}
+                </p>
+              )}
+            </>
           )}
-          {batch.error && (
-            <p role="alert" className="text-destructive">
-              {batch.error}
-            </p>
-          )}
-          {batch.items.some((i) => i.error || i.warnings?.length) && (
+          {(batch.error ||
+            batch.items.some((i) => i.error || i.warnings?.length)) && (
             <details>
-              <summary className="cursor-pointer">处理详情</summary>
-              <ul className="mt-2 max-h-48 space-y-2 overflow-auto">
+              <summary className="w-fit cursor-pointer text-muted-foreground">
+                详情
+              </summary>
+              {batch.error && (
+                <p role="alert" className="mt-2 text-destructive">
+                  {batch.error}
+                </p>
+              )}
+              <ul className="mt-2 max-h-48 space-y-2 overflow-auto wrap-anywhere">
                 {batch.items
                   .filter((i) => i.error || i.warnings?.length)
                   .map((i) => (
@@ -232,7 +249,7 @@ export function Library({
         )}
       </div>
       <div className="overflow-hidden rounded-lg border">
-        <div className="flex flex-wrap items-center gap-3 border-b p-4">
+        <div className="flex flex-wrap items-center gap-2 border-b p-3 sm:gap-3">
           <SearchInput
             value={query}
             onChange={(query) => setState((s) => ({ ...s, query, page: 1 }))}
@@ -254,11 +271,14 @@ export function Library({
           </div>
         </div>
         {error ? (
-          <Alert role="alert" className="m-4">
-            {error}，请检查连接后刷新
+          <Alert role="alert" className="m-4 w-auto">
+            <p>{error}</p>
+            <Button variant="outline" onClick={refresh}>
+              重试
+            </Button>
           </Alert>
         ) : loading ? (
-          <Empty>正在读取 Emby…</Empty>
+          <Empty>正在加载…</Empty>
         ) : !rows.length ? (
           <Empty>没有匹配的作品</Empty>
         ) : (
@@ -274,60 +294,56 @@ export function Library({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rows.map((w) => (
-                <TableRow
-                  key={w.id}
-                  aria-label={`查看 ${w.code || w.title}`}
-                  {...rowNavigation(() => open(w.id))}
-                >
-                  <TableCell className="pl-4">{checkbox(w)}</TableCell>
-                  <TableCell className="font-medium">
-                    <span
-                      className="block truncate"
-                      title={w.code || w.media[0]?.filename}
-                    >
-                      {w.code || w.media[0]?.filename || "无法识别"}
-                    </span>
-                  </TableCell>
-                  <TableCell>
-                    <span className="block truncate" title={w.title}>
-                      {w.title}
-                    </span>
-                  </TableCell>
-                  <TableCell>
-                    <span
-                      className="block truncate"
-                      title={w.people
-                        .filter((p) => p.type === "Actor")
-                        .map((p) => p.name)
-                        .join("、")}
-                    >
-                      {w.people
-                        .filter((p) => p.type === "Actor")
-                        .map((p) => p.name)
-                        .join("、")}
-                    </span>
-                  </TableCell>
-                  <TableCell className="text-xs text-muted-foreground">
-                    {mediaLabel(w)}
-                  </TableCell>
-                  <TableCell>
-                    <Status
-                      status={
-                        batch?.current.includes(w.id) ? "running" : w.status
-                      }
-                      title={w.error || undefined}
-                    />
-                  </TableCell>
-                </TableRow>
-              ))}
+              {rows.map((w) => {
+                const actors = w.people
+                  .filter((p) => p.type === "Actor")
+                  .map((p) => p.name)
+                  .join("、");
+                return (
+                  <TableRow
+                    key={w.id}
+                    aria-label={`查看 ${w.code || w.title}`}
+                    {...rowNavigation(() => open(w.id))}
+                  >
+                    <TableCell className="pl-4">{checkbox(w)}</TableCell>
+                    <TableCell className="font-medium">
+                      <span
+                        className="block truncate"
+                        title={w.code || w.media[0]?.filename}
+                      >
+                        {w.code || w.media[0]?.filename || "无法识别"}
+                      </span>
+                    </TableCell>
+                    <TableCell>
+                      <span className="block truncate" title={w.title}>
+                        {w.title}
+                      </span>
+                    </TableCell>
+                    <TableCell>
+                      <span className="block truncate" title={actors}>
+                        {actors}
+                      </span>
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {mediaLabel(w)}
+                    </TableCell>
+                    <TableCell>
+                      <Status
+                        status={
+                          batch?.current.includes(w.id) ? "running" : w.status
+                        }
+                        title={w.error || undefined}
+                      />
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         )}
         <Pagination
           page={Math.min(page, pages)}
           pages={pages}
-          total={total}
           pageSize={pageSize}
           onChange={(page) => setState((s) => ({ ...s, page }))}
           onPageSizeChange={(pageSize) =>

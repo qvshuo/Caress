@@ -13,6 +13,17 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.15'
+      - name: Check version consistency
+        run: |
+          python - <<'PYVERSION'
+          import ast, json, re
+          from pathlib import Path
+          tree = ast.parse(Path('caress/__init__.py').read_text())
+          version = next(ast.literal_eval(node.value) for node in tree.body if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == '__version__' for target in node.targets))
+          assert re.fullmatch(r'\d+\.\d+\.\d+', version)
+          assert json.loads(Path('caress/web/package.json').read_text())['version'] == version
+          assert f'image: caress:{version}\n' in Path('docker-compose.example.yml').read_text()
+          PYVERSION
       - run: python -m pip install -r requirements-dev.txt
       - run: ruff check caress tests --no-cache
       - run: python -m pytest tests -q --basetemp="${RUNNER_TEMP}/caress-tests"

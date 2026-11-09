@@ -12,7 +12,7 @@
 ## 结构
 - `emby.py` 为 REST/回读，`library.py` 为只读投影，`identifiers.py` 为文件名；`scraper.py` 顺序调度，`sources/` 独立适配来源。
 - `processing.py` 编排加工，`translation.py` 翻译，`portraits.py` 临时头像，`images.py` 验证/YuNet/裁剪；`runtime.py` 管 SQLite，`tasks.py` 管批次，`service.py` 管生命周期与裁剪会话，`api.py` 管 HTTP。
-- Web `pages/` 为作品/设置，`components/` 为共享控件，`hooks/` 为共享状态，`lib/` 为类型与传输。只有表格，保留分页、列表导航、系统主题、键盘访问和现有 Base UI 交互。刷新统一图标加“刷新”。
+- Web `pages/` 为作品/设置，`components/` 为共享控件，`hooks/` 为共享状态，`lib/` 为类型与传输。只有表格，保留分页、列表导航、系统主题、键盘访问和现有 Base UI 交互。普通刷新统一图标加“刷新”，裁剪原图使用“重新获取原图”。
 - 安全与数据流细节以 `docs/architecture.md` 为准。修复确有问题的实现，不增加缓存框架、兼容层、ORM 或通用任务框架。
 
 ## 开发与交付

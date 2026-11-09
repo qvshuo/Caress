@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { LoaderCircle } from "lucide-react";
 import { SecretInput } from "@/components/secret-input";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -49,9 +50,23 @@ export default function Settings({
     >(null),
     [results, setResults] = useState<Record<string, Result>>({}),
     [pending, setPending] = useState("");
+  const operation = useRef<AbortController | null>(null);
+  useEffect(() => () => operation.current?.abort(), []);
+  function invalidateConnection() {
+    if (pending === "emby") {
+      operation.current?.abort();
+      setPending("");
+    }
+    setLibraries(null);
+    setResults((old) => {
+      const next = { ...old };
+      delete next.emby;
+      return next;
+    });
+  }
   function message(kind: string) {
     const result = results[kind];
-    return result ? (
+    return result?.text ? (
       <p
         role={result.error ? "alert" : "status"}
         className={`text-sm ${result.error ? "text-destructive" : "text-muted-foreground"}`}
@@ -60,7 +75,13 @@ export default function Settings({
       </p>
     ) : null;
   }
-  async function execute(kind: string, fn: () => Promise<string>) {
+  async function execute(
+    kind: string,
+    fn: (signal: AbortSignal) => Promise<string>,
+  ) {
+    operation.current?.abort();
+    const controller = new AbortController();
+    operation.current = controller;
     setPending(kind);
     setResults((old) => {
       const next = { ...old };
@@ -68,9 +89,11 @@ export default function Settings({
       return next;
     });
     try {
-      const text = await fn();
+      const text = await fn(controller.signal);
+      if (controller.signal.aborted) return;
       setResults((old) => ({ ...old, [kind]: { text, error: false } }));
     } catch (e) {
+      if (controller.signal.aborted) return;
       setResults((old) => ({
         ...old,
         [kind]: {
@@ -79,7 +102,7 @@ export default function Settings({
         },
       }));
     } finally {
-      setPending("");
+      if (operation.current === controller) setPending("");
     }
   }
   function currentSettings() {
@@ -92,7 +115,7 @@ export default function Settings({
         new Set(list).size !== list.length
       )
         throw new Error(
-          `${categories[category]}来源无效：使用下方来源名称，以英文逗号分隔，不要重复`,
+          `${categories[category]}来源无效：请用英文逗号分隔有效来源，且不要重复`,
         );
       if (category === "censored" && list.includes("avsox"))
         throw new Error("AVSOX 不支持有码作品，请从有码来源中移除");
@@ -114,12 +137,14 @@ export default function Settings({
       className="space-y-8"
       onSubmit={(e) => {
         e.preventDefault();
-        void execute("save", async () => {
+        void execute("save", async (signal) => {
           const next = await api<Preferences>(
             "settings",
             "PUT",
             currentSettings(),
+            signal,
           );
+          if (signal.aborted) return "";
           setValue(next);
           setUrls(sourceUrls(next));
           setRoutes(
@@ -131,12 +156,15 @@ export default function Settings({
             ),
           );
           saved(next);
-          return "设置已保存";
+          return "已保存";
         });
       }}
     >
-      <fieldset className="space-y-4" disabled={!!pending || busy}>
-        <legend className="mb-4 text-base font-medium">Emby</legend>
+      <fieldset
+        className="space-y-4"
+        disabled={(!!pending && pending !== "emby") || busy}
+      >
+        <legend className="mb-3 text-base font-medium">Emby</legend>
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="服务器地址">
             <Input
@@ -145,7 +173,7 @@ export default function Settings({
               placeholder="http://emby:8096"
               value={value.emby.url}
               onChange={(e) => {
-                setLibraries(null);
+                invalidateConnection();
                 setValue((v) => ({
                   ...v,
                   emby: { ...v.emby, url: e.target.value, library_ids: [] },
@@ -157,53 +185,40 @@ export default function Settings({
             <SecretInput
               configured={value.emby.has_api_key}
               value={value.emby.api_key}
-              onChange={(api_key) =>
-                setValue((v) => ({ ...v, emby: { ...v.emby, api_key } }))
-              }
+              onChange={(api_key) => {
+                invalidateConnection();
+                setValue((v) => ({ ...v, emby: { ...v.emby, api_key } }));
+              }}
             />
           </Field>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() =>
-              void execute("emby", async () => {
-                const result = await api<{ server: string; version: string }>(
-                  "settings/test/emby",
-                  "POST",
-                  value,
-                );
-                return `已连接 ${result.server} · ${result.version}`;
-              })
-            }
-          >
-            {pending === "emby" ? "正在测试…" : "测试连接"}
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() =>
-              void execute("libraries", async () => {
-                const rows = await api<{ id: string; name: string }[]>(
-                  "settings/libraries",
-                  "POST",
-                  value,
-                );
-                setLibraries(rows);
-                return rows.length
-                  ? `已读取 ${rows.length} 个媒体库`
-                  : "没有可用媒体库";
-              })
-            }
-          >
-            {pending === "libraries" ? "正在读取…" : "读取媒体库"}
-          </Button>
-        </div>
+        <Button
+          type="button"
+          variant="outline"
+          disabled={!!pending}
+          aria-busy={pending === "emby"}
+          onClick={() =>
+            void execute("emby", async (signal) => {
+              const rows = await api<{ id: string; name: string }[]>(
+                "settings/libraries",
+                "POST",
+                value,
+                signal,
+              );
+              if (signal.aborted) return "";
+              setLibraries(rows);
+              return rows.length ? "" : "没有可用媒体库";
+            })
+          }
+        >
+          {pending === "emby" && (
+            <LoaderCircle className="size-4 animate-spin" />
+          )}
+          连接
+        </Button>
         {message("emby")}
-        {message("libraries")}
         <div className="space-y-3">
-          <p className="text-sm">目标媒体库</p>
+          <p className="text-sm">媒体库</p>
           {libraries ? (
             <div className="flex flex-wrap gap-x-6 gap-y-3">
               {libraries.map((lib) => (
@@ -232,14 +247,13 @@ export default function Settings({
           ) : (
             <p className="text-sm text-muted-foreground">
               {value.emby.library_ids.length
-                ? `已选择 ${value.emby.library_ids.length} 个媒体库，读取后可更改`
-                : "读取媒体库后选择处理范围"}
+                ? `已选 ${value.emby.library_ids.length} 个媒体库`
+                : "连接后选择媒体库"}
             </p>
           )}
         </div>
         <p className="text-sm text-muted-foreground">
-          请在 Emby 关闭在线元数据提供者。本地
-          NFO、扫描和手动刷新仍可能更新元数据。
+          请在 Emby 中关闭该媒体库的在线元数据提供者。
         </p>
       </fieldset>
       <fieldset className="space-y-4 border-t" disabled={!!pending}>
@@ -286,30 +300,28 @@ export default function Settings({
             type="button"
             variant="outline"
             onClick={() =>
-              void execute("translation", async () => {
+              void execute("translation", async (signal) => {
                 const result = await api<{
                   valid: boolean;
                   sample: string;
                   error: string;
-                }>("settings/test/translation", "POST", value);
+                }>("settings/test/translation", "POST", value, signal);
                 if (!result.valid) throw new Error(result.error);
-                return `测试通过：${result.sample}`;
+                return "测试通过";
               })
             }
           >
-            {pending === "translation" ? "正在测试…" : "测试翻译"}
+            {pending === "translation" && (
+              <LoaderCircle className="size-4 animate-spin" />
+            )}
+            测试
           </Button>
-          <p className="text-sm text-muted-foreground">
-            仅翻译标题与简介，模型留空停用
-          </p>
         </div>
         {message("translation")}
       </fieldset>
       <fieldset className="space-y-4 border-t" disabled={!!pending}>
         <legend className="pr-3 text-base font-medium">来源优先级</legend>
-        <p className="text-sm text-muted-foreground">
-          用英文逗号分隔，按从左到右查询，准确命中后停止
-        </p>
+        <p className="text-sm text-muted-foreground">按顺序查询，命中即停止</p>
         {Object.entries(categories).map(([key, label]) => (
           <Field key={key} label={label}>
             <Input
@@ -323,11 +335,11 @@ export default function Settings({
             />
           </Field>
         ))}
-        <p className="break-words text-xs leading-5 text-muted-foreground">
-          可用来源：{sources.join(", ")}
-        </p>
         <details className="group border-t pt-4">
-          <summary className="cursor-pointer text-sm">来源连接</summary>
+          <summary className="cursor-pointer text-sm">高级设置</summary>
+          <p className="mt-3 text-xs leading-5 text-muted-foreground">
+            可用来源：{sources.join(", ")}
+          </p>
           <div className="mt-4 grid gap-4 sm:grid-cols-2">
             <Field label="FlareSolverr 地址" wide>
               <Input
@@ -358,7 +370,10 @@ export default function Settings({
       <StickyActions>
         {message("save")}
         <Button type="submit" disabled={!!pending}>
-          {pending === "save" ? "正在保存…" : "保存设置"}
+          {pending === "save" && (
+            <LoaderCircle className="size-4 animate-spin" />
+          )}
+          保存
         </Button>
       </StickyActions>
     </form>

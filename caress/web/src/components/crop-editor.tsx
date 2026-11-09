@@ -6,8 +6,7 @@ import {
   useState,
 } from "react";
 import ReactCrop, { type PercentCrop } from "react-image-crop";
-import { LoaderCircle, RotateCcw, ScanFace } from "lucide-react";
-import { RefreshButton } from "@/components/refresh-button";
+import { LoaderCircle, RotateCcw, ScanFace, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -144,7 +143,7 @@ export default function CropEditor({
         className="h-[90dvh] grid-rows-[auto_auto_minmax(0,1fr)_auto] overflow-hidden sm:max-w-4xl"
       >
         <DialogHeader>
-          <DialogTitle>裁剪封面</DialogTitle>
+          <DialogTitle>裁剪</DialogTitle>
         </DialogHeader>
         <div className="flex flex-wrap items-center gap-2">
           <Button
@@ -165,13 +164,19 @@ export default function CropEditor({
           >
             <RotateCcw />
           </Button>
-          <span className="ml-auto"/>
-        <RefreshButton
-            label="刷新原图"
-            pending={loadingSource}
+          <Button
+            variant="outline"
+            className="ml-auto"
+            aria-label="重新获取原图"
+            aria-busy={loadingSource}
             disabled={saving || busy || pending}
             onClick={() => void acquire(true)}
-          />
+          >
+            <RefreshCw
+              className={`size-4 ${loadingSource ? "animate-spin" : ""}`}
+            />
+            重新获取原图
+          </Button>
         </div>
         {crop ? (
           <div className="grid min-h-0 grid-rows-[minmax(0,1fr)_112px] gap-4 sm:grid-cols-[minmax(0,1fr)_144px] sm:grid-rows-1">

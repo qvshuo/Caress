@@ -166,9 +166,11 @@ class Service:
                     if row["ImageType"] == "Backdrop" and row.get("Width", 0) > row.get(
                         "Height", 0
                     ):
-                        data = await client.image(
-                            ident, "Backdrop", row.get("ImageIndex", 0)
-                        )
+                        data = (
+                            await client.image(
+                                ident, "Backdrop", row.get("ImageIndex", 0)
+                            )
+                        ).content
                         break
             if data is None:
                 record = self.runtime.record(client.server, ident, identity, code)

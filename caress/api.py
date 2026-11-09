@@ -1,7 +1,7 @@
 """HTTP boundary: live reads and a small set of explicit processing operations."""
 
-import asyncio
 from contextlib import asynccontextmanager
+from io import BytesIO
 from pathlib import Path
 from typing import Literal
 
@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from PIL import Image
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from . import __version__
@@ -117,20 +118,12 @@ def create_app(settings: Settings | None = None):
             await service.configure(value)
             return safe_settings(value)
 
-    @app.post("/api/settings/test/emby")
-    async def test_emby(body: dict):
-        value = updated_settings(service.settings, body)
-        client = EmbyClient(value.emby)
-        try:
-            return await client.test()
-        finally:
-            await client.close()
-
     @app.post("/api/settings/libraries")
     async def read_libraries(body: dict):
         value = updated_settings(service.settings, body)
         client = EmbyClient(value.emby)
         try:
+            await client.test()
             return [
                 {
                     "id": str(v["ItemId"]),
@@ -210,12 +203,10 @@ def create_app(settings: Settings | None = None):
         if not ident.isalnum() or not 0 <= index <= 1000:
             raise HTTPException(404)
         async with service.emby() as client:
-            data = await client.image(ident, kind, index, tag=tag)
-        from .images import validate_image
-
-        info = await asyncio.to_thread(validate_image, data)
-        mime = "image/jpeg" if info.format == "jpeg" else "image/" + info.format
-        return Response(data, media_type=mime, headers={"Cache-Control": "no-cache"})
+            image = await client.image(ident, kind, index, tag=tag)
+        return Response(
+            image.content, media_type=image.mime, headers={"Cache-Control": "no-cache"}
+        )
 
     @app.post("/api/works/{ident}/crop/source")
     async def crop_source(
@@ -225,15 +216,13 @@ def create_app(settings: Settings | None = None):
 
     @app.get("/api/works/{ident}/crop/{token}/image")
     async def crop_image(ident: str, token: str):
-        from .images import validate_image
-
         data = service.crop_session(ident, token).data
-        info = await asyncio.to_thread(validate_image, data)
+        # Session pixels were validated when acquired; MIME only needs the header.
+        with Image.open(BytesIO(data)) as image:
+            mime = image.get_format_mimetype()
         return Response(
             data,
-            media_type="image/jpeg"
-            if info.format == "jpeg"
-            else "image/" + info.format,
+            media_type=mime,
             headers={"Cache-Control": "no-store"},
         )
 

@@ -8,7 +8,7 @@ export const statuses = {
   running: "处理中",
 };
 export const actions = {
-  scrape: "刮削未处理",
-  retry: "重试失败",
+  scrape: "刮削",
+  retry: "重试",
   force: "重新刮削",
 };

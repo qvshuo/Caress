@@ -9,14 +9,14 @@ const buttonVariants = cva(
       variant: {
         default: "bg-primary text-primary-foreground hover:bg-primary/90",
         outline:
-          "border bg-background shadow-xs hover:bg-accent hover:text-accent-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
+          "border bg-background hover:bg-accent hover:text-accent-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
         ghost:
           "hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50",
         navigation:
           "aria-[current=page]:bg-background aria-[current=page]:text-foreground aria-[current=page]:shadow-sm hover:bg-background/60",
       },
       size: {
-        navigation: "h-[30px] flex-1 px-3",
+        navigation: "h-8 flex-1 px-3",
         default: "h-9 px-4 py-2 has-[>svg]:px-3",
         sm: "h-8 gap-1.5 rounded-md px-3 has-[>svg]:px-2.5",
         icon: "size-9",

@@ -34,7 +34,7 @@ export function ConfirmationDialog({
           <DialogTitle>{value?.title}</DialogTitle>
           <DialogDescription
             render={<div />}
-            className="whitespace-pre-wrap break-words"
+            className="whitespace-pre-wrap wrap-anywhere"
           >
             {value?.description}
           </DialogDescription>

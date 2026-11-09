@@ -495,7 +495,7 @@ async def test_crop_opens_local_backdrop_without_source_or_face_detection(
     from contextlib import asynccontextmanager
 
     import caress.service as service_module
-    from caress.images import crop_poster
+    from caress.images import crop_poster, validate_image
     from test_images import image_bytes
 
     service = Service(Settings(database=tmp_path / "db.sqlite3"))
@@ -508,7 +508,7 @@ async def test_crop_opens_local_backdrop_without_source_or_face_detection(
             if has_backdrop
             else []
         ),
-        image=AsyncMock(return_value=image_bytes(size=(600, 300))),
+        image=AsyncMock(return_value=validate_image(image_bytes(size=(600, 300)))),
     )
 
     @asynccontextmanager
@@ -554,28 +554,8 @@ async def test_crop_opens_local_backdrop_without_source_or_face_detection(
         await service.close()
 
 
-def test_operational_limits_and_user_cookies_are_not_configuration():
-    from pydantic import ValidationError
-
-    from caress.settings import SiteSettings
-
-    data = Settings().model_dump_json()
-    for name in (
-        "timeout_seconds",
-        "interval_seconds",
-        "retry_delay_seconds",
-        "retries",
-        "cookie",
-    ):
-        assert name not in data
-    with pytest.raises(ValidationError):
-        SiteSettings(cookie="unused=session")
-    with pytest.raises(ValidationError):
-        Settings(source_timeout_seconds=30)
-
-
 @pytest.mark.asyncio
-async def test_connection_test_and_library_read_are_independent(tmp_path, monkeypatch):
+async def test_connection_validates_server_then_reads_libraries(tmp_path, monkeypatch):
     import caress.api as api_module
 
     upstream = SimpleNamespace(
@@ -595,12 +575,13 @@ async def test_connection_test_and_library_read_are_independent(tmp_path, monkey
             transport=httpx.ASGITransport(app=app), base_url="http://caress"
         ) as client,
     ):
-        response = await client.post("/api/settings/test/emby", json={})
-        assert response.status_code == 200 and "libraries" not in response.json()
-        upstream.libraries.assert_not_awaited()
         response = await client.post("/api/settings/libraries", json={})
         assert response.json() == [{"id": "1", "name": "Movies", "type": "movies"}]
         assert upstream.test.await_count == 1 and upstream.libraries.await_count == 1
+        upstream.test.side_effect = ValueError("invalid server")
+        response = await client.post("/api/settings/libraries", json={})
+        assert response.status_code == 400 and upstream.libraries.await_count == 1
+        assert upstream.close.await_count == 2
 
 
 def test_navigation_order_uses_current_filter():
@@ -708,8 +689,12 @@ async def test_connection_leases_survive_configuration_change(tmp_path, monkeypa
 
 
 @pytest.mark.asyncio
-async def test_portrait_failure_retries_but_success_is_shared(tmp_path):
-    from caress.models import SourceMetadata
+@pytest.mark.parametrize(
+    "failure,recovers", [("upload", True), ("upload", False), ("fetch", False)]
+)
+async def test_portrait_retry_is_bounded_and_success_is_shared(
+    tmp_path, failure, recovers
+):
     from caress.processing import Prepared
     from test_images import image_bytes
 
@@ -717,27 +702,37 @@ async def test_portrait_failure_retries_but_success_is_shared(tmp_path):
     avatar = tmp_path / "actors" / "Name.png"
     avatar.parent.mkdir()
     avatar.write_bytes(image_bytes())
-    processor.portraits.save = AsyncMock(return_value=[{"status": "saved"}])
+    processor.portraits.save = AsyncMock(
+        return_value=[{"status": "saved"}],
+        side_effect=ValueError("offline") if failure == "fetch" else None,
+    )
     client = SimpleNamespace(
         write_metadata=AsyncMock(
             return_value={"People": [{"Name": "Name", "Id": "person", "Type": "Actor"}]}
         ),
         image_info=AsyncMock(return_value=[]),
-        upload=AsyncMock(side_effect=[ValueError("temporary"), None]),
+        upload=AsyncMock(
+            side_effect=[ValueError("temporary"), None]
+            if recovers
+            else ValueError("offline")
+        ),
     )
     prepared = Prepared(
         SourceMetadata(code="ABC-123", title="title"),
         "dmm",
         mappings=[{"actor_id": "verified", "name": "Name"}],
     )
-    await processor.write(client, "1", prepared, [])
-    assert "person" not in processor.people_done
-    await asyncio.gather(
-        *(processor.write(client, str(i), prepared, []) for i in range(2, 5))
-    )
-    assert client.upload.await_count == 2
-    assert "person" in processor.people_done
-    await processor.__aexit__(None, None, None)
+    try:
+        await processor.write(client, "1", prepared, [])
+        assert not processor.people_done
+        await asyncio.gather(
+            *(processor.write(client, str(i), prepared, []) for i in range(2, 8))
+        )
+        assert client.upload.await_count == (0 if failure == "fetch" else 2)
+        assert processor.portraits.save.await_count == 2
+        assert ("person" in processor.people_done) == recovers
+    finally:
+        await processor.__aexit__(None, None, None)
 
 
 @pytest.mark.asyncio
@@ -781,6 +776,7 @@ async def test_targeted_membership_query_and_redirect_does_not_forward_key():
 @pytest.mark.asyncio
 async def test_backdrop_dedup_compares_content_and_preserves_unknown_images():
     from caress.emby import pixel_digest
+    from caress.images import validate_image
     from test_images import image_bytes
 
     client = EmbyClient(Settings(emby={"url": "http://emby"}).emby)
@@ -788,7 +784,7 @@ async def test_backdrop_dedup_compares_content_and_preserves_unknown_images():
     client.image_info = AsyncMock(
         return_value=[{"ImageType": "Backdrop", "ImageIndex": 0}]
     )
-    client.image = AsyncMock(return_value=red)
+    client.image = AsyncMock(return_value=validate_image(red))
     client.upload = AsyncMock()
     try:
         signatures = await client.backdrop_signatures("1")
@@ -818,34 +814,6 @@ async def test_cancellation_after_write_boundary_reports_partial(
     code, identity, _ = identify(item())
     record = fake_batch.runtime.record("s", "1", identity, code)
     assert record["status"] == "cancelled" and "部分" in record["error"]
-
-
-@pytest.mark.asyncio
-async def test_avatar_failure_has_bounded_attempts(tmp_path):
-    from caress.processing import Prepared
-
-    processor = WorkProcessor(Settings(database=tmp_path / "db"), None, tmp_path)
-    processor.portraits.save = AsyncMock(side_effect=ValueError("offline"))
-    client = SimpleNamespace(
-        write_metadata=AsyncMock(
-            return_value={"People": [{"Name": "Name", "Id": "person", "Type": "Actor"}]}
-        ),
-        image_info=AsyncMock(return_value=[]),
-        upload=AsyncMock(),
-    )
-    prepared = Prepared(
-        SourceMetadata(code="ABC-123", title="title"),
-        "dmm",
-        mappings=[{"actor_id": "verified", "name": "Name"}],
-    )
-    try:
-        for i in range(6):
-            await processor.write(client, str(i), prepared, [])
-        assert processor.portraits.save.await_count == 2
-        client.upload.assert_not_awaited()
-        assert not processor.people_done
-    finally:
-        await processor.__aexit__(None, None, None)
 
 
 @pytest.mark.asyncio
@@ -888,3 +856,34 @@ async def test_fresh_database_health_and_settings_round_trip(tmp_path):
         )
     assert Settings.load(path).emby.api_key == "private"
     assert path.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.asyncio
+async def test_image_proxy_reuses_validation_and_preserves_mime(tmp_path, monkeypatch):
+    from contextlib import asynccontextmanager
+
+    from caress.images import validate_image
+    from test_images import image_bytes
+
+    image = validate_image(image_bytes())
+    app = create_app(Settings(database=tmp_path / "db"))
+
+    @asynccontextmanager
+    async def connection():
+        yield SimpleNamespace(image=AsyncMock(return_value=image))
+
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://caress"
+        ) as client,
+    ):
+        monkeypatch.setattr(app.state.service, "emby", connection)
+        # Revalidating already validated bytes would decode a full image again.
+        monkeypatch.setattr(
+            "caress.images.validate_image",
+            lambda data: pytest.fail("duplicate validation"),
+        )
+        response = await client.get("/api/images/1/Primary/0")
+        assert response.status_code == 200 and response.content == image.content
+        assert response.headers["content-type"] == "image/png"

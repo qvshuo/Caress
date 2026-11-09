@@ -63,7 +63,7 @@ export function Select({
 }
 export function StickyActions({ children }: { children: ReactNode }) {
   return (
-    <div className="sticky bottom-0 z-20 -mx-4 flex items-center justify-end gap-4 border-t bg-background/95 px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur sm:-mx-8 sm:px-8">
+    <div className="sticky bottom-0 z-20 flex items-center justify-end gap-3 border-t bg-background py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
       {children}
     </div>
   );
