@@ -14,24 +14,3 @@ export function Alert({ className, ...props }: ComponentProps<"div">) {
     />
   );
 }
-export function AlertTitle({ className, ...props }: ComponentProps<"p">) {
-  return (
-    <p
-      data-slot="alert-title"
-      className={cn("font-medium text-foreground", className)}
-      {...props}
-    />
-  );
-}
-export function AlertDescription({
-  className,
-  ...props
-}: ComponentProps<"div">) {
-  return (
-    <div
-      data-slot="alert-description"
-      className={cn("space-y-1 break-words text-muted-foreground", className)}
-      {...props}
-    />
-  );
-}

@@ -422,28 +422,6 @@ def test_invalid_filename_still_exposes_emby_path(store):
     assert result["media"][0]["path"] == "/strm/not a code.strm"
 
 
-def test_import_requires_fresh_database_and_backs_up_source(tmp_path):
-    import json
-
-    from caress.import_settings import import_settings
-
-    source = tmp_path / "old.json"
-    source.write_text(
-        json.dumps(
-            {
-                "media_directories": ["/obsolete"],
-                "translation": {"model": "test", "api_key": "secret"},
-            }
-        )
-    )
-    destination = tmp_path / "new.sqlite3"
-    backup = import_settings(source, destination)
-    assert backup.read_bytes() == source.read_bytes()
-    assert Settings.load(destination).translation.api_key == "secret"
-    with pytest.raises(ValueError, match="目标已存在"):
-        import_settings(source, destination)
-
-
 @pytest.mark.asyncio
 async def test_existing_actor_portraits_are_never_overwritten(tmp_path):
     from caress.processing import Prepared
@@ -565,6 +543,13 @@ async def test_crop_opens_local_backdrop_without_source_or_face_detection(
             assert result["origin"] == "来源原始封面"
         if fetch_source:
             client.image_info.assert_not_awaited()
+        service.crops.clear()
+        monkeypatch.setattr(
+            service, "crop_preview", AsyncMock(side_effect=ValueError("preview failed"))
+        )
+        with pytest.raises(ValueError, match="preview failed"):
+            await service.crop_source("1", "dmm", fetch_source=fetch_source)
+        assert service.crops == {}
     finally:
         await service.close()
 
@@ -861,3 +846,45 @@ async def test_avatar_failure_has_bounded_attempts(tmp_path):
         assert not processor.people_done
     finally:
         await processor.__aexit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_fresh_database_health_and_settings_round_trip(tmp_path):
+    from caress import __version__
+
+    path = tmp_path / "caress.sqlite3"
+    app = create_app(Settings(database=path))
+    assert not path.exists()
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://caress"
+        ) as client,
+    ):
+        assert (await client.get("/api/health")).json() == {
+            "status": "ok",
+            "version": __version__,
+        }
+        before = (await client.get("/api/settings")).json()
+        assert not before["configured"] and not before["emby"]["has_api_key"]
+        response = await client.put(
+            "/api/settings",
+            json={
+                "emby": {
+                    "url": "http://emby",
+                    "api_key": "private",
+                    "library_ids": ["A"],
+                }
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["configured"] and "private" not in response.text
+        assert app.state.service.runtime.batch() is None
+        assert (
+            app.state.service.runtime.connection.execute(
+                "SELECT count(*) FROM scrapes"
+            ).fetchone()[0]
+            == 0
+        )
+    assert Settings.load(path).emby.api_key == "private"
+    assert path.stat().st_mode & 0o777 == 0o600

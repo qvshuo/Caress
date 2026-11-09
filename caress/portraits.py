@@ -13,7 +13,7 @@ from .actors import comparison_name
 from .http import NETWORK_RETRIES, REQUEST_TIMEOUT_SECONDS, RETRY_DELAY_SECONDS
 from .images import validate_image
 from .logging import report_progress
-from .storage import atomic_write, file_transaction
+from .storage import atomic_write
 
 
 def actor_image(output: Path, name: str) -> Path | None:
@@ -131,24 +131,22 @@ class Gfriends:
                 )
         return None
 
-    async def save(
-        self, actors, replace: bool = False, *, kind: int | None = None
-    ) -> list[dict]:
+    async def save(self, actors, *, kind: int | None = None) -> list[dict]:
         async with self.save_lock:
-            return await self._save(actors, replace, kind)
+            return await self._save(actors, kind)
 
-    async def _save(self, actors, replace: bool, kind: int | None) -> list[dict]:
+    async def _save(self, actors, kind: int | None) -> list[dict]:
         records = []
         for actor in actors:
             name = actor.name
-            if (name, replace, kind) in self.completed:
-                records.append(self.completed[(name, replace, kind)])
+            if (name, kind) in self.completed:
+                records.append(self.completed[(name, kind)])
                 continue
             try:
                 existing = actor_image(self.output, name)
-                if existing and not replace:
+                if existing:
                     records.append({"name": name, "status": "existing"})
-                    self.completed[(name, replace, kind)] = records[-1]
+                    self.completed[(name, kind)] = records[-1]
                     continue
                 if len(self.names.candidates(name, kind)) > 1:
                     raise ValueError("演员别名对应多人")
@@ -172,7 +170,7 @@ class Gfriends:
                 url = self.select(name, kind)
                 if not url:
                     records.append({"name": name, "status": "not_found"})
-                    self.completed[(name, replace, kind)] = records[-1]
+                    self.completed[(name, kind)] = records[-1]
                     report_progress(
                         "portraits", "not_found", source="gfriends", message=name
                     )
@@ -182,15 +180,12 @@ class Gfriends:
                 )
                 extension = ".jpg" if image.format == "jpeg" else "." + image.format
                 target = self.output / "actors" / (name + extension)
-                with file_transaction(self.output / "actors"):
-                    atomic_write(target, image.content)
-                    if existing and existing != target:
-                        existing.unlink()
+                atomic_write(target, image.content)
                 records.append({"name": name, "status": "saved"})
             except (ValueError, OSError) as exc:
                 records.append({"name": name, "status": "error", "error": str(exc)})
             if records[-1]["status"] != "error":
-                self.completed[(name, replace, kind)] = records[-1]
+                self.completed[(name, kind)] = records[-1]
             report_progress(
                 "portraits", records[-1]["status"], source="gfriends", message=name
             )

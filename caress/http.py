@@ -54,7 +54,7 @@ class Page:
 
     @cached_property
     def text(self) -> str:
-        # Browser output is UTF-8; legacy Japanese HTML declares EUC-JP or Shift_JIS.
+        # Browser output is UTF-8; Japanese HTML can declare EUC-JP or Shift_JIS.
         charset = re.search(rb'charset\s*=\s*["\']?([\w-]+)', self.body[:8192], re.I)
         encoding = (
             charset[1].decode("ascii")
@@ -174,7 +174,7 @@ def is_cloudflare(page: Page) -> bool:
 
 
 class WebClient:
-    """Pooled Scrapling sessions; solver cookies never migrate between exits."""
+    """Pooled Scrapling sessions; solver cookies never cross network exits."""
 
     _budgets = WeakKeyDictionary()
 

@@ -1,32 +1,24 @@
 # Caress
 
-## 产品与数据契约
-- Caress 是 Emby 的 JAV 刮削和图像加工工具。Emby 是唯一媒体库、元数据和图片事实来源；列表分页读取 Emby，详情按 Item ID 最新读取，离线必须报连接错误。
-- SQLite `/data/caress.sqlite3` 只保存设置、番号/演员规则、服务器身份与 Item ID 的处理记录、来源冷却和当前批次。不得重新引入完整作品副本、本地媒体清单、来源候选、字段溯源、翻译指纹或阶段历史。
-- 身份使用 Emby 服务器 ID、Item ID、创建时间及规范番号。不得猜测关联；视频/STRM 按文件名主干识别，只剥离末尾 `-C`、`-U`、`-UC`、`-cdN`，忽略大小写。播放 URL 和父目录不参与番号识别。
-- 普通刮削跳过有成功记录的 Item；失败重试执行完整流程；强制重刮必须明确确认。手动裁剪是独立写入，不改变来源或成功记录。
-- 写前读完整 Item，只更新来源实际返回的受管字段，保留无关 Provider ID、人物类型、标签、系统和用户字段。不主动启用或解除 LockData/LockedFields。写后回读验证；HTTP 成功不代表持久化，不得声称未发生的回滚。
-- Primary 可替换；背景按内容去重追加，不猜测旧图归属，不删除未知旧图。人物头像只在身份可靠且 Emby 无头像时获取。原图、裁剪图、头像均只临时处理，最终保存到 Emby。
+## 边界
+- Python 3.15、React/TypeScript、Tailwind CSS 4、Base UI、Bun、SQLite；版本为 2.0.0。只维护 main，可打匹配版本的 Git Tag，不创建 GitHub Release。
+- Emby 独占媒体、元数据、人物与图片；Caress 只做 JAV 数据获取、翻译、匹配、封面裁剪和 REST 写入。不得挂载或修改媒体源，不写 NFO，不引入独立媒体库、编辑器或账户体系。
+- SQLite 仅保存设置、匹配规则、处理记录、当前批次和来源冷却；不提供历史配置或数据库导入、转换、升级逻辑。
+- 按视频/STRM 文件名主干识别，仅剥离末尾 `-C`、`-U`、`-UC`、`-cdN`，不依赖父目录，不模糊匹配或重命名。
+- 每个关联 Item 独立验证所选库归属并去重；写前复核服务器、Item 身份和归属。完整读、有限合并、回读验证；保留无关字段/人物/图片，不主动改变 LockData/LockedFields。
+- 普通刮削保护所有历史成功；重刮与失败重试明确确认。取消/重启如实报告写入边界，不声称外部回滚。手动裁剪只更新 Primary，不改变刮削记录。
+- 保留顺序命中停止、精确身份匹配、来源独占与限速、翻译演员保护、头像有限重试及非致命失败、图片资源验证、Item 互斥和 SQLite 事务。
 
-## 工程边界
-- `emby.py` 管 REST 和验证；`library.py` 管实时只读投影；`identifiers.py` 管文件名；`scraper.py` 顺序调度来源，准确命中即停；`sources/` 管适配和解析。
-- `processing.py` 管刮削、翻译、演员和临时图像加工；`images.py` 管验证及 YuNet；`portraits.py` 只用于批次临时头像；`runtime.py` 管最小 SQLite；`tasks.py` 管一个轻量批次；`service.py` 管生命周期、Item 互斥和临时裁剪会话；`api.py` 管 HTTP 边界。
-- 保留现有有效来源；失败不能作为删除来源的依据。四类分类、精确匹配、来源独占/限速、Scrapling/FlareSolverr、连接复用继续保留。翻译只在刮削时执行，每批先用无害文本验证，每次只发一个翻译请求，保护演员名与简介边界空白。
-- 超时、重试、间隔使用内部固定策略，不作为设置字段/API 暴露；不支持用户配置 JavDB Cookie。设置按 Emby、翻译、来源优先级排列，来源以英文逗号输入；连接测试与媒体库读取分开。作品只用表格，共享下拉、每页条数及页码选择保持一致；设置与作品等宽。刷新控件统一图标加“刷新”。详情按当前搜索/筛选顺序前后切换，居中返回且保留列表页码。
-- 手动裁剪优先直接使用 Emby 横向背景图；首次打开采用居中选框，YuNet 和来源重取按需触发。不从 Primary 假装恢复原画面。
-- 当前批次默认四并发，最多不得超过十个作品。同一 Item 的冲突写入互斥；取消和重启保留确认过的成功记录，准确标记可能已部分写入的失败。
-- 前端保持严格 React/TypeScript、Tailwind CSS 4、Bun 和现有共享控件；一级页面只有作品与设置。裁剪器懒加载，固定 2:3，保留交互预览与键盘操作。主题跟随系统；产品和版本在页脚。
-- 密钥不返回前端或写入日志；不得提供任意文件读取、任意目标 HTTP 代理。图像限制 32 MiB、40MP，临时会话有上限和过期清理。不增加账户体系。
+## 结构
+- `emby.py` 为 REST/回读，`library.py` 为只读投影，`identifiers.py` 为文件名；`scraper.py` 顺序调度，`sources/` 独立适配来源。
+- `processing.py` 编排加工，`translation.py` 翻译，`portraits.py` 临时头像，`images.py` 验证/YuNet/裁剪；`runtime.py` 管 SQLite，`tasks.py` 管批次，`service.py` 管生命周期与裁剪会话，`api.py` 管 HTTP。
+- Web `pages/` 为作品/设置，`components/` 为共享控件，`hooks/` 为共享状态，`lib/` 为类型与传输。只有表格，保留分页、列表导航、系统主题、键盘访问和现有 Base UI 交互。刷新统一图标加“刷新”。
+- 安全与数据流细节以 `docs/architecture.md` 为准。修复确有问题的实现，不增加缓存框架、兼容层、ORM 或通用任务框架。
 
-## 运行与交付
-- 用 Docker Compose 构建、部署、重启；本地检查用 `uv run --no-project --python 3.15`。Python 3.15.2、Bun 1.4.4；使用稳定依赖。Python 与前端版本均为 1.7.0，发布标签匹配版本。
-- 测试源跟踪 Git；环境、缓存、构建产物、测试输出、临时夹具、备份、真实设置、数据库、日志、截图均在仓库外。仅交付 `docker-compose.example.yml`；生产无前端运行时，不要求媒体挂载。
-- YuNet 模型、许可和 bun.lock 跟踪 Git。透明 Logo 为 `assets/logo.png`（512px）、`caress/web/assets/favicon.png`（64px），保持原比例，不留无用母版。
-- 不兼容升级必须先备份，并通过一次性导入工具迁移可靠配置和规则；不得静默删除旧库，不维护长期兼容层。删除功能前验证 Emby 承接能力；真实联调的结果与未覆盖范围写入交付报告。
-- README 保持中文简明快速开始，明确宿主机与容器路径；挂载变化须重建容器。最终验证完整程序、自动化测试、Compose 及真实 Emby，不夸大未验证项。
-
-## 最终打磨约束
-- 关联 Item 不继承父项授权：复用批次开始时的所选库 ID 集合展开、去重，越界项单独跳过；写前再次定向复核归属。详情使用定向归属查询，不重建整库投影；导航复用列表返回的轻量顺序。
-- Service 拥有 Emby 连接池，批次及 HTTP 请求仅租用；配置变更后旧连接等待活动租用结束再关闭。图片禁止重定向，不把图片 tag 当作内容去重依据。
-- 历史成功和最近结果独立，派生“重刮失败”；普通刮削仍保护成功记录。当前批次保留写入开始边界，取消及重启准确说明可能部分写入。
-- 人物头像锁内处理，只有成功或确认无需处理才标记完成，每人物每批最多两次尝试。裁剪原图无 EXIF 变换时保留原编码；图片摘要以条带处理，来源摘要只在当前批次复用。
+## 开发与交付
+- 用 Docker Compose 构建、部署、重启；生产只有 Python 运行时，以非 root 运行，仅挂载 `/data`。
+- 后端：`uv run --no-project --python 3.15 --with-requirements requirements-dev.txt ruff check --no-cache caress tests`；同一环境运行 `python -m pytest tests -q`。
+- 前端在仓库外的副本执行 `bun install --frozen-lockfile`、`bun run build`（含严格类型检查）及 `bun run test`；Playwright 需安装 Chromium。
+- 测试源、bun.lock、YuNet 模型和许可必须跟踪 Git；依赖环境、缓存、构建产物、测试输出和临时夹具放仓库外。真实密钥、数据库、日志、图片缓存和本地 Compose 不得提交。
+- 保留透明 Logo `assets/logo.png`（512px）和 `caress/web/assets/favicon.png`（64px）的原比例。注释只解释必要的契约、安全边界与算法取舍。
+- 真实 Emby 验证优先只读；写入只针对明确隔离的测试 Item。任何清理不得触及媒体源或其他应用资源；未执行的验证不得宣称通过。

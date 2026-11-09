@@ -6,3 +6,14 @@ node_modules/
 /data/
 /temp/
 ._*
+
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.sqlite3*
+*.log
+.env
+.env.*
+/test-results/
+/playwright-report/
+/caress-playwright-results/

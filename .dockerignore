@@ -8,3 +8,10 @@
 **/node_modules/
 caress/web/dist/
 **/._*
+**/.env*
+**/*.sqlite3*
+**/*.log
+**/test-results/
+**/playwright-report/
+**/.venv/
+caress/web/tests/

@@ -199,11 +199,12 @@ class Service:
                 client.server, ident, identity, data, time.monotonic() + 600
             )
             asyncio.get_running_loop().call_later(600, self.crops.pop, token, None)
-            return {
-                "token": token,
-                "origin": origin,
-                **await self.crop_preview(ident, token, center=True),
-            }
+            try:
+                preview = await self.crop_preview(ident, token, center=True)
+            except BaseException:
+                self.crops.pop(token, None)
+                raise
+            return {"token": token, "origin": origin, **preview}
 
     async def crop_preview(self, ident, token, box=None, center=False):
         import base64

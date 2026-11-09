@@ -18,16 +18,6 @@ class Runtime:
         path.chmod(0o600)
         self.connection.row_factory = sqlite3.Row
         try:
-            tables = {
-                r[0]
-                for r in self.connection.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table'"
-                )
-            }
-            if tables - {"options", "rules", "scrapes", "batch", "cooldowns"}:
-                raise ValueError(
-                    "旧数据库须先备份并通过 python -m caress.import_settings 导入到新数据库"
-                )
             with self.connection:
                 self.connection.execute("PRAGMA journal_mode=WAL")
                 self.connection.execute("""CREATE TABLE IF NOT EXISTS scrapes (

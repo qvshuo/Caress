@@ -170,22 +170,21 @@ class Settings(BaseModel):
                 )
         return self
 
-    def save(self, path: Path | None = None, *, connection=None):
+    def save(self):
         import sqlite3
 
-        if connection is None:
-            path = path or self.database
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with closing(sqlite3.connect(path, timeout=10)) as database, database:
-                self.save(connection=database)
-            return
-        connection.execute(
-            "CREATE TABLE IF NOT EXISTS options (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL)"
-        )
-        connection.execute(
-            "INSERT INTO options VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET data=excluded.data",
-            (self.model_dump_json(),),
-        )
+        self.database.parent.mkdir(parents=True, exist_ok=True)
+        with (
+            closing(sqlite3.connect(self.database, timeout=10)) as connection,
+            connection,
+        ):
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS options (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL)"
+            )
+            connection.execute(
+                "INSERT INTO options VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET data=excluded.data",
+                (self.model_dump_json(),),
+            )
 
     @classmethod
     def load(cls, path: Path | None = None):
@@ -202,8 +201,6 @@ class Settings(BaseModel):
         try:
             value = cls.model_validate_json(row[0]) if row else cls()
         except ValidationError:
-            raise ValueError(
-                "配置不兼容或无效，请备份并通过 caress.import_settings 导入新数据库"
-            ) from None
+            raise ValueError("设置无效，请检查服务端配置") from None
         value.database = path
         return value

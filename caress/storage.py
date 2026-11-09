@@ -1,37 +1,6 @@
 import os
 import tempfile
-from contextlib import contextmanager
 from pathlib import Path
-
-
-@contextmanager
-def file_transaction(folder: Path):
-    """Restore a work's files on failure, including a full disk during replacement.
-
-    The caller holds the work lock. Hard links keep the original bytes on the
-    same filesystem, so rollback needs renames rather than another allocation.
-    This protects handled failures; it is not a crash-recovery journal.
-    """
-    if folder.is_symlink():
-        raise ValueError("refusing to write through a symlink")
-    folder.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix=".caress-save-", dir=folder) as temporary:
-        backup = Path(temporary)
-        originals = {path.name for path in folder.iterdir() if path.is_file()}
-        for name in originals:
-            path = folder / name
-            if path.is_symlink():
-                raise ValueError("refusing to write through a symlink")
-            os.link(path, backup / name)
-        try:
-            yield
-        except BaseException:
-            for path in folder.iterdir():
-                if path.name not in originals and (path.is_file() or path.is_symlink()):
-                    path.unlink()
-            for name in originals:
-                os.replace(backup / name, folder / name)
-            raise
 
 
 def atomic_write(path: Path, value: str | bytes) -> None:
