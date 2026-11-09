@@ -887,3 +887,35 @@ async def test_image_proxy_reuses_validation_and_preserves_mime(tmp_path, monkey
         response = await client.get("/api/images/1/Primary/0")
         assert response.status_code == 200 and response.content == image.content
         assert response.headers["content-type"] == "image/png"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mismatch", [False, True])
+async def test_uploaded_image_requires_matching_readback(mismatch):
+    import base64
+
+    from test_images import image_bytes
+
+    original = image_bytes()
+    returned = image_bytes("blue") if mismatch else original
+
+    def handler(request):
+        if request.method == "POST":
+            assert request.headers["content-type"] == "image/png"
+            assert base64.b64decode(request.content) == original
+            return httpx.Response(204)
+        if request.url.path.endswith("/Images"):
+            return httpx.Response(200, json=[{"ImageType": "Primary"}])
+        return httpx.Response(200, content=returned)
+
+    client = EmbyClient(
+        EmbySettings(url="http://emby"), transport=httpx.MockTransport(handler)
+    )
+    try:
+        if mismatch:
+            with pytest.raises(ValueError, match="回读不一致"):
+                await client.upload("1", "Primary", original)
+        else:
+            await client.upload("1", "Primary", original)
+    finally:
+        await client.close()
