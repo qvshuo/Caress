@@ -47,9 +47,9 @@ class AirAV(Source):
                          and bool(selector.css('input[name="idx"][max="0"]'))
                          and any(node.attrib.get("value") == term for node in selector.css('input[name="kw"]')))
                 if cards and not candidates:
-                    raise FetchError(Status.PARSE_ERROR, "AirAV search cards lack catalog numbers or links")
+                    raise FetchError(Status.PARSE_ERROR, "AirAV 搜索结果缺少番号或链接")
                 if not cards and not empty:
-                    raise FetchError(Status.PARSE_ERROR, "AirAV search markers missing")
+                    raise FetchError(Status.PARSE_ERROR, "AirAV 搜索页面缺少结果区域")
                 return self.missed(request)
             url = self.checked_url(selected.url)
         page = await self.client.get(self.id, url)
@@ -57,7 +57,7 @@ class AirAV(Source):
         code = text(selector, '//li[contains(text(),"番")]/span/text()')
         heading = text(selector, '//div[contains(@class,"video-title")]//h1//text()')
         if not code or not heading:
-            raise FetchError(Status.PARSE_ERROR, "AirAV detail markers missing")
+            raise FetchError(Status.PARSE_ERROR, "AirAV 详情页缺少必要的作品信息")
         title = (
             re.sub(r"^\S+\s+", "", heading) if self.rules.matches(code, heading.split()[0]) else heading
         )

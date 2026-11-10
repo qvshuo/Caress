@@ -68,7 +68,7 @@ def placeholder_url(source, url):
 def validate_image(data: bytes, source: SourceId | None = None) -> ImageData:
     """Validate real image bytes; decode JavDB App's key-prefixed XOR envelope."""
     if len(data) > 32 * 1024 * 1024:
-        raise ValueError("artwork exceeds 32 MiB")
+        raise ValueError("图片超过 32 MiB")
     decoded = False
     if not image_signature(data) and source == SourceId.JAVDB and len(data) > 16:
         key = data[0]
@@ -80,9 +80,9 @@ def validate_image(data: bytes, source: SourceId | None = None) -> ImageData:
             width, height = image.size
             image_format = image.format
             if width < 1 or height < 1:
-                raise ValueError("invalid image dimensions")
+                raise ValueError("图片尺寸无效")
             if width * height > 40_000_000:
-                raise ValueError("image exceeds 40 megapixels")
+                raise ValueError("图片超过 4000 万像素")
             image.load()
         return ImageData(data, image_format.lower(), width, height, decoded)
     except (
@@ -91,7 +91,7 @@ def validate_image(data: bytes, source: SourceId | None = None) -> ImageData:
         SyntaxError,
         Image.DecompressionBombError,
     ) as exc:
-        raise ValueError("artwork is corrupt") from exc
+        raise ValueError("图片损坏或格式不支持") from exc
 
 
 def image_plan(items):
@@ -133,7 +133,7 @@ def crop_box(
     """Keep the largest 2:3 window; protect the main face with hair/chin margins."""
     unit = min(width // 2, height // 3)
     if unit < 1:
-        raise ValueError("image is too small for a portrait cover")
+        raise ValueError("图片太小，无法裁剪为海报")
     w, h = unit * 2, unit * 3
     x, y = (width - w) / 2, (height - h) / 2
     if faces:
@@ -180,10 +180,10 @@ def crop_poster(
     from PIL import ImageOps
 
     if len(data) > 32 * 1024 * 1024:
-        raise ValueError("artwork exceeds 32 MiB")
+        raise ValueError("图片超过 32 MiB")
     with Image.open(BytesIO(data)) as image:
         if image.width * image.height > 40_000_000:
-            raise ValueError("image exceeds 40 megapixels")
+            raise ValueError("图片超过 4000 万像素")
         ImageOps.exif_transpose(image, in_place=True)
         if image.mode == "CMYK":
             image = image.convert("RGB")
@@ -210,7 +210,7 @@ def crop_poster(
                 _, detected = detector.detect(frame)
             except cv2.error as exc:
                 raise ValueError(
-                    "face detection failed; check the YuNet model"
+                    "人脸识别失败，请检查 YuNet 模型"
                 ) from exc
             if detected is not None:
                 sx, sy = width / frame.shape[1], height / frame.shape[0]
@@ -234,7 +234,7 @@ def crop_poster(
             or y + h > height
             or w * 3 != h * 2
         ):
-            raise ValueError("crop must be an in-bounds 2:3 rectangle")
+            raise ValueError("裁剪区域必须在图片内且比例为 2:3")
         cropped = image.crop((x, y, x + w, y + h))
         output = PngOutput()
         # Preserve the selected source pixels; JPEG/WebP encoding would add loss.

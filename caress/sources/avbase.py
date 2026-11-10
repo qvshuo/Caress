@@ -26,11 +26,11 @@ class AVbase(Source):
     def props(page: Page) -> dict:
         data = text(page.selector(), '//script[@id="__NEXT_DATA__"]/text()')
         if not data:
-            raise FetchError(Status.PARSE_ERROR, "AVbase structured data missing")
+            raise FetchError(Status.PARSE_ERROR, "AVbase 页面缺少结构化数据")
         data = json.loads(data)
         for key in ("props", "pageProps"):
             if not isinstance(data, dict) or not isinstance(data.get(key), dict):
-                raise FetchError(Status.PARSE_ERROR, "invalid AVbase page properties")
+                raise FetchError(Status.PARSE_ERROR, "AVbase 页面数据无效")
             data = data[key]
         return data
 
@@ -45,7 +45,7 @@ class AVbase(Source):
             )
             works = self.props(page).get("works")
             if not isinstance(works, list):
-                raise FetchError(Status.PARSE_ERROR, "AVbase search results missing")
+                raise FetchError(Status.PARSE_ERROR, "AVbase 搜索页缺少结果区域")
             candidates = []
             for work in works:
                 if not isinstance(work, dict):
@@ -69,7 +69,7 @@ class AVbase(Source):
         page = await self.client.get(self.id, url)
         work = self.props(page).get("work")
         if not isinstance(work, dict) or not work.get("work_id") or not work.get("title"):
-            raise FetchError(Status.PARSE_ERROR, "AVbase work fields missing")
+            raise FetchError(Status.PARSE_ERROR, "AVbase 页面缺少作品信息")
         products = [p for p in work.get("products") or [] if isinstance(p, dict)]
 
         def product_name(key):

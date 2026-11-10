@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 import sqlite3
 import time
@@ -9,7 +8,7 @@ import uuid
 from urllib.parse import urlencode
 
 from ..actors import ActorAliases, actor_record, actor_type, comparison_name
-from ..http import FetchError
+from ..http import FetchError, json_error
 from ..logging import report_progress
 from ..models import SourceId, Status
 
@@ -52,15 +51,15 @@ class JavDBApi:
         )
         payload = page.json()
         if not isinstance(payload, dict):
-            raise FetchError(Status.PARSE_ERROR, "JavDB API envelope changed")
+            raise FetchError(Status.PARSE_ERROR, "JavDB 接口返回的数据格式无效")
         if payload.get("success") not in (1, True):
-            message = "JavDB API 返回失败：" + json.dumps(payload, ensure_ascii=False)
+            message = "JavDB API 返回失败：" + json_error(payload)
             report_progress(
                 "response", status="failed", source=self.id, message=message
             )
             raise FetchError(Status.BLOCKED, message)
         if not isinstance(payload.get("data"), dict):
-            raise FetchError(Status.PARSE_ERROR, "JavDB API returned no data object")
+            raise FetchError(Status.PARSE_ERROR, "JavDB 接口未返回数据")
         return payload["data"]
 
     async def resolve_actors(
@@ -88,7 +87,7 @@ class JavDBApi:
                     data = await self.api(f"/api/v1/actors/{candidate}")
                     row = data.get("actor")
                     if not isinstance(row, dict) or str(row.get("id")) != candidate:
-                        raise ValueError("actor detail identity mismatch")
+                        raise ValueError("演员详情的身份不匹配")
                     record = actor_record(row)
                     if not record:
                         continue

@@ -16,6 +16,52 @@ from caress.settings import Settings
 from caress.sources.base import Source
 
 
+def test_http_json_error_keeps_source_details_and_hides_secrets():
+    from caress.http import Page, response_issue
+
+    page = Page("https://example.invalid/api", 403, b'{"error":"denied","token":"secret"}')
+    status, message = response_issue(page)
+    assert status == Status.BLOCKED
+    assert '"error": "denied"' in message
+    assert "secret" not in message
+    assert "[已隐藏]" in message
+    assert response_issue(Page("https://example.invalid", 404, b'{}'))[0] == Status.NOT_FOUND
+
+
+@pytest.mark.asyncio
+async def test_dmm_graphql_error_retains_original_response():
+    from caress.http import FetchError, Page
+    from caress.sources.dmm import DMM
+
+    class Client:
+        async def post_json(self, *args, **kwargs):
+            return Page("https://example.invalid", 200, b'{"errors":[{"message":"denied"}],"data":null}')
+
+    with pytest.raises(FetchError, match='"message": "denied"'):
+        await DMM(Client(), Settings()).content("abc123")
+
+
+@pytest.mark.asyncio
+async def test_failed_scrape_exposes_source_error_in_final_message():
+    from caress.models import Classification, ScrapeResult
+    from caress.processing import WorkProcessor
+
+    class ScraperStub:
+        async def scrape(self, request):
+            return ScrapeResult(
+                code=request.code,
+                status=Status.BLOCKED,
+                classification=Classification(),
+                results=[SourceResult(source=SourceId.JAVDB, requested_code=request.code,
+                                      status=Status.BLOCKED, message='{"error":"denied"}')],
+            )
+
+    processor = object.__new__(WorkProcessor)
+    processor.scraper = ScraperStub()
+    with pytest.raises(ValueError, match='{"error":"denied"}'):
+        await processor._prepare("ABC-123", None)
+
+
 def test_source_search_selects_first_exact_match_in_provider_ranking():
     from caress.models import Candidate
 

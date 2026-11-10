@@ -338,7 +338,7 @@ test("start button is stable when mode changes and grid is absent", async ({
   ).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "刷新作品列表" }),
-  ).toContainText("刷新");
+  ).toBeVisible();
   await expect(
     page
       .getByRole("row", { name: "查看 ABC-123" })
@@ -934,10 +934,9 @@ test("both pages share queued progress and completed detail refreshes", async ({
   const cancel = await progress
     .getByRole("button", { name: "取消", exact: true })
     .boundingBox();
-  const refresh = await page
-    .getByRole("button", { name: "刷新作品列表" })
-    .boundingBox();
-  expect(Math.abs(cancel!.x - refresh!.x)).toBeLessThan(1);
+  const box = await progress.boundingBox();
+  expect(cancel!.x).toBeGreaterThan(box!.x);
+  expect(cancel!.x + cancel!.width).toBeLessThan(box!.x + box!.width);
   await page
     .getByRole("checkbox", { name: "选择 ABC-123", exact: true })
     .check();

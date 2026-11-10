@@ -32,14 +32,14 @@ export function BatchProgress({
           ? "已结束"
           : "已完成";
   return (
-    <section aria-label="当前批次" className="relative space-y-2 rounded-lg border p-3 text-sm">
-      <div className="min-h-9 pr-20">
+    <section aria-label="当前批次" className="space-y-2 rounded-lg border p-3 text-sm">
+      <div className="flex items-start justify-between gap-3">
         <p className="tabular-nums text-muted-foreground">
           {heading}
           {` · ${batch.items.filter((i) => i.status === "success").length} 成功 · ${batch.items.filter((i) => i.status === "failed").length} 失败 · ${batch.items.filter((i) => i.status === "skipped").length} 跳过`}
         </p>
         {busy && (
-          <Button className="absolute -right-px top-3 w-16" variant="outline" onClick={cancel}>
+          <Button size="sm" variant="outline" onClick={cancel}>
             取消
           </Button>
         )}
@@ -53,10 +53,10 @@ export function BatchProgress({
         />
       )}
       <p className="line-clamp-2 wrap-anywhere text-muted-foreground">
-        当前：{current.map(label).join("、") || "—"}
+        当前：{current.map(label).join(" ") || "—"}
       </p>
       <p className="line-clamp-2 wrap-anywhere text-muted-foreground">
-        等待：{waiting.map(label).join("、") || "—"}
+        等待：{waiting.map(label).join(" ") || "—"}
       </p>
       {(batch.error || details.length > 0) && (
         <details>

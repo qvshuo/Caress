@@ -25,12 +25,12 @@ class AVSOX(Source):
 
     async def _fetch(self, request: ScrapeRequest) -> SourceResult:
         if self.rules.classify(request.code).category == Category.CENSORED:
-            raise FetchError(Status.UNSUPPORTED, "AVSOX only supports uncensored catalogs")
+            raise FetchError(Status.UNSUPPORTED, "AVSOX 只支持无码作品")
         if request.source_url:
             url = self.checked_url(request.source_url)
         elif request.external_id:
             if not request.external_id.isalnum():
-                raise FetchError(Status.UNSUPPORTED, "invalid AVSOX movie ID")
+                raise FetchError(Status.UNSUPPORTED, "AVSOX 作品 ID 无效")
             url = self.base + "/cn/movies/" + request.external_id
         else:
             search = await self.document(
@@ -53,7 +53,7 @@ class AVSOX(Source):
                     return self.missed(request)
                 raise FetchError(
                     Status.PARSE_ERROR,
-                    "AVSOX search exposes neither exact results nor an explicit empty state",
+                    "AVSOX 搜索页面没有可识别的结果或空结果提示",
                 )
             url = self.checked_url(selected.url)
         page = await self.document(url, "detail")
@@ -98,7 +98,7 @@ class AVSOX(Source):
         code = row("识别码")
         title = text(selector, "//h1/text()")
         if not code or not title:
-            raise FetchError(Status.PARSE_ERROR, "AVSOX detail markers missing after rendering")
+            raise FetchError(Status.PARSE_ERROR, "AVSOX 渲染后的详情页缺少必要信息")
         title = re.sub(r"^" + re.escape(code) + r"\s*", "", title).strip()
         code = normalize_code(code)
         metadata = SourceMetadata(

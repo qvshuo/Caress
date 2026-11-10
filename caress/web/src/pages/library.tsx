@@ -147,11 +147,11 @@ export function Library({
       .join(" · ");
   return (
     <div className="space-y-4">
-      <div className="flex min-h-9 flex-wrap items-center justify-between gap-3">
-        <p className="text-base tabular-nums text-muted-foreground">
+      <div className="flex min-h-9 flex-wrap items-center gap-2">
+        <p className="text-base tabular-nums">
           {total} 部作品
           {selected.size > 0 && (
-            <span className="text-sm"> · 已选 {selected.size}</span>
+            <span className="text-sm text-muted-foreground"> · 已选 {selected.size}</span>
           )}
         </p>
         <RefreshButton

@@ -21,7 +21,7 @@ class FC2(Source):
 
     async def _fetch(self, request: ScrapeRequest) -> SourceResult:
         if not request.code.startswith("FC2PPV-"):
-            raise FetchError(Status.UNSUPPORTED, "FC2 official only accepts FC2PPV numbers")
+            raise FetchError(Status.UNSUPPORTED, "FC2 官方来源只支持 FC2PPV 番号")
         article_id = request.code.removeprefix("FC2PPV-")
         url = (
             self.checked_url(request.source_url)
@@ -32,7 +32,7 @@ class FC2(Source):
             page = await self.client.get(self.id, url, cookies={"language": "ja", "wei6H": "1"})
         except FetchError as exc:
             if exc.status == Status.LOGIN_REQUIRED:
-                raise FetchError(exc.status, "FC2 requires an authenticated session", exc.page) from exc
+                raise FetchError(exc.status, "FC2 要求登录", exc.page) from exc
             raise
         selector = page.selector()
         if "couldn't find products" in page.text.lower() or "商品が見つかりません" in page.text:
@@ -47,7 +47,7 @@ class FC2(Source):
         if title:
             title = re.sub(r"^FC2[- ](?:PPV[- ])?\d+\s*", "", title).strip()
         if not match or not title or not selector.css(".items_article_MainitemThumb"):
-            raise FetchError(Status.PARSE_ERROR, "FC2 detail identity or title missing")
+            raise FetchError(Status.PARSE_ERROR, "FC2 详情页缺少作品身份、标题或封面")
         plot = text(selector, '//*[contains(@class,"items_article_Description")]//text()')
         warnings = []
         description = text(selector, '//iframe[@data-iframe="description"]/@src')
@@ -55,7 +55,7 @@ class FC2(Source):
             description_url = self.checked_url(urljoin(page.url, description))
             if f"/article/{article_id}/description" not in description_url:
                 raise FetchError(
-                    Status.IDENTITY_MISMATCH, "FC2 description iframe belongs to another article"
+                    Status.IDENTITY_MISMATCH, "FC2 简介链接与作品不匹配"
                 )
             try:
                 detail = await self.client.get(
@@ -67,9 +67,9 @@ class FC2(Source):
                 )
                 if plot and "preparing for translation" in plot.lower():
                     plot = None
-                    warnings.append("FC2 description is a translation placeholder")
+                    warnings.append("FC2 简介尚未准备好")
             except FetchError as exc:
-                warnings.append(f"description iframe unavailable: {exc.status}")
+                warnings.append(f"FC2 简介获取失败：{exc}")
         metadata = SourceMetadata(
             code="FC2PPV-" + match[1],
             title=title,

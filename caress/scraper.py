@@ -75,7 +75,7 @@ class Scraper:
         )
         validate_code(request.code)
         if (request.external_id or request.source_url) and not request.source:
-            raise ValueError("explicit movie ID or URL requires a source")
+            raise ValueError("指定作品 ID 或地址时必须选择来源")
         classification = self.rules.classify(request.code)
 
         async def fetch(source):
@@ -173,7 +173,7 @@ class Scraper:
         ]
         warnings = [warning for result in executed for warning in result.warnings]
         warnings.extend(
-            f"{result.source}: {result.status.value}: {result.message or ''}"
+            f"{result.source}：{result.message or '来源请求失败'}"
             for result in executed
             if result.status not in (Status.FOUND, Status.NOT_FOUND, Status.UNSUPPORTED)
         )
@@ -184,9 +184,9 @@ class Scraper:
         )
         if metadata:
             if not metadata.plot:
-                warnings.append(f"{selected.source}: missing plot")
+                warnings.append(f"{selected.source}：未获取到简介")
             if not metadata.artwork:
-                warnings.append(f"{selected.source}: missing artwork")
+                warnings.append(f"{selected.source}：未获取到图片")
         failures = [
             r for r in results if r.status not in (Status.NOT_FOUND, Status.UNSUPPORTED)
         ]

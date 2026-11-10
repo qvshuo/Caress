@@ -845,22 +845,35 @@ async def test_backdrop_dedup_compares_content_and_preserves_unknown_images():
 
 
 @pytest.mark.asyncio
-async def test_cancellation_after_write_boundary_reports_partial(
-    fake_batch, monkeypatch
+@pytest.mark.parametrize("failure", [False, True])
+async def test_cancellation_after_write_boundary_waits_for_completion(
+    fake_batch, monkeypatch, failure
 ):
-    started = asyncio.Event()
+    started, finish = asyncio.Event(), asyncio.Event()
 
     async def write(*args, **kwargs):
         started.set()
-        await asyncio.Event().wait()
+        await finish.wait()
+        if failure:
+            raise ValueError("写入失败")
+        return [], True
 
     monkeypatch.setattr(FakeProcessor, "write", write)
     fake_batch.batches.start(["1"], "force", None)
     await started.wait()
-    await fake_batch.batches.cancel()
+    fake_batch.batches.start(["2"], "force", None)
+    cancelling = asyncio.create_task(fake_batch.batches.cancel())
+    await asyncio.sleep(0)
+    assert not cancelling.done()
+    finish.set()
+    await asyncio.wait_for(cancelling, 2)
     code, identity, _ = identify(item())
     record = fake_batch.runtime.record("s", "1", identity, code)
-    assert record["status"] == "cancelled" and "部分" in record["error"]
+    assert record["status"] == ("failed" if failure else "success")
+    if failure:
+        assert "部分" in record["error"]
+    assert fake_batch.runtime.batch()["status"] == "cancelled"
+    assert fake_batch.runtime.batch()["items"][1]["status"] == "cancelled"
 
 
 @pytest.mark.asyncio

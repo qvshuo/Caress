@@ -244,6 +244,8 @@ class BatchRunner:
                                     raise ValueError(
                                         "刮削期间 Emby 项目身份变化，请刷新后重试"
                                     )
+                                if self.task.cancelling():
+                                    raise asyncio.CancelledError
                                 writing = True
                                 row["writing"] = True
                                 runtime.save_record(
@@ -255,13 +257,19 @@ class BatchRunner:
                                     error="写入已开始，可能部分完成",
                                 )
                                 save()
-                                warnings, changed = await processor.write(
-                                    client,
-                                    row["id"],
-                                    prepared,
-                                    live_media,
-                                    replace=replace,
+                                write_task = asyncio.create_task(
+                                    processor.write(
+                                        client,
+                                        row["id"],
+                                        prepared,
+                                        live_media,
+                                        replace=replace,
+                                    )
                                 )
+                                try:
+                                    warnings, changed = await asyncio.shield(write_task)
+                                except asyncio.CancelledError:
+                                    warnings, changed = await write_task
                                 if not changed:
                                     runtime.restore_record(server, row["id"], old)
                                     row.update(

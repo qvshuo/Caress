@@ -4,7 +4,7 @@ import json
 import re
 from urllib.parse import parse_qs, quote, urljoin, urlparse
 
-from ..http import FetchError
+from ..http import FetchError, json_error
 from ..models import (
     Actor,
     Evidence,
@@ -70,17 +70,21 @@ class DMM(Source):
                 headers={"Origin": "https://video.dmm.co.jp", "Referer": "https://video.dmm.co.jp/"},
             )
         except FetchError as exc:
-            raise FetchError(exc.status, "DMM metadata API: " + str(exc), exc.page) from exc
+            raise FetchError(exc.status, "DMM 元数据接口：" + str(exc), exc.page) from exc
         document = page.json()
         if not isinstance(document, dict) or not isinstance(document.get("data"), dict):
-            raise FetchError(Status.PARSE_ERROR, "DMM GraphQL returned no data")
+            if isinstance(document, dict) and document.get("errors"):
+                raise FetchError(Status.PARSE_ERROR, json_error(document))
+            raise FetchError(Status.PARSE_ERROR, "DMM 接口未返回数据")
         work = document["data"].get("ppvContent")
         if work is None and not document.get("errors"):
             return None
         if not isinstance(work, dict) or not work.get("title"):
-            raise FetchError(Status.PARSE_ERROR, "DMM GraphQL content schema changed")
+            if document.get("errors"):
+                raise FetchError(Status.PARSE_ERROR, json_error(document))
+            raise FetchError(Status.PARSE_ERROR, "DMM 接口缺少作品数据或标题")
         if work.get("id") != cid:
-            raise FetchError(Status.IDENTITY_MISMATCH, "DMM returned a different CID")
+            raise FetchError(Status.IDENTITY_MISMATCH, "DMM 返回的作品 ID 不匹配")
         return work
 
     async def search_cids(self, request: ScrapeRequest) -> list[str]:
@@ -91,7 +95,7 @@ class DMM(Source):
                 cookies={"age_check_done": "1"},
             )
         except FetchError as exc:
-            raise FetchError(exc.status, "DMM web search: " + str(exc), exc.page) from exc
+            raise FetchError(exc.status, "DMM 网页搜索：" + str(exc), exc.page) from exc
         selector = page.selector()
         urls = selector.css("a[href]::attr(href)").getall()
         # Modern DMM embeds detailUrl strings in its search-state scripts.
@@ -113,22 +117,22 @@ class DMM(Source):
             'input[name="searchstr"], input[name="keyword"], #searchstr'
         ):
             raise FetchError(
-                Status.PARSE_ERROR, "DMM search contains no verified content links or search UI"
+                Status.PARSE_ERROR, "DMM 搜索页面缺少可识别的作品链接和搜索区域"
             )
         return candidates
 
     async def _fetch(self, request: ScrapeRequest) -> SourceResult:
         if request.code.startswith("FC2PPV-"):
-            raise FetchError(Status.UNSUPPORTED, "DMM does not resolve FC2 article IDs")
+            raise FetchError(Status.UNSUPPORTED, "DMM 不支持 FC2 番号")
         cid = request.external_id
         if request.source_url:
             from_url = cid_from_url(request.source_url)
             if not from_url:
                 raise FetchError(
-                    Status.UNSUPPORTED, "expected an official DMM content URL with CID"
+                    Status.UNSUPPORTED, "请提供包含作品 ID 的 DMM 官方地址"
                 )
             if cid and cid.lower() != from_url:
-                raise FetchError(Status.IDENTITY_MISMATCH, "explicit CID differs from URL CID")
+                raise FetchError(Status.IDENTITY_MISMATCH, "指定的作品 ID 与地址不一致")
             cid = from_url
         explicit = bool(cid)
         work = None
@@ -136,20 +140,20 @@ class DMM(Source):
         if cid:
             cid = cid.lower()
             if not re.fullmatch(r"[a-z0-9_]{3,80}", cid):
-                raise FetchError(Status.UNSUPPORTED, "invalid DMM CID")
+                raise FetchError(Status.UNSUPPORTED, "DMM 作品 ID 无效")
             if not cid_matches_number(
                 cid, request.code, [*self.rules.censored_prefixes, *self.rules.uncensored_prefixes]
             ):
                 raise FetchError(
                     Status.IDENTITY_MISMATCH,
-                    "CID does not encode the full requested catalog number",
+                    "DMM 作品 ID 与请求番号不匹配",
                 )
             work = await self.content(cid)
         else:
             cid = self.rules.dmm_cid(request.code)
             if not cid:
                 raise FetchError(
-                    Status.UNSUPPORTED, "DMM needs an alphanumeric catalog or explicit CID"
+                    Status.UNSUPPORTED, "DMM 需要字母数字番号或指定作品 ID"
                 )
             work = await self.content(cid)
             if work is None:

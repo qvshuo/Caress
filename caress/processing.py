@@ -94,7 +94,7 @@ class WorkProcessor:
     async def _prepare(self, code, source):
         result = await self.scraper.scrape(ScrapeRequest(code=code, source=source))
         if result.status != Status.FOUND or result.metadata is None:
-            errors = "; ".join(f"{r.source}: {r.status}" for r in result.results)
+            errors = "；".join(f"{r.source}：{r.message or ('未找到作品' if r.status == Status.NOT_FOUND else '来源不支持该作品' if r.status == Status.UNSUPPORTED else '来源请求失败')}" for r in result.results)
             raise ValueError("刮削未成功：" + errors)
         metadata = result.metadata.model_copy(deep=True)
         selected = next(r for r in result.results if r.source == result.selected_source)
@@ -157,7 +157,10 @@ class WorkProcessor:
                         )
                     prepared.images.extend((kind, path) for kind in kinds)
                 except (FetchError, ValueError, OSError) as exc:
-                    prepared.errors.extend((kind, f"{kind}: {exc}") for kind in kinds)
+                    prepared.errors.extend(
+                        (kind, f"{'封面' if kind == 'Primary' else '背景图'}：{exc}")
+                        for kind in kinds
+                    )
             return prepared
 
         except BaseException:

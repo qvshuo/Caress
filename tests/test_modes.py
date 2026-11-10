@@ -323,41 +323,47 @@ async def test_identical_force_is_noop_and_new_images_append_once(flow):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("cancel", [False, True])
-async def test_partial_write_can_be_completed_by_scrape(flow, cancel):
+async def test_partial_write_can_be_completed_by_scrape(flow):
     flow.items["1"]["Overview"] = ""
     flow.images["1"].pop("Primary")
     code, identity, _ = identify(flow.items["1"])
     flow.service.runtime.save_record("s", "1", identity, code, "success")
-    if cancel:
-        flow.block_image = asyncio.Event()
-        flow.service.batches.start(["1"], "scrape", None)
-        await asyncio.wait_for(flow.write_started.wait(), 2)
-        await flow.service.batches.cancel()
-        rows = flow.service.runtime.batch()["items"]
-        flow.block_image = None
-    else:
-        flow.fail_image = True
-        rows = await flow.run()
-        flow.fail_image = False
-    assert (
-        rows[0]["status"] == ("cancelled" if cancel else "failed")
-        and "部分" in rows[0]["error"]
-    )
+    flow.fail_image = True
+    rows = await flow.run()
+    flow.fail_image = False
+    assert rows[0]["status"] == "failed" and "部分" in rows[0]["error"]
     assert flow.service.runtime.record("s", "1", identity, code)["succeeded_at"]
     assert (
         flow.items["1"]["Overview"] == "source plot"
         and "Primary" not in flow.images["1"]
     )
-    if not cancel:
-        from caress.library import project
+    from caress.library import project
 
-        assert (
-            project(flow.items["1"], flow.service.runtime, "s")["status"]
-            == "rescrape_failed"
-        )
+    assert (
+        project(flow.items["1"], flow.service.runtime, "s")["status"]
+        == "rescrape_failed"
+    )
     assert (await flow.run())[0]["status"] == "success"
     assert flow.posts.count("Items/1") == 1 and flow.images["1"]["Primary"]
+
+
+@pytest.mark.asyncio
+async def test_cancel_finishes_image_upload_and_readback(flow):
+    flow.items["1"]["Overview"] = ""
+    flow.images["1"].pop("Primary")
+    flow.block_image = asyncio.Event()
+    flow.service.batches.start(["1"], "scrape", None)
+    await asyncio.wait_for(flow.write_started.wait(), 2)
+    cancelling = asyncio.create_task(flow.service.batches.cancel())
+    await asyncio.sleep(0)
+    assert not cancelling.done()
+    flow.block_image.set()
+    await asyncio.wait_for(cancelling, 2)
+    batch = flow.service.runtime.batch()
+    assert batch["status"] == "cancelled"
+    assert batch["items"][0]["status"] == "success"
+    assert flow.items["1"]["Overview"] == "source plot"
+    assert flow.images["1"]["Primary"]
 
 
 @pytest.mark.asyncio

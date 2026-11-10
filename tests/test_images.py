@@ -140,7 +140,7 @@ def test_crop_source_checks_pixel_limit_before_decode(monkeypatch):
         + chunk(b"IEND", b"")
     )
     monkeypatch.setattr(Image.Image, "load", forbidden)
-    with pytest.raises(ValueError, match="40 megapixels"):
+    with pytest.raises(ValueError, match="4000 万像素"):
         crop_source_image(data)
 
 

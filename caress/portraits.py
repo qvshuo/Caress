@@ -24,9 +24,9 @@ def actor_image(output: Path, name: str) -> Path | None:
         or Path(name).name != name
         or any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in name)
     ):
-        raise ValueError("invalid actor name")
+        raise ValueError("演员名称无效")
     if folder.is_symlink():
-        raise ValueError("actor image directory must not be a symlink")
+        raise ValueError("演员头像目录不能是符号链接")
     for suffix in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
         image = folder / (name + suffix)
         if image.is_file() and not image.is_symlink():
@@ -79,7 +79,7 @@ class Gfriends:
                     async for chunk in response.aiter_bytes():
                         data.extend(chunk)
                         if len(data) > limit:
-                            raise ValueError("gfriends response exceeds size limit")
+                            raise ValueError("演员头像来源响应超过大小限制")
                     return bytes(data)
             except httpx.HTTPStatusError as exc:
                 if exc.response.status_code < 500 and exc.response.status_code != 429:
@@ -90,7 +90,7 @@ class Gfriends:
                 pass
             if attempt < NETWORK_RETRIES:
                 await asyncio.sleep(RETRY_DELAY_SECONDS)
-        raise ValueError("gfriends request failed")
+        raise ValueError("演员头像来源请求失败")
 
     def select(self, name: str, kind: int | None = None) -> str | None:
         if len(self.names.candidates(name, kind)) > 1:
@@ -159,10 +159,10 @@ class Gfriends:
                             )
                         )
                         if not isinstance(tree, dict):
-                            raise ValueError("invalid gfriends file tree")
+                            raise ValueError("演员头像来源索引无效")
                         self.index = tree["Content"]
                         if not isinstance(self.index, dict):
-                            raise ValueError("invalid gfriends file tree")
+                            raise ValueError("演员头像来源索引无效")
                     except (ValueError, KeyError) as exc:
                         self.index_error = str(exc)
                 if self.index_error:

@@ -40,7 +40,7 @@ class JavBus(Source):
             )
             selector = search.selector()
             if not selector.css(".movie-box") and not selector.css(".container"):
-                raise FetchError(Status.PARSE_ERROR, "JavBus search document changed") from None
+                raise FetchError(Status.PARSE_ERROR, "JavBus 搜索页面无法解析") from None
             candidates = [
                 Candidate(
                     code=code,
@@ -75,9 +75,9 @@ class JavBus(Source):
 
         code = row("識別碼", "span[1]/text()") or row("识别码", "span[1]/text()")
         title = text(selector, "//h3/text()")
-        missing = [field for field, present in (("catalog", code), ("title", title), ("cover", selector.css("a.bigImage"))) if not present]
+        missing = [field for field, present in (("番号", code), ("标题", title), ("封面", selector.css("a.bigImage"))) if not present]
         if missing:
-            raise FetchError(Status.PARSE_ERROR, "JavBus detail markers missing: " + ", ".join(missing))
+            raise FetchError(Status.PARSE_ERROR, "JavBus 详情页缺少必要信息：" + ", ".join(missing))
         code = normalize_code(code)
         title = re.sub(r"^" + re.escape(code) + r"\s*", "", title).strip()
         actors = [

@@ -5,7 +5,7 @@ import re
 from datetime import datetime
 from urllib.parse import urlparse
 
-from ..http import FetchError, Page
+from ..http import FetchError, Page, json_error
 from ..models import (
     Actor,
     ScrapeRequest,
@@ -25,19 +25,19 @@ class Uncensored(Source):
     async def document(self, request: ScrapeRequest) -> tuple[str, Page]:
         match = re.fullmatch(self.pattern, request.code)
         if not match:
-            raise FetchError(Status.UNSUPPORTED, "catalog does not belong to this official source")
+            raise FetchError(Status.UNSUPPORTED, "番号不属于该官方来源")
         identity = match[1]
         if request.external_id and request.external_id != identity:
-            raise FetchError(Status.IDENTITY_MISMATCH, "official movie ID differs from catalog")
+            raise FetchError(Status.IDENTITY_MISMATCH, "官方作品 ID 与番号不匹配")
         url = self.base + self.detail_path.format(identity)
         if request.source_url:
             url = self.checked_url(request.source_url)
             if urlparse(url).path.rstrip("/") != self.detail_path.format(identity).rstrip("/"):
-                raise FetchError(Status.IDENTITY_MISMATCH, "official URL differs from catalog")
+                raise FetchError(Status.IDENTITY_MISMATCH, "官方作品地址与番号不匹配")
         page = await self.client.get(self.id, url)
         self.checked_url(page.url)
         if urlparse(page.url).path.rstrip("/") != self.detail_path.format(identity).rstrip("/"):
-            raise FetchError(Status.IDENTITY_MISMATCH, "official detail redirected to another work")
+            raise FetchError(Status.IDENTITY_MISMATCH, "官方详情页跳转到了其他作品")
         return identity, page
 
 
@@ -53,13 +53,15 @@ class OnePondo(Uncensored):
             match = re.fullmatch(self.pattern, request.code)
             url = self.checked_url(request.source_url)
             if not match or urlparse(url).path.rstrip("/") != "/movies/" + match[1]:
-                raise FetchError(Status.IDENTITY_MISMATCH, "1Pondo URL differs from catalog")
+                raise FetchError(Status.IDENTITY_MISMATCH, "一本道作品地址与番号不匹配")
         identity, page = await self.document(request.model_copy(update={"source_url": None}))
         data = page.json()
+        if isinstance(data, dict) and (data.get("error") or data.get("errors") or data.get("success") is False):
+            raise FetchError(Status.PARSE_ERROR, json_error(data))
         if not isinstance(data, dict) or data.get("MovieID") != identity:
-            raise FetchError(Status.IDENTITY_MISMATCH, "1Pondo JSON movie ID differs from catalog")
+            raise FetchError(Status.IDENTITY_MISMATCH, "一本道接口返回的作品 ID 与番号不匹配")
         if not data.get("Title"):
-            raise FetchError(Status.PARSE_ERROR, "1Pondo title missing")
+            raise FetchError(Status.PARSE_ERROR, "一本道作品缺少标题")
         url = self.base + "/movies/" + identity + "/"
         cover = next(
             (data[k] for k in ("ThumbUltra", "ThumbHigh", "ThumbMed", "ThumbLow") if data.get(k)), None
@@ -75,6 +77,8 @@ class OnePondo(Uncensored):
             try:
                 gallery = await self.client.get(self.id, gallery_url)
                 rows = gallery.json()
+                if isinstance(rows, dict) and (rows.get("error") or rows.get("errors") or rows.get("success") is False):
+                    raise FetchError(Status.PARSE_ERROR, json_error(rows))
                 if isinstance(rows, dict):
                     rows = rows.get("Rows", [])
                 samples = []
@@ -88,8 +92,8 @@ class OnePondo(Uncensored):
                             self.base + "/assets/sample/" + identity + "/popu/" + row["Filename"]
                         )
                 images += artwork(self.id, url, [], samples[:100])
-            except FetchError:
-                warnings.append("剧照列表暂不可用，已保留元数据。")
+            except FetchError as exc:
+                warnings.append(f"剧照列表获取失败：{exc}")
         return self.found(
             request,
             SourceMetadata(
@@ -122,7 +126,7 @@ class Caribbeancom(Uncensored):
         selector = page.selector()
         title = first(selector, '//h1[@itemprop="name"]//text()', '//*[@id="moviepages"]//h1[1]//text()')
         if not title:
-            raise FetchError(Status.PARSE_ERROR, "Caribbeancom detail title missing")
+            raise FetchError(Status.PARSE_ERROR, "加勒比作品详情页缺少标题")
 
         def row(label):
             return f'//*[@id="moviepages"]//li[span[1][normalize-space(.)="{label}"]]/span[2]'
@@ -190,7 +194,7 @@ class Heyzo(Uncensored):
                 break
         title = data.get("name") or text(selector, '//*[@id="movie"]/h1//text()')
         if not title:
-            raise FetchError(Status.PARSE_ERROR, "HEYZO detail title missing")
+            raise FetchError(Status.PARSE_ERROR, "HEYZO 作品详情页缺少标题")
 
         def row(label):
             return f'//table[@class="movieInfo"]//tr[td[1][normalize-space(.)="{label}"]]/td[2]'

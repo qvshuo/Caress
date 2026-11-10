@@ -60,7 +60,7 @@ class JavDBWeb(Source):
             url = self.checked_url(request.source_url)
         elif request.external_id:
             if not request.external_id.isalnum():
-                raise FetchError(Status.UNSUPPORTED, "invalid JavDB movie ID")
+                raise FetchError(Status.UNSUPPORTED, "JavDB 作品 ID 无效")
             url = self.base + "/v/" + request.external_id
         else:
             search = await self.client.get(
@@ -77,7 +77,7 @@ class JavDBWeb(Source):
             ):
                 return self.missed(request)
             if not selector.css(".movie-list"):
-                raise FetchError(Status.PARSE_ERROR, "JavDB search container missing")
+                raise FetchError(Status.PARSE_ERROR, "JavDB 搜索页缺少结果区域")
             candidates = [
                 Candidate(
                     code=code,
@@ -106,7 +106,7 @@ class JavDBWeb(Source):
         original = text(selector, '//h2//span[contains(@class,"origin-title")]//text()')
         title = original or text(selector, '//h2//strong[contains(@class,"current-title")]//text()')
         if not code or not title or not selector.css("nav.movie-panel-info"):
-            raise FetchError(Status.PARSE_ERROR, "JavDB detail markers missing")
+            raise FetchError(Status.PARSE_ERROR, "JavDB 详情页缺少必要的作品信息")
 
         def value(label: str) -> str | None:
             nodes = row(label)
