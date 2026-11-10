@@ -41,7 +41,6 @@ export function App() {
   const [settings, setSettings] = useState<Preferences | null>(null);
   const [batch, setBatch] = useState<Batch | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [dismissed, setDismissed] = useState<string | null>(null);
   const batchRef = useRef<Batch | null>(null);
   const batchGeneration = useRef(0);
   const [revision, setRevision] = useState(0);
@@ -112,7 +111,7 @@ export function App() {
     };
   }, [busy, refresh, route]);
   const start = async (ids: string[], action: Action, source?: Source) => {
-    if (submitting) return;
+    if (submitting) return false;
     setSubmitting(true);
     try {
       if (action === "force") {
@@ -125,7 +124,7 @@ export function App() {
           confirmationRef.current = value;
           setConfirmation(value);
         });
-        if (!accepted) return;
+        if (!accepted) return false;
       }
       batchGeneration.current++;
       const result = await api<Batch>("batch", "POST", {
@@ -135,14 +134,14 @@ export function App() {
         confirmed: action === "force",
       });
       setBatch(result);
-      setDismissed(null);
       if (result.status !== "running") refresh();
+      return true;
     } finally {
       setSubmitting(false);
     }
   };
   const progress =
-    batch && dismissed !== batch.id ? (
+    batch ? (
       <BatchProgress
         batch={batch}
         order={order}
@@ -153,7 +152,6 @@ export function App() {
             refresh();
           })
         }
-        close={() => setDismissed(batch.id)}
       />
     ) : null;
   const tab = route.startsWith("settings") ? "settings" : "library";

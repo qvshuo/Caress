@@ -5,13 +5,11 @@ import {
   useRef,
   useState,
 } from "react";
-import { Menu } from "@base-ui/react/menu";
 import ReactCrop, { type PercentCrop } from "react-image-crop";
 import {
   LoaderCircle,
   RotateCcw,
   ScanFace,
-  MoreHorizontal,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -47,13 +45,12 @@ export default function CropEditor({
   const active = useRef(true);
   const loadingSource = pending === "source";
   const acquire = useCallback(
-    async (fetchSource = false) => {
+    async () => {
       const ticket = ++version.current;
       setPending("source");
       setError("");
       const query = new URLSearchParams();
       if (source) query.set("source", source);
-      if (fetchSource) query.set("fetch_source", "true");
       try {
         const value = await api<Crop>(`${base}/source?${query}`, "POST");
         if (!active.current || ticket !== version.current) {
@@ -167,33 +164,6 @@ export default function CropEditor({
           >
             <RotateCcw />
           </Button>
-          <Menu.Root>
-            <Menu.Trigger
-              render={
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  className="ml-auto"
-                  aria-label="更多操作"
-                />
-              }
-              disabled={saving || busy || !!pending}
-            >
-              <MoreHorizontal />
-            </Menu.Trigger>
-            <Menu.Portal>
-              <Menu.Positioner sideOffset={4} align="end" className="z-50">
-                <Menu.Popup className="rounded-md border bg-popover p-1 text-popover-foreground shadow-md outline-none">
-                  <Menu.Item
-                    className="rounded-sm px-3 py-2 text-sm outline-none data-[highlighted]:bg-accent"
-                    onClick={() => void acquire(true)}
-                  >
-                    从来源获取原图
-                  </Menu.Item>
-                </Menu.Popup>
-              </Menu.Positioner>
-            </Menu.Portal>
-          </Menu.Root>
         </div>
         {crop ? (
           <div className="grid min-h-0 grid-rows-[minmax(0,1fr)_112px] gap-4 sm:grid-cols-[minmax(0,1fr)_144px] sm:grid-rows-1">
@@ -273,15 +243,6 @@ export default function CropEditor({
               <p role="alert" className="text-sm text-destructive">
                 {error}
               </p>
-              {(!crop || error.startsWith("原图")) && (
-                <Button
-                  variant="outline"
-                  disabled={saving || busy || !!pending}
-                  onClick={() => void acquire(true)}
-                >
-                  从来源获取原图
-                </Button>
-              )}
             </div>
           )}
           <Button variant="outline" disabled={saving} onClick={close}>

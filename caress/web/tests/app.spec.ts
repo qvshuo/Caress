@@ -59,7 +59,7 @@ test("only works and settings; live detail is read-only", async ({ page }) => {
   ).toBeVisible();
   await expect(page.getByText("Emby 当前简介")).toBeVisible();
   await expect(page.getByRole("textbox")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "裁剪" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "裁剪封面" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Emby 中打开" })).toHaveAttribute(
     "href",
     /emby:8096/,
@@ -192,8 +192,7 @@ test("crop drags at 2:3 and saves Primary without starting a scrape", async ({
   let previews = 0,
     applied: number[] | undefined,
     batches = 0,
-    sourceReads = 0,
-    refreshed = false;
+    sourceReads = 0;
   page.on("request", (request) => {
     if (
       request.method() === "POST" &&
@@ -206,7 +205,6 @@ test("crop drags at 2:3 and saves Primary without starting a scrape", async ({
     const path = url.pathname;
     if (path.endsWith("/source")) {
       sourceReads++;
-      refreshed = url.searchParams.get("fetch_source") === "true";
     }
     if (path.endsWith("/image")) {
       await route.fulfill({ contentType: "image/svg+xml", body: svg });
@@ -230,7 +228,7 @@ test("crop drags at 2:3 and saves Primary without starting a scrape", async ({
     });
   });
   await page.goto("/#library/work/1");
-  await page.getByRole("button", { name: "裁剪", exact: true }).click();
+  await page.getByRole("button", { name: "裁剪封面", exact: true }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByRole("img", { name: "裁剪原图" })).toBeVisible();
   await dialog.getByRole("button", { name: "重置选框" }).click();
@@ -250,22 +248,8 @@ test("crop drags at 2:3 and saves Primary without starting a scrape", async ({
   );
   await page.mouse.up();
   await expect.poll(() => previews).toBeGreaterThan(1);
-  await dialog.getByRole("button", { name: "更多操作" }).click();
-  await page.getByRole("menuitem", { name: "从来源获取原图" }).click();
-  await expect.poll(() => sourceReads).toBe(2);
-  expect(refreshed).toBe(true);
+  expect(sourceReads).toBe(1);
   await page.setViewportSize({ width: 375, height: 812 });
-  await expect
-    .poll(async () => {
-      const auto = await dialog
-        .getByRole("button", { name: "自动裁剪" })
-        .boundingBox();
-      const original = await dialog
-        .getByRole("button", { name: "更多操作" })
-        .boundingBox();
-      return Math.abs(auto!.y - original!.y);
-    })
-    .toBeLessThan(1);
   const frame = await dialog.boundingBox();
   expect(frame!.x + frame!.width).toBeLessThanOrEqual(375);
   await dialog.getByRole("button", { name: "保存", exact: true }).click();
@@ -624,8 +608,8 @@ test("completed batch is a compact summary with optional errors", async ({
   await expect(batch).toContainText("来源暂不可用");
   await expect(batch).toContainText("警告 · 演员查询被拒绝");
   await expect(batch).toContainText("跳过 · 本次来源数据未产生变更");
-  await batch.getByRole("button", { name: "关闭", exact: true }).click();
-  await expect(batch).toHaveCount(0);
+  await expect(batch.getByRole("button", { name: "关闭", exact: true })).toHaveCount(0);
+  await expect(batch).toBeVisible();
 });
 
 test("initial failures can retry without stale content", async ({ page }) => {
@@ -896,45 +880,23 @@ test("settings automatically restores libraries; failed reload preserves selecti
   await expect(page.getByText("按顺序查询，命中即停止")).toHaveCount(0);
 });
 
-test("crop failure offers source recovery without a permanent fetch button", async ({
+test("crop failure shows the error without a source fetch button", async ({
   page,
 }) => {
-  const svg =
-    '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="90"><rect width="120" height="90" fill="#657581"/></svg>';
-  let fetched = false;
   await page.route("**/api/works/1/crop/**", (route) => {
     const url = new URL(route.request().url());
-    if (url.pathname.endsWith("/image"))
-      return route.fulfill({ contentType: "image/svg+xml", body: svg });
     if (url.pathname.endsWith("/source")) {
-      fetched = url.searchParams.get("fetch_source") === "true";
-      if (!fetched)
-        return route.fulfill({
-          status: 502,
-          json: { detail: "无法获取完整原图" },
-        });
+      return route.fulfill({
+        status: 502,
+        json: { detail: "无法获取完整原图，请稍后重试或在 Emby 检查背景图" },
+      });
     }
-    return route.fulfill({
-      json: {
-        token: "new",
-        width: 120,
-        height: 90,
-        box: [20, 0, 60, 90],
-        preview: "data:image/svg+xml," + encodeURIComponent(svg),
-      },
-    });
+    return route.fulfill({ json: {} });
   });
   await page.goto("/#library/work/1");
-  await page.getByRole("button", { name: "裁剪", exact: true }).click();
+  await page.getByRole("button", { name: "裁剪封面", exact: true }).click();
   const dialog = page.getByRole("dialog");
-  await expect(dialog.getByRole("alert")).toHaveText("无法获取完整原图");
-  await dialog
-    .getByRole("button", { name: "从来源获取原图", exact: true })
-    .click();
-  await expect(
-    dialog.getByRole("img", { name: "裁剪原图", exact: true }),
-  ).toBeVisible();
-  expect(fetched).toBe(true);
+  await expect(dialog.getByRole("alert")).toHaveText("无法获取完整原图，请稍后重试或在 Emby 检查背景图");
   await expect(
     dialog.getByRole("button", { name: "从来源获取原图", exact: true }),
   ).toHaveCount(0);
@@ -981,9 +943,13 @@ test("both pages share queued progress and completed detail refreshes", async ({
     .check();
   await page.getByRole("button", { name: "开始执行", exact: true }).click();
   await expect(progress).toContainText("等待：ABC-123");
+  await expect(page.getByRole("checkbox", { name: "选择 ABC-123", exact: true })).not.toBeChecked();
   expect(submitted).toMatchObject({ ids: ["1"], action: "scrape" });
+  const listProgress = await progress.boundingBox();
   await page.getByRole("row", { name: "查看 ABC-123" }).click();
   await expect(progress.getByRole("progressbar")).toBeVisible();
+  const detailProgress = await progress.boundingBox();
+  expect(Math.abs(listProgress!.y - detailProgress!.y)).toBeLessThan(1);
   await expect(
     page.getByRole("button", { name: "开始执行", exact: true }),
   ).toBeEnabled();
@@ -1005,6 +971,5 @@ test("both pages share queued progress and completed detail refreshes", async ({
     page.getByRole("heading", { name: "已更新的作品" }),
   ).toBeVisible();
   await expect(progress).toContainText("2 成功");
-  await progress.getByRole("button", { name: "关闭", exact: true }).click();
-  await expect(progress).toHaveCount(0);
+  await expect(progress.getByRole("button", { name: "关闭", exact: true })).toHaveCount(0);
 });

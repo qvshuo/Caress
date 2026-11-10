@@ -5,12 +5,10 @@ export function BatchProgress({
   batch,
   order,
   cancel,
-  close,
 }: {
   batch: Batch;
   order: WorkNeighbor[];
   cancel: () => void;
-  close: () => void;
 }) {
   const busy = batch.status === "running";
   const done = batch.items.filter(
@@ -34,19 +32,17 @@ export function BatchProgress({
           ? "已结束"
           : "已完成";
   return (
-    <section aria-label="当前批次" className="space-y-2 border-y py-3 text-sm">
-      <div className="flex items-start justify-between gap-3">
+    <section aria-label="当前批次" className="relative space-y-2 rounded-lg border p-3 text-sm">
+      <div className="min-h-9 pr-20">
         <p className="tabular-nums text-muted-foreground">
           {heading}
           {` · ${batch.items.filter((i) => i.status === "success").length} 成功 · ${batch.items.filter((i) => i.status === "failed").length} 失败 · ${batch.items.filter((i) => i.status === "skipped").length} 跳过`}
         </p>
-        <Button
-          className="w-22"
-          variant="outline"
-          onClick={busy ? cancel : close}
-        >
-          {busy ? "取消" : "关闭"}
-        </Button>
+        {busy && (
+          <Button className="absolute -right-px top-3 w-16" variant="outline" onClick={cancel}>
+            取消
+          </Button>
+        )}
       </div>
       {busy && (
         <progress

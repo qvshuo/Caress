@@ -43,7 +43,7 @@ export default function Work({
   submitting: boolean;
   progress: ReactNode;
   writing: boolean;
-  start: (ids: string[], action: Action, source?: Source) => Promise<void>;
+  start: (ids: string[], action: Action, source?: Source) => Promise<boolean>;
   run: (fn: () => Promise<unknown>) => void;
   refresh: () => void;
   back: () => void;
@@ -85,39 +85,41 @@ export default function Work({
   );
   return (
     <div className="space-y-6">
-      <div
-        aria-label="作品切换"
-        className="grid grid-cols-[1fr_auto_1fr] items-center gap-2"
-      >
-        <Button
-          variant="ghost"
-          className="justify-self-start"
-          disabled={!previous}
-          title={previous?.label}
-          onClick={() => {
-            if (previous) open(previous);
-          }}
+      <div className="space-y-4">
+        <div
+          aria-label="作品切换"
+          className="grid grid-cols-[1fr_auto_1fr] items-center gap-2"
         >
-          <ArrowLeft className="size-4" />
-          上一个作品
-        </Button>
-        <Button variant="ghost" onClick={back}>
-          返回
-        </Button>
-        <Button
-          variant="ghost"
-          className="justify-self-end"
-          disabled={!next}
-          title={next?.label}
-          onClick={() => {
-            if (next) open(next);
-          }}
-        >
-          下一个作品
-          <ArrowRight className="size-4" />
-        </Button>
+          <Button
+            variant="ghost"
+            className="justify-self-start"
+            disabled={!previous}
+            title={previous?.label}
+            onClick={() => {
+              if (previous) open(previous);
+            }}
+          >
+            <ArrowLeft className="size-4" />
+            上一个作品
+          </Button>
+          <Button variant="ghost" onClick={back}>
+            返回
+          </Button>
+          <Button
+            variant="ghost"
+            className="justify-self-end"
+            disabled={!next}
+            title={next?.label}
+            onClick={() => {
+              if (next) open(next);
+            }}
+          >
+            下一个作品
+            <ArrowRight className="size-4" />
+          </Button>
+        </div>
+        {progress}
       </div>
-      {progress}
       {error ? (
         <Alert role="alert">
           <p>{error}</p>
@@ -156,7 +158,7 @@ export default function Work({
                 disabled={writing || work.status === "unsupported"}
                 onClick={() => setCrop(true)}
               >
-                裁剪
+                裁剪封面
               </Button>
             </div>
             <div className="space-y-4">

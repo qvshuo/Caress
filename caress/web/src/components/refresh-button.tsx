@@ -1,4 +1,3 @@
-import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 export function RefreshButton({
   onClick,
@@ -13,7 +12,7 @@ export function RefreshButton({
 }) {
   return (
     <Button
-      className="w-22"
+      className="w-16"
       type="button"
       variant="outline"
       aria-label={label}
@@ -22,7 +21,6 @@ export function RefreshButton({
       aria-busy={pending}
       onClick={onClick}
     >
-      <RefreshCw className={`size-4 ${pending ? "animate-spin" : ""}`} />
       刷新
     </Button>
   );

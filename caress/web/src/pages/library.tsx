@@ -55,7 +55,7 @@ export function Library({
   revision: number;
   configured: boolean;
   batch: Batch | null;
-  start: (ids: string[], action: Action, source?: Source) => Promise<void>;
+  start: (ids: string[], action: Action, source?: Source) => Promise<boolean>;
   run: (fn: () => Promise<unknown>) => void;
   open: (id: string) => void;
   refresh: () => void;
@@ -172,7 +172,10 @@ export function Library({
         />
         <Button
           disabled={submitting || !selected.size}
-          onClick={() => run(() => start([...selected], action))}
+          onClick={() => run(async () => {
+            const ids = [...selected];
+            if (await start(ids, action)) select(ids, false);
+          })}
         >
           开始执行
         </Button>
