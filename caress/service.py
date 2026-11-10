@@ -9,7 +9,7 @@ from weakref import WeakValueDictionary
 
 import httpx
 
-from .emby import EmbyClient
+from .emby import EmbyClient, needs_enrichment
 from .http import FetchError
 from .images import crop_poster, crop_source_image
 from .library import identify, project
@@ -131,6 +131,11 @@ class Service:
                         "关联项目不属于已选择的媒体库或无法确认归属"
                     )
             result["related"] = related
+            result["needs_enrichment"] = result[
+                "status"
+            ] != "unsupported" and needs_enrichment(
+                item, await client.image_info(ident), identify(item)[2]
+            )
             return result
 
     def clean_crops(self):
@@ -160,18 +165,21 @@ class Service:
             item = await self.scoped_item(client, ident)
             code, identity, _ = identify(item)
             data = None
-            origin = "Emby 背景图"
             if not fetch_source:
                 for row in await client.image_info(ident):
                     if row["ImageType"] == "Backdrop" and row.get("Width", 0) > row.get(
                         "Height", 0
                     ):
-                        data = (
-                            await client.image(
+                        try:
+                            image = await client.image(
                                 ident, "Backdrop", row.get("ImageIndex", 0)
                             )
-                        ).content
-                        break
+                            data = await asyncio.to_thread(
+                                crop_source_image, image.content
+                            )
+                            break
+                        except httpx.HTTPError, ValueError, OSError:
+                            continue
             if data is None:
                 record = self.runtime.record(client.server, ident, identity, code)
                 selected = source or (record["source"] if record else None)
@@ -193,9 +201,7 @@ class Service:
                     raise ValueError(
                         "无法获取完整原图，请稍后重试或在 Emby 检查背景图"
                     ) from exc
-                origin = "来源原始封面"
-
-            data = await asyncio.to_thread(crop_source_image, data)
+                data = await asyncio.to_thread(crop_source_image, data)
             token = uuid.uuid4().hex
             self.crops[token] = CropSession(
                 client.server, ident, identity, data, time.monotonic() + 600
@@ -206,7 +212,7 @@ class Service:
             except BaseException:
                 self.crops.pop(token, None)
                 raise
-            return {"token": token, "origin": origin, **preview}
+            return {"token": token, **preview}
 
     async def crop_preview(self, ident, token, box=None, center=False):
         import base64

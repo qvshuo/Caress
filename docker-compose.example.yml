@@ -1,6 +1,6 @@
 services:
   caress:
-    image: caress:2.0.0
+    image: caress:2.0.1
     build: .
     restart: unless-stopped
     ports:

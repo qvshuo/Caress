@@ -120,7 +120,7 @@ def test_force_update_preserves_unrelated_data_and_missing_fields():
         "Studios": [{"Name": "user studio"}],
     }
     metadata = SourceMetadata(code="ABC-123", title="new", actors=[Actor(name="Actor")])
-    merged = {**original, **metadata_update(original, metadata, [])}
+    merged = {**original, **metadata_update(original, metadata, [], replace=True)}
     assert (
         merged["OriginalTitle"] == "manual original"
         and merged["Overview"] == "manual plot"
@@ -156,7 +156,7 @@ async def test_http_204_is_not_proof_of_persistence():
     try:
         with pytest.raises(ValueError, match="回读不一致"):
             await client.write_metadata(
-                "1", SourceMetadata(code="ABC-123", title="new"), []
+                "1", SourceMetadata(code="ABC-123", title="new"), [], replace=True
             )
     finally:
         await client.close()
@@ -280,6 +280,9 @@ class FakeClient:
     async def contains(self, ident):
         return ident in self.movies
 
+    async def image_info(self, ident):
+        return self.movies[ident].get("_images", [])
+
     async def parts(self, item):
         return []
 
@@ -303,11 +306,11 @@ class FakeProcessor:
             await self.block.wait()
         return SimpleNamespace(source="dmm")
 
-    async def write(self, client, ident, *args):
+    async def write(self, client, ident, *args, replace):
         self.writes.append(ident)
         if ident in self.fail:
             raise ValueError("图片写入失败；元数据可能已写入")
-        return []
+        return [], True
 
     async def finish(self):
         pass
@@ -339,15 +342,15 @@ def fake_batch(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_normal_skip_force_and_partial_failure_retry(fake_batch):
+async def test_missing_fill_force_and_partial_failure_recovery(fake_batch):
     service = fake_batch
     code, identity, _ = identify(item())
     service.runtime.save_record("s", "1", identity, code, "success")
     service.batches.start(["1", "2"], "scrape", None)
     await service.batches.task
-    assert FakeProcessor.writes == ["2"]
+    assert FakeProcessor.writes == ["1", "2"]
     assert [i["status"] for i in service.runtime.batch()["items"]] == [
-        "skipped",
+        "success",
         "success",
     ]
     FakeProcessor.fail = {"1"}
@@ -357,9 +360,9 @@ async def test_normal_skip_force_and_partial_failure_retry(fake_batch):
     assert service.runtime.record("s", "1", identity, code)["succeeded_at"]
     assert project(item(), service.runtime, "s")["status"] == "rescrape_failed"
     FakeProcessor.fail = set()
-    service.batches.start(["1"], "retry", None)
+    service.batches.start(["1"], "scrape", None)
     await service.batches.task
-    assert FakeProcessor.writes == ["2", "1", "1"]
+    assert FakeProcessor.writes == ["1", "2", "1", "1"]
     assert service.runtime.record("s", "1", identity, code)["status"] == "success"
 
 
@@ -378,7 +381,7 @@ async def test_cancellation_preserves_success_and_marks_only_started_records(
         if record:
             break
     await service.batches.cancel()
-    assert service.runtime.record("s", "1", identity, code)["status"] == "success"
+    assert service.runtime.record("s", "1", identity, code)["succeeded_at"]
     assert service.runtime.record("s", "2", identity, code)["status"] == "cancelled"
     assert service.runtime.batch()["status"] == "cancelled"
 
@@ -401,6 +404,9 @@ async def test_api_secrets_confirmation_and_offline_response(tmp_path, monkeypat
             "works",
             AsyncMock(side_effect=httpx.ConnectError("secret URL")),
         )
+        assert (
+            await client.post("/api/batch", json={"ids": ["1"], "action": "retry"})
+        ).status_code == 422
         body = (await client.get("/api/settings")).json()
         assert "hidden" not in str(body) and body["emby"]["has_api_key"]
         assert (
@@ -444,16 +450,17 @@ async def test_existing_actor_portraits_are_never_overwritten(tmp_path):
     )
     client = SimpleNamespace(
         write_metadata=AsyncMock(
-            return_value={
-                "People": [{"Id": "person", "Name": "Actor", "Type": "Actor"}]
-            }
+            return_value=(
+                {"People": [{"Id": "person", "Name": "Actor", "Type": "Actor"}]},
+                False,
+            )
         ),
         image_info=AsyncMock(return_value=[{"ImageType": "Primary"}]),
         upload=AsyncMock(),
     )
-    await processor.write(client, "1", prepared, [])
-    await processor.write(client, "2", prepared, [])
-    assert client.image_info.await_count == 1
+    await processor.write(client, "1", prepared, [], replace=False)
+    await processor.write(client, "2", prepared, [], replace=False)
+    assert client.image_info.await_count == 3
     processor.portraits.save.assert_not_awaited()
     client.upload.assert_not_awaited()
 
@@ -543,10 +550,8 @@ async def test_crop_opens_local_backdrop_without_source_or_face_detection(
         assert result["box"][2] * 3 == result["box"][3] * 2
         if has_backdrop and not fetch_source:
             source.cover.assert_not_awaited()
-            assert result["origin"] == "Emby 背景图"
         else:
             source.cover.assert_awaited_once_with("ABC-123", "dmm")
-            assert result["origin"] == "来源原始封面"
         if fetch_source:
             client.image_info.assert_not_awaited()
         service.crops.clear()
@@ -665,6 +670,7 @@ async def test_detail_reads_only_scoped_item_and_latest_metadata(tmp_path, monke
         contains=AsyncMock(return_value=True),
         item=AsyncMock(return_value=item(Name="Emby edited")),
         parts=AsyncMock(return_value=[]),
+        image_info=AsyncMock(return_value=[]),
     )
 
     @asynccontextmanager
@@ -735,7 +741,10 @@ async def test_portrait_retry_is_bounded_and_success_is_shared(
     )
     client = SimpleNamespace(
         write_metadata=AsyncMock(
-            return_value={"People": [{"Name": "Name", "Id": "person", "Type": "Actor"}]}
+            return_value=(
+                {"People": [{"Name": "Name", "Id": "person", "Type": "Actor"}]},
+                False,
+            )
         ),
         image_info=AsyncMock(return_value=[]),
         upload=AsyncMock(
@@ -750,10 +759,13 @@ async def test_portrait_retry_is_bounded_and_success_is_shared(
         mappings=[{"actor_id": "verified", "name": "Name"}],
     )
     try:
-        await processor.write(client, "1", prepared, [])
+        await processor.write(client, "1", prepared, [], replace=False)
         assert not processor.people_done
         await asyncio.gather(
-            *(processor.write(client, str(i), prepared, []) for i in range(2, 8))
+            *(
+                processor.write(client, str(i), prepared, [], replace=False)
+                for i in range(2, 8)
+            )
         )
         assert client.upload.await_count == (0 if failure == "fetch" else 2)
         assert processor.portraits.save.await_count == 2
@@ -830,7 +842,7 @@ async def test_cancellation_after_write_boundary_reports_partial(
 ):
     started = asyncio.Event()
 
-    async def write(*args):
+    async def write(*args, **kwargs):
         started.set()
         await asyncio.Event().wait()
 
@@ -951,7 +963,7 @@ async def test_uploaded_image_requires_matching_readback(mismatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("action", ["scrape", "retry", "force"])
+@pytest.mark.parametrize("action", ["scrape", "force"])
 async def test_batch_settles_skipped_and_processed_groups(
     fake_batch, monkeypatch, action
 ):
@@ -975,7 +987,7 @@ async def test_batch_settles_skipped_and_processed_groups(
     release.assert_any_await("ABC-123", None)
     release.assert_any_await(None, None)
     assert "outside" not in FakeProcessor.writes
-    assert ("1" in FakeProcessor.writes) == (action == "force")
+    assert "1" in FakeProcessor.writes
     assert fake_batch.runtime.batch()["status"] == "finished"
     assert any(row["status"] == "failed" for row in fake_batch.runtime.batch()["items"])
 

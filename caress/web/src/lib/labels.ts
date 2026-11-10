@@ -1,14 +1,19 @@
 export const statuses = {
-  pending: "待刮削",
-  success: "已刮削",
+  pending: "待处理",
+  success: "已完成",
   failed: "失败",
-  rescrape_failed: "重刮失败",
-  cancelled: "已取消",
-  unsupported: "不支持",
+  rescrape_failed: "失败",
+  cancelled: "待处理",
+  unsupported: "不可处理",
   running: "处理中",
 };
+export const statusFilters = {
+  pending: statuses.pending,
+  success: statuses.success,
+  failed: statuses.failed,
+  unsupported: statuses.unsupported,
+};
 export const actions = {
-  scrape: "刮削",
-  retry: "重试",
-  force: "重新刮削",
+  scrape: "刮削缺少的元数据",
+  force: "替换所有的元数据",
 };

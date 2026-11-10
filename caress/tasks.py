@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 
 import httpx
 
-from .emby import sync_error
+from .emby import needs_enrichment, sync_error
 from .library import identify
 from .logging import task_id, work_code
 from .processing import WorkProcessor
@@ -128,8 +128,6 @@ class BatchRunner:
             save()
             with TemporaryDirectory(prefix="caress-batch-") as temporary:
                 async with WorkProcessor(settings, runtime, temporary) as processor:
-                    if settings.translation.enabled:
-                        await processor.translator.verify()
                     semaphore = asyncio.Semaphore(4)
 
                     async def work(row):
@@ -148,16 +146,9 @@ class BatchRunner:
                                         "Emby 项目番号已变化，请刷新后重试"
                                     )
                                 old = runtime.record(server, row["id"], identity, code)
-                                if (
-                                    batch["action"] == "scrape"
-                                    and old
-                                    and old["succeeded_at"]
-                                ):
-                                    row["status"] = "skipped"
-                                    return
-                                if batch["action"] == "retry" and (
-                                    not old
-                                    or old["status"] not in ("failed", "cancelled")
+                                replace = batch["action"] == "force"
+                                if not replace and not needs_enrichment(
+                                    item, await client.image_info(row["id"]), media
                                 ):
                                     row["status"] = "skipped"
                                     return
@@ -190,9 +181,21 @@ class BatchRunner:
                                     error="写入已开始，可能部分完成",
                                 )
                                 save()
-                                warnings = await processor.write(
-                                    client, row["id"], prepared, live_media
+                                warnings, changed = await processor.write(
+                                    client,
+                                    row["id"],
+                                    prepared,
+                                    live_media,
+                                    replace=replace,
                                 )
+                                if not changed:
+                                    runtime.restore_record(server, row["id"], old)
+                                    row.update(
+                                        status="skipped",
+                                        writing=False,
+                                        warnings=[*row.get("warnings", []), *warnings],
+                                    )
+                                    return
                                 runtime.save_record(
                                     server,
                                     row["id"],

@@ -5,6 +5,7 @@ import base64
 import hashlib
 import io
 from copy import deepcopy
+from datetime import datetime
 from urllib.parse import quote
 
 import httpx
@@ -62,56 +63,129 @@ def fields_match(actual, expected):
     )
 
 
-def metadata_update(original, metadata, media):
-    """Missing source values never clear current values; unrelated fields survive."""
-    changes = {
-        "ProviderIds": {**original.get("ProviderIds", {}), "caress": metadata.code}
-    }
+def has_content(key, value):
+    if key == "ProductionYear":
+        return (
+            isinstance(value, int) and not isinstance(value, bool) and 1 < value <= 9999
+        )
+    if key == "PremiereDate":
+        try:
+            return isinstance(value, str) and datetime.fromisoformat(value).year > 1
+        except ValueError:
+            return False
+    if key in ("Studios", "GenreItems", "TagItems"):
+        return any(has_content("Name", row.get("Name")) for row in value or [])
+    return isinstance(value, str) and bool(value.strip())
+
+
+def filename_tags(media):
+    return (["中文字幕"] if any(m.subtitles for m in media) else []) + (
+        ["无码破解"] if any(m.uncensored for m in media) else []
+    )
+
+
+def needs_enrichment(item, images, media):
+    for key in (
+        "Name",
+        "OriginalTitle",
+        "Overview",
+        "PremiereDate",
+        "ProductionYear",
+        "Studios",
+        "GenreItems",
+        "TagItems",
+    ):
+        if not has_content(key, item.get(key)):
+            return True
+    people = item.get("People") or []
+    if any(
+        not any(
+            p.get("Type") == kind and has_content("Name", p.get("Name")) for p in people
+        )
+        for kind in ("Actor", "Director")
+    ):
+        return True
+    if any(
+        p.get("Type") == "Actor" and p.get("Id") and not p.get("PrimaryImageTag")
+        for p in people
+    ):
+        return True
+    if not has_content("Name", (item.get("ProviderIds") or {}).get("caress")):
+        return True
+    if not set(filename_tags(media)).issubset(
+        {t["Name"] for t in item.get("TagItems") or []}
+    ):
+        return True
+    return not {"Primary", "Backdrop"}.issubset({row["ImageType"] for row in images})
+
+
+def metadata_update(original, metadata, media, *, replace):
+    """Fill missing fields or replace supported fields; absent source values never clear data."""
+    changes = {}
+
+    def put(key, value):
+        if has_content(key, value) and (
+            replace or not has_content(key, original.get(key))
+        ):
+            changes[key] = value
+
     for key, value in [
         ("Name", metadata.title),
         ("OriginalTitle", metadata.original_title),
         ("Overview", metadata.plot),
-        ("ProductionYear", metadata.year),
     ]:
-        if value:
-            changes[key] = value
-    if metadata.release_date:
-        changes.update(
-            PremiereDate=metadata.release_date.isoformat() + "T00:00:00Z",
-            ProductionYear=metadata.year or metadata.release_date.year,
-        )
-    if metadata.studio:
-        changes["Studios"] = [{"Name": metadata.studio}]
-    if metadata.genres:
-        changes["GenreItems"] = [
-            {"Name": name} for name in dict.fromkeys(metadata.genres)
-        ]
-    people = deepcopy(original.get("People", []))
+        put(key, value)
+    put(
+        "ProductionYear",
+        metadata.year
+        or (metadata.release_date.year if metadata.release_date else None),
+    )
+    if metadata.release_date and metadata.release_date.year > 1:
+        put("PremiereDate", metadata.release_date.isoformat() + "T00:00:00Z")
+    put("Studios", [{"Name": metadata.studio}] if metadata.studio else [])
+    put(
+        "GenreItems",
+        [
+            {"Name": name}
+            for name in dict.fromkeys(metadata.genres)
+            if has_content("Name", name)
+        ],
+    )
+    people = deepcopy(original.get("People") or [])
     for kind, names in [
         ("Actor", [a.name for a in metadata.actors]),
         ("Director", metadata.directors),
     ]:
-        if names:
-            old = {p["Name"]: p for p in people if p.get("Type") == kind}
-            people = [p for p in people if p.get("Type") != kind]
-            people += [
-                old.get(name, {"Name": name, "Type": kind})
-                for name in dict.fromkeys(names)
-            ]
-    if metadata.actors or metadata.directors:
-        changes["People"] = people
-    labels = (["中文字幕"] if any(m.subtitles for m in media) else []) + (
-        ["无码破解"] if any(m.uncensored for m in media) else []
-    )
-    if metadata.tags or labels:
-        tags = deepcopy(original.get("TagItems", []))
-        existing = {t["Name"] for t in tags}
-        tags += [
-            {"Name": t}
-            for t in dict.fromkeys([*metadata.tags, *labels])
-            if t not in existing
+        names = [name for name in dict.fromkeys(names) if has_content("Name", name)]
+        old = {
+            p["Name"]: p
+            for p in people
+            if p.get("Type") == kind and has_content("Name", p.get("Name"))
+        }
+        current_names = [
+            p["Name"]
+            for p in people
+            if p.get("Type") == kind and has_content("Name", p.get("Name"))
         ]
+        if names and (replace or not old) and names != current_names:
+            people = [p for p in people if p.get("Type") != kind]
+            people += [old.get(name, {"Name": name, "Type": kind}) for name in names]
+    if people != (original.get("People") or []):
+        changes["People"] = people
+    tags = deepcopy(original.get("TagItems") or [])
+    existing = {t["Name"] for t in tags}
+    names = metadata.tags if replace or not has_content("TagItems", tags) else []
+    tags += [
+        {"Name": name}
+        for name in dict.fromkeys([*names, *filename_tags(media)])
+        if has_content("Name", name) and name not in existing
+    ]
+    if tags != (original.get("TagItems") or []):
         changes["TagItems"] = tags
+    provider_ids = dict(original.get("ProviderIds") or {})
+    if replace or not has_content("Name", provider_ids.get("caress")):
+        provider_ids["caress"] = metadata.code
+        changes["ProviderIds"] = provider_ids
     return changes
 
 
@@ -295,18 +369,22 @@ class EmbyClient:
         ):
             raise ValueError("Emby 图片内容回读不一致")
 
-    async def write_metadata(self, ident, metadata, media):
+    async def write_metadata(self, ident, metadata, media, *, replace):
         original = await self.item(ident)
-        changes = metadata_update(original, metadata, media)
+        changes = metadata_update(original, metadata, media, replace=replace)
         # Full DTO preserves system/user fields and the existing lock state.
-        if not fields_match(original, changes):
+        changed = not fields_match(original, changes)
+        if changed:
             await self.request("POST", f"Items/{ident}", json={**original, **changes})
         current = await self.item(ident)
-        if not fields_match(current, changes) or any(
-            current.get(k) != original.get(k) for k in ("LockData", "LockedFields")
+        if not fields_match(current, changes) or (
+            changed
+            and any(
+                current.get(k) != original.get(k) for k in ("LockData", "LockedFields")
+            )
         ):
             raise ValueError("Emby 元数据或锁定状态回读不一致；可能已部分写入，请重试")
-        return current
+        return current, changed
 
     async def backdrop_signatures(self, ident):
         signatures, decoded = set(), {}
@@ -326,3 +404,5 @@ class EmbyClient:
         if digest not in signatures:
             await self.upload(ident, "Backdrop", data)
             signatures.add(digest)
+            return True
+        return False

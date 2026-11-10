@@ -80,6 +80,29 @@ class Runtime:
                 (server, item, identity, code, success, status, error, source, now()),
             )
 
+    def restore_record(self, server, item, previous):
+        # A no-op belongs to the current batch; it must not fabricate a successful scrape.
+        with self.connection:
+            self.connection.execute(
+                "DELETE FROM scrapes WHERE server=? AND item=?", (server, item)
+            )
+            if previous:
+                columns = (
+                    "server",
+                    "item",
+                    "identity",
+                    "code",
+                    "succeeded_at",
+                    "status",
+                    "error",
+                    "source",
+                    "updated_at",
+                )
+                self.connection.execute(
+                    "INSERT INTO scrapes VALUES (?,?,?,?,?,?,?,?,?)",
+                    tuple(previous[key] for key in columns),
+                )
+
     def batch(self):
         row = self.connection.execute("SELECT data FROM batch WHERE id=1").fetchone()
         return json.loads(row[0]) if row else None

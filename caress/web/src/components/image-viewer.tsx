@@ -1,5 +1,5 @@
 import { useRef, useState, type ComponentProps, type ReactNode } from "react";
-import { ArrowLeft, ArrowRight, ImageOff } from "lucide-react";
+import { ArrowLeft, ArrowRight, ImageOff, X } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -85,6 +85,7 @@ export function ImageViewer({
   const [index, setIndex] = useState(Math.min(initialIndex, images.length - 1));
   const image = images[index]!;
   const frame = useRef<HTMLDivElement>(null);
+  const touch = useRef<{ x: number; y: number } | null>(null);
   function move(delta: number) {
     const next = Math.min(images.length - 1, Math.max(0, index + delta));
     if (next === 0 || next === images.length - 1) frame.current?.focus();
@@ -99,9 +100,10 @@ export function ImageViewer({
     >
       <DialogContent
         aria-describedby={undefined}
-        className="h-[90dvh] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden sm:max-w-6xl"
+        showCloseButton={false}
+        className="inset-0 h-dvh w-screen max-w-none translate-x-0 translate-y-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden rounded-none border-0 bg-neutral-950 text-neutral-100 p-3 pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] pt-[max(3.5rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))] shadow-none sm:max-w-none sm:p-6 sm:pl-[max(1.5rem,env(safe-area-inset-left))] sm:pr-[max(1.5rem,env(safe-area-inset-right))] sm:pt-14"
       >
-        <DialogHeader>
+        <DialogHeader className="sr-only">
           <DialogTitle>图片</DialogTitle>
         </DialogHeader>
         <div
@@ -110,6 +112,29 @@ export function ImageViewer({
           aria-label="图片浏览"
           tabIndex={0}
           className="grid min-h-0 grid-cols-[36px_minmax(0,1fr)_36px] items-center gap-2 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring sm:gap-4"
+          onTouchStart={(event) => {
+            if (
+              event.touches.length !== 1 ||
+              (event.target as Element).closest("button")
+            ) {
+              touch.current = null;
+              return;
+            }
+            const point = event.touches[0];
+            touch.current = point
+              ? { x: point.clientX, y: point.clientY }
+              : null;
+          }}
+          onTouchEnd={(event) => {
+            const point = event.changedTouches[0];
+            if (point && touch.current) {
+              const dx = point.clientX - touch.current.x,
+                dy = point.clientY - touch.current.y;
+              if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy))
+                move(dx < 0 ? 1 : -1);
+            }
+            touch.current = null;
+          }}
           onKeyDownCapture={(event) => {
             if (
               event.defaultPrevented ||
@@ -136,6 +161,7 @@ export function ImageViewer({
           <Button
             size="icon"
             variant="ghost"
+            className="text-neutral-100 hover:bg-white/10 hover:text-white dark:hover:bg-white/10"
             data-image-navigation=""
             aria-label="上一张"
             disabled={index === 0}
@@ -149,12 +175,13 @@ export function ImageViewer({
               key={image.src}
               src={image.src}
               alt={image.title}
-              className="size-full object-contain"
+              className="size-full object-contain bg-transparent text-neutral-300"
             />
           </div>
           <Button
             size="icon"
             variant="ghost"
+            className="text-neutral-100 hover:bg-white/10 hover:text-white dark:hover:bg-white/10"
             data-image-navigation=""
             aria-label="下一张"
             disabled={index === images.length - 1}
@@ -165,10 +192,19 @@ export function ImageViewer({
         </div>
         <p
           aria-live="polite"
-          className="text-center text-sm tabular-nums text-muted-foreground"
+          className="text-center text-sm tabular-nums text-neutral-300"
         >
           {index + 1} / {images.length}
         </p>
+        <Button
+          size="icon"
+          variant="ghost"
+          aria-label="关闭"
+          className="absolute right-[max(0.75rem,env(safe-area-inset-right))] top-[max(0.75rem,env(safe-area-inset-top))] text-neutral-100 hover:bg-white/10 hover:text-white dark:hover:bg-white/10"
+          onClick={close}
+        >
+          <X />
+        </Button>
       </DialogContent>
     </Dialog>
   );

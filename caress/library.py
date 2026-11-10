@@ -124,6 +124,10 @@ def project(item, runtime, server):
 
 def filter_works(rows, query="", status=""):
     needle = query.casefold().strip()
+    accepted = {
+        "pending": ("pending", "cancelled"),
+        "failed": ("failed", "rescrape_failed"),
+    }.get(status, (status,))
     return [
         row
         for row in rows
@@ -132,13 +136,7 @@ def filter_works(rows, query="", status=""):
             or needle in (row["code"] or "").casefold()
             or needle in row["title"].casefold()
         )
-        and (
-            not status
-            or row["status"] == status
-            or (
-                status == "failed" and row["status"] in ("rescrape_failed", "cancelled")
-            )
-        )
+        and (not status or row["status"] in accepted)
     ]
 
 

@@ -21,6 +21,7 @@ const work = {
   original_title: "原始标题",
   plot: "Emby 当前简介",
   status: "success",
+  needs_enrichment: false,
   people: [],
   media: [{ path: "/strm/ABC-123.strm", filename: "ABC-123.strm" }],
   studios: [],
@@ -36,13 +37,15 @@ test.beforeEach(async ({ page }) => {
     const data =
       path === "/api/settings"
         ? settings
-        : path === "/api/batch"
-          ? null
-          : path === "/api/works/1"
-            ? work
-            : path === "/api/works"
-              ? { items: [work], total: 1 }
-              : {};
+        : path === "/api/settings/libraries"
+          ? [{ id: "lib", name: "电影" }]
+          : path === "/api/batch"
+            ? null
+            : path === "/api/works/1"
+              ? work
+              : path === "/api/works"
+                ? { items: [work], total: 1 }
+                : {};
     await route.fulfill({ json: data });
   });
 });
@@ -135,7 +138,6 @@ test("changing Emby input invalidates a pending connection response", async ({
       .catch(() => {});
   });
   await page.goto("/#settings");
-  await page.getByRole("button", { name: "连接", exact: true }).click();
   await page.getByLabel("服务器地址").fill("http://new:8096");
   await page.getByRole("button", { name: "连接", exact: true }).click();
   await expect(page.getByRole("checkbox", { name: "新库" })).toBeVisible();
@@ -248,7 +250,8 @@ test("crop drags at 2:3 and saves Primary without starting a scrape", async ({
   );
   await page.mouse.up();
   await expect.poll(() => previews).toBeGreaterThan(1);
-  await dialog.getByRole("button", { name: "重新获取原图" }).click();
+  await dialog.getByRole("button", { name: "更多操作" }).click();
+  await page.getByRole("menuitem", { name: "从来源获取原图" }).click();
   await expect.poll(() => sourceReads).toBe(2);
   expect(refreshed).toBe(true);
   await page.setViewportSize({ width: 375, height: 812 });
@@ -258,7 +261,7 @@ test("crop drags at 2:3 and saves Primary without starting a scrape", async ({
         .getByRole("button", { name: "自动裁剪" })
         .boundingBox();
       const original = await dialog
-        .getByRole("button", { name: "重新获取原图" })
+        .getByRole("button", { name: "更多操作" })
         .boundingBox();
       return Math.abs(auto!.y - original!.y);
     })
@@ -337,12 +340,14 @@ test("start button is stable when mode changes and grid is absent", async ({
   await page.goto("/");
   await page.getByRole("row", { name: "查看 ABC-123" }).waitFor();
   await page.getByRole("combobox", { name: "刮削操作" }).click();
-  await page.getByRole("option", { name: "重新刮削", exact: true }).click();
+  await page
+    .getByRole("option", { name: "替换所有的元数据", exact: true })
+    .click();
   await expect(
-    page.getByRole("button", { name: "开始", exact: true }),
+    page.getByRole("button", { name: "开始执行", exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "重新刮削", exact: true }),
+    page.getByRole("button", { name: "替换所有的元数据", exact: true }),
   ).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "大图", exact: true }),
@@ -354,7 +359,7 @@ test("start button is stable when mode changes and grid is absent", async ({
     page
       .getByRole("row", { name: "查看 ABC-123" })
       .locator("[data-slot=badge]"),
-  ).toHaveText("已刮削");
+  ).toHaveText("已完成");
 });
 
 test("detail next and previous follow current list and return has no icon", async ({
@@ -445,6 +450,11 @@ test("portraits reserve space and gallery supports buttons and keyboard", async 
   await page.getByRole("button", { name: "查看图片 1" }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByText("2 / 3", { exact: true })).toBeVisible();
+  const full = await dialog.boundingBox();
+  expect(full!.x).toBe(0);
+  expect(full!.y).toBe(0);
+  expect(full!.width).toBe(page.viewportSize()!.width);
+  expect(full!.height).toBe(page.viewportSize()!.height);
   const close = dialog.getByRole("button", { name: "关闭", exact: true });
   const closeBox = await close.boundingBox();
   expect(closeBox!.width).toBeGreaterThanOrEqual(36);
@@ -463,17 +473,35 @@ test("portraits reserve space and gallery supports buttons and keyboard", async 
   await expect(dialog.getByRole("button", { name: "下一张" })).toBeDisabled();
   await page.keyboard.press("ArrowLeft");
   await expect(dialog.getByText("2 / 3", { exact: true })).toBeVisible();
+  await page.setViewportSize({ width: 375, height: 812 });
+  expect((await dialog.boundingBox())!.width).toBe(375);
+  expect((await dialog.boundingBox())!.height).toBe(812);
+  await page.evaluate(() => {
+    const target = document.querySelector('[aria-label="图片浏览"]')!;
+    const point = (x: number) =>
+      new Touch({ identifier: 1, target, clientX: x, clientY: 150 });
+    target.dispatchEvent(
+      new TouchEvent("touchstart", { touches: [point(260)], bubbles: true }),
+    );
+    target.dispatchEvent(
+      new TouchEvent("touchend", {
+        changedTouches: [point(80)],
+        bubbles: true,
+      }),
+    );
+  });
+  await expect(dialog.getByText("3 / 3", { exact: true })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
   await expect(page.getByRole("list", { name: "媒体文件" })).toBeVisible();
 });
 
 for (const [status, action] of Object.entries({
-  pending: "刮削",
-  failed: "重试",
-  cancelled: "重试",
-  success: "重新刮削",
-  rescrape_failed: "重试",
+  pending: "刮削缺少的元数据",
+  failed: "刮削缺少的元数据",
+  cancelled: "刮削缺少的元数据",
+  success: "替换元数据",
+  rescrape_failed: "刮削缺少的元数据",
   unsupported: "",
 })) {
   test(`detail ${status} has one primary action and preserves confirmation`, async ({
@@ -484,6 +512,7 @@ for (const [status, action] of Object.entries({
         json: {
           ...work,
           status,
+          needs_enrichment: status !== "success",
           last_result: status === "rescrape_failed" ? "failed" : status,
           succeeded_at: ["success", "rescrape_failed"].includes(status)
             ? "2026-11-09"
@@ -496,12 +525,12 @@ for (const [status, action] of Object.entries({
       page.getByRole("heading", { name: work.title, exact: true }),
     ).toBeVisible();
     const primary = page.getByRole("button", {
-      name: /^(刮削|重试|重新刮削)$/,
+      name: /^(刮削缺少的元数据|替换元数据)$/,
     });
     await expect(primary).toHaveCount(action ? 1 : 0);
     if (action) {
       await expect(primary).toHaveText(action);
-      if (action !== "刮削") {
+      if (action === "替换元数据") {
         await primary.click();
         await expect(page.getByRole("dialog")).toContainText("可能覆盖");
         await page.getByRole("button", { name: "取消", exact: true }).click();
@@ -513,20 +542,21 @@ for (const [status, action] of Object.entries({
   });
 }
 
-test("source override expands and can return to default", async ({ page }) => {
+test("source is always visible and can return to automatic", async ({
+  page,
+}) => {
   await page.goto("/#library/work/1");
-  await expect(page.getByRole("combobox", { name: "刮削来源" })).toHaveCount(0);
-  await page.getByRole("button", { name: "指定来源", exact: true }).click();
-  await page.getByRole("combobox", { name: "刮削来源" }).click();
+  const select = page.getByRole("combobox", { name: "刮削来源" });
+  await expect(select).toHaveText("自动选择来源");
+  await select.click();
   await page.getByRole("option", { name: "javdb", exact: true }).click();
+  await expect(select).toHaveText("javdb");
+  await select.click();
+  await page.getByRole("option", { name: "自动选择来源", exact: true }).click();
+  await expect(select).toHaveText("自动选择来源");
   await expect(
-    page.getByRole("button", { name: "指定来源 · javdb" }),
-  ).toBeVisible();
-  await page.getByRole("combobox", { name: "刮削来源" }).click();
-  await page.getByRole("option", { name: "默认来源", exact: true }).click();
-  await expect(
-    page.getByRole("button", { name: "指定来源", exact: true }),
-  ).toBeVisible();
+    page.getByRole("button", { name: "刷新作品", exact: true }),
+  ).toHaveCount(0);
 });
 
 test("running batch exposes progress and cancellation", async ({ page }) => {
@@ -622,7 +652,7 @@ test("initial failures can retry without stale content", async ({ page }) => {
   await page.goto("/#library/work/1");
   await expect(page.getByRole("alert")).toContainText("连接失败");
   fails = false;
-  await page.getByRole("button", { name: "重试", exact: true }).click();
+  await page.getByRole("button", { name: "重试加载", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: work.title, exact: true }),
   ).toBeVisible();
@@ -727,7 +757,8 @@ test("image retry bypasses failed cache and a new URL starts cleanly", async ({
   ).toBe(true);
   await page.keyboard.press("Escape");
   tag = "new";
-  await page.getByRole("button", { name: "刷新作品", exact: true }).click();
+  await page.getByRole("button", { name: "返回", exact: true }).click();
+  await page.getByRole("row", { name: "查看 ABC-123" }).click();
   await expect(
     page.getByRole("img", { name: "封面", exact: true }),
   ).toBeVisible();
@@ -763,4 +794,148 @@ test("work count hierarchy and invalid source order", async ({ page }) => {
   await page.getByRole("button", { name: "保存", exact: true }).click();
   await expect(page.getByRole("alert")).toHaveText("有码来源无效");
   expect(saves).toBe(0);
+});
+
+for (const [status, missing, expected] of [
+  ["success", true, "scrape"],
+  ["success", false, "force"],
+  ["failed", false, "scrape"],
+] as const) {
+  test(`detail ${status} missing=${missing} executes ${expected} and reloads`, async ({
+    page,
+  }) => {
+    let body: Record<string, unknown> | undefined;
+    let changed = false;
+    await page.route("**/api/works/1", (route) =>
+      route.fulfill({
+        json: {
+          ...work,
+          status,
+          needs_enrichment: missing,
+          title: changed ? "最新数据" : work.title,
+        },
+      }),
+    );
+    await page.route("**/api/batch", (route) => {
+      if (route.request().method() !== "POST")
+        return route.fulfill({ json: null });
+      body = route.request().postDataJSON();
+      changed = true;
+      return route.fulfill({
+        json: {
+          id: "b",
+          status: "finished",
+          items: [{ id: "1", status: "success" }],
+          current: [],
+        },
+      });
+    });
+    await page.goto("/#library/work/1");
+    await page.getByRole("combobox", { name: "刮削来源" }).click();
+    await page.getByRole("option", { name: "javdb", exact: true }).click();
+    await page
+      .getByRole("button", {
+        name: expected === "force" ? "替换元数据" : "刮削缺少的元数据",
+        exact: true,
+      })
+      .click();
+    if (expected === "force")
+      await page.getByRole("button", { name: "确认", exact: true }).click();
+    await expect.poll(() => body).toBeDefined();
+    expect(body).toMatchObject({
+      action: expected,
+      source: "javdb",
+      confirmed: expected === "force",
+    });
+    await expect(
+      page.getByRole("heading", { name: "最新数据", exact: true }),
+    ).toBeVisible();
+  });
+}
+
+test("settings automatically restores libraries; failed reload preserves selection", async ({
+  page,
+}) => {
+  let failure = false;
+  let saved: Record<string, unknown> | undefined;
+  await page.route("**/api/settings/libraries", (route) =>
+    route.fulfill(
+      failure
+        ? { status: 502, json: { detail: "连接失败" } }
+        : {
+            json: [
+              { id: "lib", name: "电影" },
+              { id: "other", name: "其他" },
+            ],
+          },
+    ),
+  );
+  await page.route("**/api/settings", (route) => {
+    if (route.request().method() === "PUT") {
+      saved = route.request().postDataJSON();
+      return route.fulfill({ json: saved });
+    }
+    return route.fulfill({ json: settings });
+  });
+  await page.goto("/#settings");
+  await expect(
+    page.getByRole("checkbox", { name: "电影", exact: true }),
+  ).toBeChecked();
+  await expect(
+    page.getByRole("checkbox", { name: "其他", exact: true }),
+  ).not.toBeChecked();
+  failure = true;
+  await page.getByRole("button", { name: "连接", exact: true }).click();
+  await expect(page.getByRole("alert")).toHaveText("连接失败");
+  await expect(
+    page.getByRole("checkbox", { name: "电影", exact: true }),
+  ).toBeChecked();
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect.poll(() => saved).toBeDefined();
+  expect((saved!.emby as typeof settings.emby).library_ids).toEqual(["lib"]);
+  await expect(page.getByText("按顺序查询，命中即停止")).toHaveCount(0);
+});
+
+test("crop failure offers source recovery without a permanent fetch button", async ({
+  page,
+}) => {
+  const svg =
+    '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="90"><rect width="120" height="90" fill="#657581"/></svg>';
+  let fetched = false;
+  await page.route("**/api/works/1/crop/**", (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith("/image"))
+      return route.fulfill({ contentType: "image/svg+xml", body: svg });
+    if (url.pathname.endsWith("/source")) {
+      fetched = url.searchParams.get("fetch_source") === "true";
+      if (!fetched)
+        return route.fulfill({
+          status: 502,
+          json: { detail: "无法获取完整原图" },
+        });
+    }
+    return route.fulfill({
+      json: {
+        token: "new",
+        width: 120,
+        height: 90,
+        box: [20, 0, 60, 90],
+        preview: "data:image/svg+xml," + encodeURIComponent(svg),
+      },
+    });
+  });
+  await page.goto("/#library/work/1");
+  await page.getByRole("button", { name: "裁剪", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("alert")).toHaveText("无法获取完整原图");
+  await dialog
+    .getByRole("button", { name: "从来源获取原图", exact: true })
+    .click();
+  await expect(
+    dialog.getByRole("img", { name: "裁剪原图", exact: true }),
+  ).toBeVisible();
+  expect(fetched).toBe(true);
+  await expect(
+    dialog.getByRole("button", { name: "从来源获取原图", exact: true }),
+  ).toHaveCount(0);
 });

@@ -10,10 +10,8 @@ import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
 import { Empty } from "@/components/ui/empty";
 import { Status } from "@/components/status";
-import { RefreshButton } from "@/components/refresh-button";
 import { ArtworkImage, ImageViewer } from "@/components/image-viewer";
 import { Select } from "@/components/form-controls";
-import { actions } from "@/lib/labels";
 import { api } from "@/lib/api";
 import {
   sources,
@@ -51,7 +49,6 @@ export default function Work({
   const [work, setWork] = useState<WorkRecord | null>(null),
     [error, setError] = useState(""),
     [source, setSource] = useState<Source | "">(""),
-    [choosingSource, setChoosingSource] = useState(false),
     [crop, setCrop] = useState(false),
     [viewer, setViewer] = useState<number | null>(null);
   useEffect(() => {
@@ -71,11 +68,10 @@ export default function Work({
   const previous = position > 0 ? order[position - 1] : null,
     next = position >= 0 ? order[position + 1] || null : null;
   const action: Action =
-    work?.status === "success"
+    work?.needs_enrichment === false &&
+    !["failed", "cancelled", "rescrape_failed"].includes(work.status)
       ? "force"
-      : ["failed", "cancelled", "rescrape_failed"].includes(work?.status || "")
-        ? "retry"
-        : "scrape";
+      : "scrape";
   const images = work
     ? [
         ...(work.poster ? [{ src: work.poster, title: "封面" }] : []),
@@ -126,7 +122,7 @@ export default function Work({
         <Alert role="alert">
           <p>{error}</p>
           <Button variant="outline" onClick={refresh}>
-            重试
+            重试加载
           </Button>
         </Alert>
       ) : !work ? (
@@ -187,31 +183,21 @@ export default function Work({
                       run(() => start([id], action, source || undefined))
                     }
                   >
-                    {actions[action]}
+                    {action === "force" ? "替换元数据" : "刮削缺少的元数据"}
                   </Button>
                 )}
                 {work.status !== "unsupported" && (
-                  <Button
-                    variant="ghost"
-                    aria-expanded={choosingSource}
-                    onClick={() => setChoosingSource((v) => !v)}
-                  >
-                    指定来源{source ? ` · ${source}` : ""}
-                  </Button>
+                  <Select
+                    label="刮削来源"
+                    value={source}
+                    onChange={(value) => setSource(value as Source | "")}
+                    options={{
+                      "": "自动选择来源",
+                      ...Object.fromEntries(sources.map((s) => [s, s])),
+                    }}
+                  />
                 )}
-                <RefreshButton onClick={refresh} label="刷新作品" />
               </div>
-              {choosingSource && (
-                <Select
-                  label="刮削来源"
-                  value={source}
-                  onChange={(value) => setSource(value as Source | "")}
-                  options={{
-                    "": "默认来源",
-                    ...Object.fromEntries(sources.map((s) => [s, s])),
-                  }}
-                />
-              )}
               <a
                 className="inline-flex items-center gap-1.5 text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
                 href={emby + work.emby_url}

@@ -6,8 +6,10 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import httpx
+
 from .actors import ActorAliases, actor_type, map_actor_names
-from .emby import pixel_digest
+from .emby import image_pixels_match, pixel_digest
 from .http import FetchError
 from .images import crop_poster, fetch_artwork, image_plan
 from .models import ScrapeRequest, Status
@@ -21,7 +23,7 @@ class Prepared:
     metadata: object
     source: str
     images: list = field(default_factory=list)
-    errors: list[str] = field(default_factory=list)
+    errors: list[tuple[str, str]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     mappings: list = field(default_factory=list)
     kind: int | None = None
@@ -111,6 +113,8 @@ class WorkProcessor:
         original = metadata.original_title or metadata.title
         metadata.original_title = original
         metadata.title = original
+        if self.settings.translation.enabled:
+            await self.translator.verify()
         report = await self.translator.metadata(
             metadata,
             names=actor_name_rules(self.names, [*source_actors, *metadata.actors]),
@@ -149,7 +153,7 @@ class WorkProcessor:
                         data = (await asyncio.to_thread(crop_poster, data))["content"]
                         path = folder / "poster.png"
                         await asyncio.to_thread(path.write_bytes, data)
-                    if role != "poster":
+                    if role != "poster" and path not in prepared.digests:
                         prepared.digests[path] = await asyncio.to_thread(
                             pixel_digest, data
                         )
@@ -157,28 +161,59 @@ class WorkProcessor:
                         ("Primary" if role == "poster" else "Backdrop", path)
                     )
                 except (FetchError, ValueError, OSError) as exc:
-                    prepared.errors.append(f"{role}: {exc}")
+                    prepared.errors.append(
+                        (
+                            "Primary" if role == "poster" else "Backdrop",
+                            f"{role}: {exc}",
+                        )
+                    )
             return prepared
 
         except BaseException:
             await asyncio.to_thread(shutil.rmtree, folder)
             raise
 
-    async def write(self, client, ident, prepared, media):
-        current = await client.write_metadata(ident, prepared.metadata, media)
+    async def write(self, client, ident, prepared, media, *, replace):
+        current, changed = await client.write_metadata(
+            ident, prepared.metadata, media, replace=replace
+        )
+        existing = await client.image_info(ident)
+        has_primary = any(row["ImageType"] == "Primary" for row in existing)
+        errors = [
+            message
+            for kind, message in prepared.errors
+            if replace or kind != "Primary" or not has_primary
+        ]
         signatures = (
             await client.backdrop_signatures(ident)
             if any(kind == "Backdrop" for kind, _ in prepared.images)
             else set()
         )
         for kind, path in prepared.images:
+            if kind == "Primary" and has_primary and not replace:
+                continue
             data = await asyncio.to_thread(path.read_bytes)
             if kind == "Primary":
+                if has_primary:
+                    try:
+                        current_image = await client.image(ident, "Primary")
+                        if await asyncio.to_thread(
+                            image_pixels_match, data, current_image.content
+                        ):
+                            continue
+                    except ValueError:
+                        pass  # A corrupt existing poster may be explicitly replaced.
+                    except httpx.HTTPStatusError as exc:
+                        if exc.response.status_code != 404:
+                            raise
                 await client.upload(ident, kind, data)
+                has_primary = True
+                changed = True
             else:
-                await client.append_backdrop(
+                added = await client.append_backdrop(
                     ident, data, signatures, prepared.digests.get(path)
                 )
+                changed = changed or added
         # Portraits are optional and require a verified mapping, an Emby ID and no existing image.
         warnings = list(prepared.warnings)
         async with self.people_lock:
@@ -219,6 +254,7 @@ class WorkProcessor:
                         image = actor_image(self.portraits.output, person["Name"])
                         await client.upload(person["Id"], "Primary", image.read_bytes())
                         self.people_done.add(person["Id"])
+                        changed = True
                     elif records and records[0]["status"] == "not_found":
                         self.people_done.add(person["Id"])
                 except (ValueError, OSError, FetchError) as exc:
@@ -227,8 +263,6 @@ class WorkProcessor:
                     from .emby import sync_error
 
                     warnings.append(sync_error(exc))
-        if prepared.errors:
-            raise ValueError(
-                "元数据可能已写入，图片未全部成功：" + "; ".join(prepared.errors)
-            )
-        return warnings
+        if errors:
+            raise ValueError("元数据可能已写入，图片未全部成功：" + "; ".join(errors))
+        return warnings, changed

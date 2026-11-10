@@ -42,7 +42,10 @@ export default function Settings({
     [results, setResults] = useState<Record<string, Result>>({}),
     [pending, setPending] = useState("");
   const operation = useRef<AbortController | null>(null);
-  useEffect(() => () => operation.current?.abort(), []);
+  useEffect(() => {
+    if (initial.configured) void connect(initial);
+    return () => operation.current?.abort();
+  }, []);
   function invalidateConnection() {
     if (pending === "emby") {
       operation.current?.abort();
@@ -95,6 +98,19 @@ export default function Settings({
     } finally {
       if (operation.current === controller) setPending("");
     }
+  }
+  function connect(settings: Preferences) {
+    return execute("emby", async (signal) => {
+      const rows = await api<{ id: string; name: string }[]>(
+        "settings/libraries",
+        "POST",
+        settings,
+        signal,
+      );
+      if (signal.aborted) return "";
+      setLibraries(rows);
+      return rows.length ? "" : "没有可用媒体库";
+    });
   }
   function currentSettings() {
     const next: Record<string, Source[]> = {};
@@ -176,19 +192,7 @@ export default function Settings({
           variant="outline"
           disabled={!!pending}
           aria-busy={pending === "emby"}
-          onClick={() =>
-            void execute("emby", async (signal) => {
-              const rows = await api<{ id: string; name: string }[]>(
-                "settings/libraries",
-                "POST",
-                value,
-                signal,
-              );
-              if (signal.aborted) return "";
-              setLibraries(rows);
-              return rows.length ? "" : "没有可用媒体库";
-            })
-          }
+          onClick={() => void connect(value)}
         >
           {pending === "emby" && (
             <LoaderCircle className="size-4 animate-spin" />
@@ -197,7 +201,7 @@ export default function Settings({
         </Button>
         {message("emby")}
         <div className="space-y-3">
-          <p className="text-sm">媒体库</p>
+          {!!libraries?.length && <p className="text-sm">媒体库</p>}
           {libraries ? (
             <div className="flex flex-wrap gap-x-6 gap-y-3">
               {libraries.map((lib) => (
@@ -223,17 +227,8 @@ export default function Settings({
                 </label>
               ))}
             </div>
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              {value.emby.library_ids.length
-                ? `已选 ${value.emby.library_ids.length} 个媒体库`
-                : "连接后选择媒体库"}
-            </p>
-          )}
+          ) : null}
         </div>
-        <p className="text-sm text-muted-foreground">
-          请在 Emby 中关闭该媒体库的在线元数据提供者。
-        </p>
       </fieldset>
       <fieldset className="space-y-4 border-t" disabled={!!pending}>
         <legend className="pr-3 text-base font-medium">翻译</legend>
@@ -300,7 +295,6 @@ export default function Settings({
       </fieldset>
       <fieldset className="space-y-4 border-t" disabled={!!pending}>
         <legend className="pr-3 text-base font-medium">来源优先级</legend>
-        <p className="text-sm text-muted-foreground">按顺序查询，命中即停止</p>
         {Object.entries(categories).map(([key, label]) => (
           <Field key={key} label={label}>
             <Input

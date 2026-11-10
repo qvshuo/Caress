@@ -22,6 +22,7 @@ export const sources: Source[] = [
   "avbase",
 ];
 export interface Work {
+  needs_enrichment?: boolean;
   id: string;
   code: string | null;
   title: string;
@@ -68,7 +69,7 @@ export interface LibraryPreferences {
   page: number;
   pageSize: number;
 }
-export type Action = "scrape" | "force" | "retry";
+export type Action = "scrape" | "force";
 export interface Batch {
   id: string;
   status: string;
@@ -102,7 +103,6 @@ export interface Settings {
 }
 export type Box = [number, number, number, number];
 export interface Crop {
-  origin?: string;
   token: string;
   box: Box;
   width: number;

@@ -25,7 +25,7 @@ from .translation import Translator
 class BatchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     ids: list[str] = Field(min_length=1, max_length=5000)
-    action: Literal["scrape", "force", "retry"] = "scrape"
+    action: Literal["scrape", "force"] = "scrape"
     source: SourceId | None = None
     confirmed: bool = False
 
@@ -177,10 +177,7 @@ def create_app(settings: Settings | None = None):
         ):
             raise ValueError("请先配置 Emby 并选择目标媒体库")
         if body.action == "force" and not body.confirmed:
-            raise ValueError("强制重刮会覆盖相关手动修改，必须明确确认")
-        if body.action == "retry" and not body.confirmed:
-            # A failed force operation can already have changed some fields.
-            raise ValueError("重试可能继续此前的部分写入，必须明确确认")
+            raise ValueError("替换所有的元数据可能覆盖手动修改，必须明确确认")
         ids = list(dict.fromkeys(body.ids))
         if any(not i.isalnum() for i in ids):
             raise ValueError("无效的 Emby Item ID")

@@ -92,11 +92,11 @@ export function App() {
     };
   }, [busy, refresh]);
   const start = async (ids: string[], action: Action, source?: Source) => {
-    if (action !== "scrape") {
+    if (action === "force") {
       const accepted = await new Promise<boolean>((resolve) => {
         const value = {
-          title: action === "force" ? "重新刮削" : "重试",
-          description: "可能覆盖 Emby 中手动修改的相关元数据和海报。继续？",
+          title: "替换所有的元数据",
+          description: "可能覆盖 Emby 中手动修改的相关元数据和封面。继续？",
           resolve,
         };
         confirmationRef.current = value;
@@ -104,14 +104,14 @@ export function App() {
       });
       if (!accepted) return;
     }
-    setBatch(
-      await api<Batch>("batch", "POST", {
-        ids,
-        action,
-        source: source || null,
-        confirmed: action !== "scrape",
-      }),
-    );
+    const result = await api<Batch>("batch", "POST", {
+      ids,
+      action,
+      source: source || null,
+      confirmed: action === "force",
+    });
+    setBatch(result);
+    if (result.status !== "running") refresh();
   };
   const tab = route.startsWith("settings") ? "settings" : "library";
   const ident = route.startsWith("library/work/")

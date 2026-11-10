@@ -26,7 +26,7 @@ import type {
   LibraryPreferences,
   WorkNeighbor,
 } from "@/lib/types";
-import { statuses, actions } from "@/lib/labels";
+import { statusFilters, actions } from "@/lib/labels";
 import { RefreshButton } from "@/components/refresh-button";
 import { Status } from "@/components/status";
 export function Library({
@@ -241,7 +241,7 @@ export function Library({
           disabled={busy || !selected.size}
           onClick={() => run(() => start([...selected], action))}
         >
-          开始
+          开始执行
         </Button>
         {!!selected.size && (
           <Button
@@ -268,9 +268,7 @@ export function Library({
               }
               options={{
                 "": "全部状态",
-                ...Object.fromEntries(
-                  Object.entries(statuses).filter(([key]) => key !== "running"),
-                ),
+                ...statusFilters,
               }}
             />
           </div>
