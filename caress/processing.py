@@ -221,8 +221,12 @@ class WorkProcessor:
                 )
                 has_backdrop = has_backdrop or added
                 changed = changed or added
-        if not has_backdrop:
-            fatal.append("背景图未能补齐")
+        backdrop_offered = any(
+            kind == "Backdrop"
+            for kind, _ in (*prepared.images, *prepared.errors)
+        )
+        if backdrop_offered and not has_backdrop:
+            fatal.append("背景图获取失败")
         # Portraits are optional and require a verified mapping, an Emby ID and no existing image.
         async with self.people_lock:
             for mapping in prepared.mappings:

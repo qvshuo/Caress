@@ -479,8 +479,23 @@ async def test_optional_backdrop_failure_only_blocks_when_no_background_remains(
         )
         assert flow.images["1"]["Backdrop"]
     else:
-        assert rows[0]["status"] == "failed" and "背景图未能补齐" in rows[0]["error"]
+        assert rows[0]["status"] == "failed" and "背景图获取失败" in rows[0]["error"]
         assert "sample unavailable" in rows[0]["error"]
+
+
+@pytest.mark.asyncio
+async def test_no_backdrop_candidate_is_not_a_failure(flow):
+    flow.items["1"]["Overview"] = ""
+    flow.images["1"].pop("Backdrop")
+    flow.artwork = []
+    flow.errors = []
+
+    rows = await flow.run("scrape")
+
+    assert rows[0]["status"] == "success"
+    assert flow.items["1"]["Overview"] == "source plot"
+    assert "Backdrop" not in flow.images["1"]
+    assert not rows[0].get("warnings")
 
 
 @pytest.mark.asyncio
