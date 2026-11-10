@@ -623,6 +623,12 @@ def test_invalid_source_routes_are_rejected(invalid):
 async def test_related_scope_deduplicates_without_blocking_valid_items(
     fake_batch, monkeypatch
 ):
+    async def movies_only(self):
+        yield self.movies["1"]
+
+    FakeClient.movies["2"]["Type"] = "Video"
+    monkeypatch.setattr(FakeClient, "items", movies_only)
+
     async def parts(self, parent):
         return [item("2"), item("outside"), item("2")] if parent["Id"] == "1" else []
 
@@ -765,6 +771,7 @@ async def test_targeted_membership_query_and_redirect_does_not_forward_key():
         if request.url.path.endswith("/Items"):
             assert request.url.params["Ids"] == "1"
             assert request.url.params["Recursive"] == "true"
+            assert request.url.params["IncludeItemTypes"] == "Movie,Video"
             return httpx.Response(
                 200,
                 json={
@@ -1242,3 +1249,88 @@ async def test_finish_drains_other_groups_when_directory_cleanup_fails(
     with pytest.raises(OSError, match="cleanup failed"):
         await processor.finish()
     assert not processor.prepared and not folders[1].exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel", [False, True])
+@pytest.mark.parametrize("queued_id", ["1", "2"])
+async def test_running_batch_accepts_deduplicated_jobs_with_independent_options(
+    fake_batch, monkeypatch, cancel, queued_id
+):
+    entered = asyncio.Event()
+    FakeProcessor.block = asyncio.Event()
+    prepared, written, scans = [], [], []
+    original_prepare, original_write = FakeProcessor.prepare, FakeProcessor.write
+    original_items = FakeClient.items
+
+    async def items(self):
+        scans.append(True)
+        async for movie in original_items(self):
+            yield movie
+
+    async def prepare(self, code, source):
+        prepared.append(source)
+        entered.set()
+        return await original_prepare(self, code, source)
+
+    async def write(self, client, ident, *args, replace):
+        written.append((ident, replace))
+        return await original_write(self, client, ident, *args, replace=replace)
+
+    monkeypatch.setattr(FakeProcessor, "prepare", prepare)
+    monkeypatch.setattr(FakeProcessor, "write", write)
+    monkeypatch.setattr(FakeClient, "items", items)
+    runner = fake_batch.batches
+    first = runner.start(["1"], "scrape", None)
+    await asyncio.wait_for(entered.wait(), 2)
+    second = runner.start([queued_id], "force", "javdb")
+    runner.start([queued_id], "force", "javdb")
+    runner.start(["1"], "scrape", None)
+    assert first["id"] == second["id"] and len(second["items"]) == 2
+    assert [row["status"] for row in second["items"]] == ["running", "pending"]
+    if cancel:
+        await runner.cancel()
+        assert not written and not runner.queue
+        assert all(
+            row["status"] == "cancelled" for row in fake_batch.runtime.batch()["items"]
+        )
+    else:
+        FakeProcessor.block.set()
+        await runner.task
+        assert prepared == [None, "javdb"]
+        assert written == [("1", False), (queued_id, True)]
+        assert len(scans) == 1
+        assert all(
+            row["status"] == "success" for row in fake_batch.runtime.batch()["items"]
+        )
+        assert fake_batch.runtime.batch()["status"] == "finished"
+
+
+@pytest.mark.asyncio
+async def test_failed_job_does_not_discard_later_submissions(fake_batch):
+    FakeProcessor.fail = {"1"}
+    runner = fake_batch.batches
+    runner.start(["1"], "scrape", None)
+    runner.start(["2"], "force", "javdb")
+    await runner.task
+    rows = fake_batch.runtime.batch()["items"]
+    assert [(row["id"], row["status"]) for row in rows] == [
+        ("1", "failed"),
+        ("2", "success"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_related_item_merges_matching_queued_submission(fake_batch, monkeypatch):
+    async def parts(self, parent):
+        return [item("2")] if parent["Id"] == "1" else []
+
+    monkeypatch.setattr(FakeClient, "parts", parts)
+    runner = fake_batch.batches
+    runner.start(["1"], "scrape", None)
+    runner.start(["2"], "scrape", None)
+    await runner.task
+    assert sorted(FakeProcessor.writes) == ["1", "2"]
+    rows = fake_batch.runtime.batch()["items"]
+    assert [row["status"] for row in rows].count("success") == 2
+    assert any(row.get("note") == "已合并到同一作品的任务" for row in rows)

@@ -13,6 +13,7 @@ export function RefreshButton({
 }) {
   return (
     <Button
+      className="w-22"
       type="button"
       variant="outline"
       aria-label={label}

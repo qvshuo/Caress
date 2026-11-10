@@ -64,7 +64,7 @@ class JavDBApi(Source):
         if not isinstance(payload, dict):
             raise FetchError(Status.PARSE_ERROR, "JavDB API envelope changed")
         if payload.get("success") not in (1, True):
-            raise FetchError(Status.BLOCKED, "JavDB API rejected the signed request")
+            raise FetchError(Status.BLOCKED, "JavDB 拒绝了查询请求")
         if not isinstance(payload.get("data"), dict):
             raise FetchError(Status.PARSE_ERROR, "JavDB API returned no data object")
         return payload["data"]

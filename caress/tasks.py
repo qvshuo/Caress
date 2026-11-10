@@ -1,8 +1,8 @@
-"""One cancellable batch; confirmed successes survive cancellation and restart."""
+"""One cancellable execution queue; confirmed successes survive interruption."""
 
 import asyncio
 import uuid
-from collections import Counter
+from collections import Counter, deque
 from tempfile import TemporaryDirectory
 
 import httpx
@@ -18,44 +18,95 @@ class BatchRunner:
     def __init__(self, service):
         self.service = service
         self.task = None
+        self.batch = None
+        self.queue = deque()
 
     @property
     def running(self):
         return self.task is not None and not self.task.done()
 
     def start(self, ids, action, source):
-        if self.running:
-            raise ValueError("已有批次运行，请等待完成或取消")
-        batch = {
-            "id": uuid.uuid4().hex,
-            "status": "running",
-            "action": action,
-            "source": source,
-            "started_at": now(),
-            "items": [
-                {"id": i, "status": "pending", "code": None, "error": None} for i in ids
-            ],
-            "current": [],
+        if self.running and self.task.cancelling():
+            raise ValueError("正在取消，请稍后再试")
+        if not self.running:
+            self.batch = {
+                "id": uuid.uuid4().hex,
+                "status": "running",
+                "action": action,
+                "source": source,
+                "started_at": now(),
+                "items": [],
+                "current": [],
+            }
+            self.queue.clear()
+        batch = self.batch
+        active = {
+            (row["id"], row["action"], row["source"])
+            for row in batch["items"]
+            if row["status"] in ("pending", "running")
         }
+        rows = []
+        for ident in dict.fromkeys(ids):
+            if (ident, action, source) not in active:
+                rows.append(
+                    {
+                        "id": ident,
+                        "status": "pending",
+                        "code": None,
+                        "error": None,
+                        "action": action,
+                        "source": source,
+                    }
+                )
+        if rows:
+            batch["items"].extend(rows)
+            self.queue.append({"action": action, "source": source, "items": rows})
         self.service.runtime.save_batch(batch)
-        settings = self.service.settings.model_copy(deep=True)
-        self.task = asyncio.create_task(self._run(batch, settings))
+        if not self.running:
+            settings = self.service.settings.model_copy(deep=True)
+            self.task = asyncio.create_task(self._drain(batch, settings))
         return batch
+
+    async def _drain(self, batch, settings):
+        allowed = set()
+        try:
+            while self.queue:
+                job = self.queue.popleft()
+                if any(row["status"] == "pending" for row in job["items"]):
+                    await self._run(batch, job, settings, allowed)
+            batch["status"] = "failed" if batch.get("error") else "finished"
+        except asyncio.CancelledError:
+            batch["status"] = "cancelled"
+        except Exception as exc:
+            batch.update(status="failed", error=sync_error(exc))
+        finally:
+            self.queue.clear()
+            for row in batch["items"]:
+                if row["status"] in ("pending", "running"):
+                    row.update(
+                        status="failed" if batch["status"] == "failed" else "cancelled",
+                        error=batch.get("error") or "已取消；尚未开始写入",
+                    )
+            batch.update(current=[], finished_at=now())
+            self.service.runtime.save_batch(batch)
 
     async def cancel(self):
         if self.running:
-            if not self.task.cancelling():
-                self.task.cancel()
-            await asyncio.gather(self.task, return_exceptions=True)
+            task, ident = self.task, self.batch["id"]
+            if not task.cancelling():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
             batch = self.service.runtime.batch()
-            if batch and batch["status"] == "running":
+            if batch and batch["id"] == ident and batch["status"] == "running":
                 batch.update(status="cancelled", current=[], finished_at=now())
                 for row in batch["items"]:
                     if row["status"] in ("pending", "running"):
                         row.update(status="cancelled", error="批次已取消")
                 self.service.runtime.save_batch(batch)
+            if self.task is task:
+                self.queue.clear()
 
-    async def _run(self, batch, settings):
+    async def _run(self, batch, job, settings, allowed):
         service, runtime = self.service, self.service.runtime
         task_token = task_id.set(batch["id"])
         lease = service.emby()
@@ -71,14 +122,17 @@ class BatchRunner:
         try:
             client = await lease.__aenter__()
             # Resolve live parts/versions once and deduplicate Item IDs before any write.
-            allowed = {str(i["Id"]) async for i in client.items()}
-            expanded, seen = [], set()
+            if not allowed:
+                allowed.update({str(i["Id"]) async for i in client.items()})
+            expanded = [row for row in job["items"] if row["status"] != "pending"]
+            seen = {row["id"] for row in expanded}
+            original = {id(row) for row in job["items"]}
 
             async def expand(ident):
                 if ident in seen:
                     return
                 seen.add(ident)
-                if ident not in allowed:
+                if ident not in allowed and not await client.contains(ident):
                     expanded.append(
                         {
                             "id": ident,
@@ -107,6 +161,15 @@ class BatchRunner:
                 expanded.append(
                     {"id": ident, "status": "pending", "code": code, "error": None}
                 )
+                for pending in batch["items"]:
+                    if (
+                        id(pending) not in original
+                        and pending["id"] == ident
+                        and pending["status"] == "pending"
+                        and (pending["action"], pending["source"])
+                        == (job["action"], job["source"])
+                    ):
+                        pending.update(status="skipped", note="已合并到同一作品的任务")
                 try:
                     others = [str(p["Id"]) for p in await client.parts(item)]
                 except (httpx.HTTPError, ValueError) as exc:
@@ -121,9 +184,20 @@ class BatchRunner:
                     if other != ident:
                         await expand(other)
 
-            for row in batch["items"]:
-                await expand(row["id"])
-            batch["items"] = sorted(expanded, key=lambda row: row["code"] or "")
+            for row in job["items"]:
+                if row["status"] == "pending":
+                    await expand(row["id"])
+            for row in expanded:
+                row.update(action=job["action"], source=job["source"])
+            # Keep submissions added while this job was resolving its associations.
+            position = next(
+                i for i, row in enumerate(batch["items"]) if id(row) in original
+            )
+            batch["items"] = [row for row in batch["items"] if id(row) not in original]
+            batch["items"][position:position] = sorted(
+                expanded, key=lambda row: row["code"] or ""
+            )
+            job["items"] = expanded
             remaining = Counter(row["code"] for row in expanded)
             save()
             with TemporaryDirectory(prefix="caress-batch-") as temporary:
@@ -146,20 +220,20 @@ class BatchRunner:
                                         "Emby 项目番号已变化，请刷新后重试"
                                     )
                                 old = runtime.record(server, row["id"], identity, code)
-                                replace = batch["action"] == "force"
+                                replace = job["action"] == "force"
                                 if not replace and not needs_enrichment(
                                     item, await client.image_info(row["id"]), media
                                 ):
-                                    row["status"] = "skipped"
+                                    row.update(
+                                        status="skipped", note="未发现需要补齐的内容"
+                                    )
                                     return
                                 row["status"] = "running"
                                 runtime.save_record(
                                     server, row["id"], identity, code, "running"
                                 )
                                 save()
-                                prepared = await processor.prepare(
-                                    code, batch["source"]
-                                )
+                                prepared = await processor.prepare(code, job["source"])
                                 # Revalidate identity immediately before the write, after potentially slow scraping.
                                 if not await client.contains(row["id"]):
                                     raise ValueError("项目已离开所选媒体库，未执行写入")
@@ -192,6 +266,7 @@ class BatchRunner:
                                     runtime.restore_record(server, row["id"], old)
                                     row.update(
                                         status="skipped",
+                                        note="本次来源数据未产生变更",
                                         writing=False,
                                         warnings=[*row.get("warnings", []), *warnings],
                                     )
@@ -246,32 +321,28 @@ class BatchRunner:
                             try:
                                 if remaining[reserved_code] == 0:
                                     await processor.release(
-                                        reserved_code, batch["source"]
+                                        reserved_code, job["source"]
                                     )
                             finally:
                                 save()
 
                     try:
                         async with asyncio.TaskGroup() as group:
-                            for row in batch["items"]:
+                            for row in job["items"]:
                                 group.create_task(work(row))
                     finally:
                         await processor.finish()
-            batch["status"] = "finished"
         except asyncio.CancelledError:
-            batch["status"] = "cancelled"
+            raise
         except Exception as exc:
-            batch.update(status="failed", error=sync_error(exc))
-        finally:
-            for row in batch["items"]:
+            batch["error"] = sync_error(exc)
+            for row in job["items"]:
                 if row["status"] in ("pending", "running"):
-                    row.update(
-                        status="cancelled"
-                        if batch["status"] == "cancelled"
-                        else "failed",
-                        error=batch.get("error") or "批次中断",
-                    )
-            batch["finished_at"] = now()
+                    row.update(status="failed", error=sync_error(exc))
+        finally:
+            for row in job["items"]:
+                if row["status"] in ("pending", "running"):
+                    row.update(status="cancelled", error="已取消；尚未开始写入")
             save()
             try:
                 if client is not None:

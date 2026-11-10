@@ -15,6 +15,7 @@ import {
   type Confirmation,
 } from "@/components/confirmation-dialog";
 import { Library } from "@/pages/library";
+import { BatchProgress } from "@/components/batch-progress";
 import { api } from "@/lib/api";
 import type {
   Action,
@@ -39,6 +40,10 @@ export function App() {
   const [route, setRoute] = useState(location.hash.slice(1) || "library");
   const [settings, setSettings] = useState<Preferences | null>(null);
   const [batch, setBatch] = useState<Batch | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [dismissed, setDismissed] = useState<string | null>(null);
+  const batchRef = useRef<Batch | null>(null);
+  const batchGeneration = useRef(0);
   const [revision, setRevision] = useState(0);
   const [notice, setNotice] = useState("");
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
@@ -66,17 +71,32 @@ export function App() {
   }, [run, navigate]);
   const busy = batch?.status === "running";
   useEffect(() => {
+    batchRef.current = batch;
+  }, [batch]);
+  useEffect(() => {
     if (!busy) return;
     let active = true,
       pending = false;
     const timer = setInterval(() => {
       if (pending || document.hidden) return;
       pending = true;
+      const generation = batchGeneration.current;
       void api<Batch | null>("batch")
         .then((value) => {
-          if (active) {
+          if (active && generation === batchGeneration.current) {
+            const detail = route.startsWith("library/work/")
+              ? route.split("/")[2]
+              : undefined;
+            const result = (b: Batch | null) =>
+              b?.items.filter((i) => i.id === detail).at(-1)?.status;
+            if (
+              (detail &&
+                result(value) !== result(batchRef.current) &&
+                !["pending", "running"].includes(result(value) || "")) ||
+              value?.status !== "running"
+            )
+              refresh();
             setBatch(value);
-            if (value?.status !== "running") refresh();
           }
         })
         .catch((e: Error) => {
@@ -90,29 +110,52 @@ export function App() {
       active = false;
       clearInterval(timer);
     };
-  }, [busy, refresh]);
+  }, [busy, refresh, route]);
   const start = async (ids: string[], action: Action, source?: Source) => {
-    if (action === "force") {
-      const accepted = await new Promise<boolean>((resolve) => {
-        const value = {
-          title: "替换所有的元数据",
-          description: "可能覆盖 Emby 中手动修改的相关元数据和封面。继续？",
-          resolve,
-        };
-        confirmationRef.current = value;
-        setConfirmation(value);
+    if (submitting) return;
+    setSubmitting(true);
+    try {
+      if (action === "force") {
+        const accepted = await new Promise<boolean>((resolve) => {
+          const value = {
+            title: "替换所有的元数据",
+            description: "可能覆盖 Emby 中手动修改的相关元数据和封面。继续？",
+            resolve,
+          };
+          confirmationRef.current = value;
+          setConfirmation(value);
+        });
+        if (!accepted) return;
+      }
+      batchGeneration.current++;
+      const result = await api<Batch>("batch", "POST", {
+        ids,
+        action,
+        source: source || null,
+        confirmed: action === "force",
       });
-      if (!accepted) return;
+      setBatch(result);
+      setDismissed(null);
+      if (result.status !== "running") refresh();
+    } finally {
+      setSubmitting(false);
     }
-    const result = await api<Batch>("batch", "POST", {
-      ids,
-      action,
-      source: source || null,
-      confirmed: action === "force",
-    });
-    setBatch(result);
-    if (result.status !== "running") refresh();
   };
+  const progress =
+    batch && dismissed !== batch.id ? (
+      <BatchProgress
+        batch={batch}
+        order={order}
+        cancel={() =>
+          run(async () => {
+            batchGeneration.current++;
+            setBatch(await api<Batch>("batch/cancel", "POST"));
+            refresh();
+          })
+        }
+        close={() => setDismissed(batch.id)}
+      />
+    ) : null;
   const tab = route.startsWith("settings") ? "settings" : "library";
   const ident = route.startsWith("library/work/")
     ? route.split("/")[2]
@@ -194,7 +237,8 @@ export function App() {
                 navigate(`library/work/${neighbor.id}`);
               }}
               revision={revision}
-              busy={!!busy}
+              submitting={submitting}
+              progress={progress}
               writing={batch?.current.includes(ident) ?? false}
               start={start}
               run={run}
@@ -214,9 +258,8 @@ export function App() {
               run={run}
               open={(id) => navigate(`library/work/${id}`)}
               refresh={refresh}
-              cancel={async () =>
-                setBatch(await api<Batch>("batch/cancel", "POST"))
-              }
+              progress={progress}
+              submitting={submitting}
             />
           )}
         </Suspense>

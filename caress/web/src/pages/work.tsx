@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -13,6 +13,7 @@ import { Status } from "@/components/status";
 import { ArtworkImage, ImageViewer } from "@/components/image-viewer";
 import { Select } from "@/components/form-controls";
 import { api } from "@/lib/api";
+import { actions } from "@/lib/labels";
 import {
   sources,
   type Action,
@@ -26,7 +27,8 @@ export default function Work({
   order,
   open,
   revision,
-  busy,
+  submitting,
+  progress,
   writing,
   start,
   run,
@@ -38,7 +40,8 @@ export default function Work({
   order: WorkNeighbor[];
   open: (neighbor: WorkNeighbor) => void;
   revision: number;
-  busy: boolean;
+  submitting: boolean;
+  progress: ReactNode;
   writing: boolean;
   start: (ids: string[], action: Action, source?: Source) => Promise<void>;
   run: (fn: () => Promise<unknown>) => void;
@@ -48,6 +51,7 @@ export default function Work({
 }) {
   const [work, setWork] = useState<WorkRecord | null>(null),
     [error, setError] = useState(""),
+    [action, setAction] = useState<Action>("scrape"),
     [source, setSource] = useState<Source | "">(""),
     [crop, setCrop] = useState(false),
     [viewer, setViewer] = useState<number | null>(null);
@@ -67,11 +71,6 @@ export default function Work({
   const position = order.findIndex((row) => row.id === id);
   const previous = position > 0 ? order[position - 1] : null,
     next = position >= 0 ? order[position + 1] || null : null;
-  const action: Action =
-    work?.needs_enrichment === false &&
-    !["failed", "cancelled", "rescrape_failed"].includes(work.status)
-      ? "force"
-      : "scrape";
   const images = work
     ? [
         ...(work.poster ? [{ src: work.poster, title: "封面" }] : []),
@@ -118,6 +117,7 @@ export default function Work({
           <ArrowRight className="size-4" />
         </Button>
       </div>
+      {progress}
       {error ? (
         <Alert role="alert">
           <p>{error}</p>
@@ -177,14 +177,12 @@ export default function Work({
               {work.error && <Alert role="alert">{work.error}</Alert>}
               <div className="flex flex-wrap items-center gap-2">
                 {work.status !== "unsupported" && (
-                  <Button
-                    disabled={busy}
-                    onClick={() =>
-                      run(() => start([id], action, source || undefined))
-                    }
-                  >
-                    {action === "force" ? "替换元数据" : "刮削缺少的元数据"}
-                  </Button>
+                  <Select
+                    label="刮削操作"
+                    value={action}
+                    onChange={(value) => setAction(value as Action)}
+                    options={actions}
+                  />
                 )}
                 {work.status !== "unsupported" && (
                   <Select
@@ -196,6 +194,16 @@ export default function Work({
                       ...Object.fromEntries(sources.map((s) => [s, s])),
                     }}
                   />
+                )}
+                {work.status !== "unsupported" && (
+                  <Button
+                    disabled={submitting}
+                    onClick={() =>
+                      run(() => start([id], action, source || undefined))
+                    }
+                  >
+                    开始执行
+                  </Button>
                 )}
               </div>
               <a

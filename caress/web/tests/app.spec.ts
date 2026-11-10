@@ -496,45 +496,36 @@ test("portraits reserve space and gallery supports buttons and keyboard", async 
   await expect(page.getByRole("list", { name: "媒体文件" })).toBeVisible();
 });
 
-for (const [status, action] of Object.entries({
-  pending: "刮削缺少的元数据",
-  failed: "刮削缺少的元数据",
-  cancelled: "刮削缺少的元数据",
-  success: "替换元数据",
-  rescrape_failed: "刮削缺少的元数据",
-  unsupported: "",
-})) {
-  test(`detail ${status} has one primary action and preserves confirmation`, async ({
+for (const status of [
+  "pending",
+  "failed",
+  "cancelled",
+  "success",
+  "rescrape_failed",
+  "unsupported",
+]) {
+  test(`detail ${status} has explicit mode, source and start`, async ({
     page,
   }) => {
     await page.route("**/api/works/1", (route) =>
-      route.fulfill({
-        json: {
-          ...work,
-          status,
-          needs_enrichment: status !== "success",
-          last_result: status === "rescrape_failed" ? "failed" : status,
-          succeeded_at: ["success", "rescrape_failed"].includes(status)
-            ? "2026-11-09"
-            : null,
-        },
-      }),
+      route.fulfill({ json: { ...work, status } }),
     );
     await page.goto("/#library/work/1");
     await expect(
       page.getByRole("heading", { name: work.title, exact: true }),
     ).toBeVisible();
-    const primary = page.getByRole("button", {
-      name: /^(刮削缺少的元数据|替换元数据)$/,
-    });
-    await expect(primary).toHaveCount(action ? 1 : 0);
-    if (action) {
-      await expect(primary).toHaveText(action);
-      if (action === "替换元数据") {
-        await primary.click();
-        await expect(page.getByRole("dialog")).toContainText("可能覆盖");
-        await page.getByRole("button", { name: "取消", exact: true }).click();
-      }
+    const primary = page.getByRole("button", { name: "开始执行", exact: true });
+    await expect(primary).toHaveCount(status === "unsupported" ? 0 : 1);
+    if (status !== "unsupported") {
+      const mode = page.getByRole("combobox", { name: "刮削操作" });
+      await expect(mode).toHaveText("刮削缺少的元数据");
+      await mode.click();
+      await page
+        .getByRole("option", { name: "替换所有的元数据", exact: true })
+        .click();
+      await primary.click();
+      await expect(page.getByRole("dialog")).toContainText("可能覆盖");
+      await page.getByRole("button", { name: "取消", exact: true }).click();
     }
     await expect(page.getByRole("list", { name: "媒体文件" })).toContainText(
       "/strm/ABC-123.strm",
@@ -611,9 +602,9 @@ test("completed batch is a compact summary with optional errors", async ({
         status: "finished",
         current: [],
         items: [
-          { id: "1", status: "success" },
+          { id: "1", status: "success", warnings: ["演员查询被拒绝"] },
           { id: "2", status: "failed", error: "来源暂不可用" },
-          { id: "3", status: "skipped" },
+          { id: "3", status: "skipped", note: "本次来源数据未产生变更" },
         ],
       },
     }),
@@ -627,6 +618,10 @@ test("completed batch is a compact summary with optional errors", async ({
   ).not.toBeVisible();
   await batch.locator("summary").click();
   await expect(batch).toContainText("来源暂不可用");
+  await expect(batch).toContainText("警告 · 演员查询被拒绝");
+  await expect(batch).toContainText("跳过 · 本次来源数据未产生变更");
+  await batch.getByRole("button", { name: "关闭", exact: true }).click();
+  await expect(batch).toHaveCount(0);
 });
 
 test("initial failures can retry without stale content", async ({ page }) => {
@@ -833,12 +828,13 @@ for (const [status, missing, expected] of [
     await page.goto("/#library/work/1");
     await page.getByRole("combobox", { name: "刮削来源" }).click();
     await page.getByRole("option", { name: "javdb", exact: true }).click();
-    await page
-      .getByRole("button", {
-        name: expected === "force" ? "替换元数据" : "刮削缺少的元数据",
-        exact: true,
-      })
-      .click();
+    if (expected === "force") {
+      await page.getByRole("combobox", { name: "刮削操作" }).click();
+      await page
+        .getByRole("option", { name: "替换所有的元数据", exact: true })
+        .click();
+    }
+    await page.getByRole("button", { name: "开始执行", exact: true }).click();
     if (expected === "force")
       await page.getByRole("button", { name: "确认", exact: true }).click();
     await expect.poll(() => body).toBeDefined();
@@ -938,4 +934,73 @@ test("crop failure offers source recovery without a permanent fetch button", asy
   await expect(
     dialog.getByRole("button", { name: "从来源获取原图", exact: true }),
   ).toHaveCount(0);
+});
+
+test("both pages share queued progress and completed detail refreshes", async ({
+  page,
+}) => {
+  let batch = {
+    id: "queue",
+    status: "running",
+    current: ["2"],
+    items: [{ id: "2", code: "DEF-456", status: "running" }],
+  };
+  let submitted: Record<string, unknown> | undefined;
+  await page.route("**/api/batch", (route) => {
+    if (route.request().method() === "POST") {
+      submitted = route.request().postDataJSON();
+      batch.items.push({ id: "1", code: "ABC-123", status: "pending" });
+    }
+    return route.fulfill({ json: batch });
+  });
+  await page.route("**/api/works/1", (route) =>
+    route.fulfill({
+      json: {
+        ...work,
+        status: batch.status === "finished" ? "success" : "pending",
+        title: batch.status === "finished" ? "已更新的作品" : work.title,
+      },
+    }),
+  );
+  await page.goto("/");
+  const progress = page.getByRole("region", { name: "当前批次" });
+  await expect(progress).toContainText("当前：DEF-456");
+  const cancel = await progress
+    .getByRole("button", { name: "取消", exact: true })
+    .boundingBox();
+  const refresh = await page
+    .getByRole("button", { name: "刷新作品列表" })
+    .boundingBox();
+  expect(Math.abs(cancel!.x - refresh!.x)).toBeLessThan(1);
+  await page
+    .getByRole("checkbox", { name: "选择 ABC-123", exact: true })
+    .check();
+  await page.getByRole("button", { name: "开始执行", exact: true }).click();
+  await expect(progress).toContainText("等待：ABC-123");
+  expect(submitted).toMatchObject({ ids: ["1"], action: "scrape" });
+  await page.getByRole("row", { name: "查看 ABC-123" }).click();
+  await expect(progress.getByRole("progressbar")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "开始执行", exact: true }),
+  ).toBeEnabled();
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth),
+  ).toBeLessThanOrEqual(390);
+  await expect(progress.getByText("等待：ABC-123", { exact: true })).toHaveCSS(
+    "-webkit-line-clamp",
+    "2",
+  );
+  batch = {
+    ...batch,
+    status: "finished",
+    current: [],
+    items: batch.items.map((i) => ({ ...i, status: "success" })),
+  };
+  await expect(
+    page.getByRole("heading", { name: "已更新的作品" }),
+  ).toBeVisible();
+  await expect(progress).toContainText("2 成功");
+  await progress.getByRole("button", { name: "关闭", exact: true }).click();
+  await expect(progress).toHaveCount(0);
 });

@@ -82,6 +82,9 @@ export interface Batch {
     status: string;
     error?: string;
     warnings?: string[];
+    note?: string;
+    action?: Action;
+    source?: Source | null;
   }[];
   current: string[];
 }

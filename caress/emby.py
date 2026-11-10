@@ -263,7 +263,7 @@ class EmbyClient:
                     "ParentId": library,
                     "Recursive": "true",
                     "Ids": str(ident),
-                    "IncludeItemTypes": "Movie",
+                    "IncludeItemTypes": "Movie,Video",
                     "Limit": 1,
                     "EnableImages": "false",
                     "EnableUserData": "false",

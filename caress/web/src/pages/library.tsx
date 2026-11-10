@@ -1,4 +1,10 @@
-import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
+import {
+  useEffect,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+  type ReactNode,
+} from "react";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
 import { Empty } from "@/components/ui/empty";
@@ -40,7 +46,8 @@ export function Library({
   run,
   open,
   refresh,
-  cancel,
+  progress,
+  submitting,
 }: {
   state: LibraryPreferences;
   setState: Dispatch<SetStateAction<LibraryPreferences>>;
@@ -52,7 +59,8 @@ export function Library({
   run: (fn: () => Promise<unknown>) => void;
   open: (id: string) => void;
   refresh: () => void;
-  cancel: () => Promise<void>;
+  progress: ReactNode;
+  submitting: boolean;
 }) {
   const { query, filter, page, pageSize } = state;
   const [rows, setRows] = useState<Work[]>([]),
@@ -97,8 +105,8 @@ export function Library({
       controller.abort();
     };
   }, [query, filter, page, pageSize, revision, setState, setOrder]);
-  const busy = batch?.status === "running",
-    pages = Math.max(1, Math.ceil(total / pageSize));
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  const results = new Map(batch?.items.map((item) => [item.id, item]));
   function select(ids: string[], checked: boolean) {
     setSelected((old) => {
       const next = new Set(old);
@@ -128,9 +136,6 @@ export function Library({
       label="选择本页"
     />
   );
-  const done =
-    batch?.items.filter((i) => !["pending", "running"].includes(i.status))
-      .length ?? 0;
   const mediaLabel = (w: Work) =>
     [
       w.media.some((m) => m.subtitles) ? "字幕" : "",
@@ -157,79 +162,7 @@ export function Library({
         />
       </div>
       {!configured && <Alert>请先连接 Emby 并选择媒体库</Alert>}
-      {batch && (
-        <section
-          aria-label="当前批次"
-          className={
-            busy
-              ? "space-y-3 rounded-md border p-3 text-sm"
-              : "space-y-2 text-sm"
-          }
-        >
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="tabular-nums text-muted-foreground">
-              {busy
-                ? `处理中 · ${done}/${batch.items.length}`
-                : batch.status === "cancelled"
-                  ? "已取消"
-                  : batch.status === "interrupted"
-                    ? "已中断"
-                    : batch.status === "failed"
-                      ? "失败"
-                      : batch.items.some((i) => i.status === "failed")
-                        ? "已结束"
-                        : "已完成"}
-              {` · ${batch.items.filter((i) => i.status === "success").length} 成功 · ${batch.items.filter((i) => i.status === "failed").length} 失败 · ${batch.items.filter((i) => i.status === "skipped").length} 跳过`}
-            </p>
-            {busy && (
-              <Button size="sm" variant="outline" onClick={() => run(cancel)}>
-                取消
-              </Button>
-            )}
-          </div>
-          {busy && (
-            <>
-              <progress
-                className="h-1.5 w-full accent-primary"
-                max={batch.items.length || 1}
-                value={done}
-                aria-label="批次进度"
-              />
-              {!!batch.current.length && (
-                <p className="text-muted-foreground">
-                  当前：
-                  {batch.items
-                    .filter((i) => batch.current.includes(i.id))
-                    .map((i) => i.code || i.id)
-                    .join("、")}
-                </p>
-              )}
-            </>
-          )}
-          {(batch.error ||
-            batch.items.some((i) => i.error || i.warnings?.length)) && (
-            <details>
-              <summary className="w-fit cursor-pointer text-muted-foreground">
-                详情
-              </summary>
-              {batch.error && (
-                <p role="alert" className="mt-2 text-destructive">
-                  {batch.error}
-                </p>
-              )}
-              <ul className="mt-2 max-h-48 space-y-2 overflow-auto wrap-anywhere">
-                {batch.items
-                  .filter((i) => i.error || i.warnings?.length)
-                  .map((i) => (
-                    <li key={i.id}>
-                      {i.code || i.id}：{i.error || i.warnings?.join("；")}
-                    </li>
-                  ))}
-              </ul>
-            </details>
-          )}
-        </section>
-      )}
+      {progress}
       <div className="flex flex-wrap items-center gap-2">
         <Select
           label="刮削操作"
@@ -238,7 +171,7 @@ export function Library({
           options={actions}
         />
         <Button
-          disabled={busy || !selected.size}
+          disabled={submitting || !selected.size}
           onClick={() => run(() => start([...selected], action))}
         >
           开始执行
@@ -333,7 +266,13 @@ export function Library({
                     <TableCell>
                       <Status
                         status={
-                          batch?.current.includes(w.id) ? "running" : w.status
+                          batch?.current.includes(w.id)
+                            ? "running"
+                            : results.get(w.id)?.status === "success"
+                              ? "success"
+                              : results.get(w.id)?.status === "failed"
+                                ? "failed"
+                                : w.status
                         }
                         title={w.error || undefined}
                       />
