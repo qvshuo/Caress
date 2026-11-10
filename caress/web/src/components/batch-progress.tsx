@@ -52,12 +52,16 @@ export function BatchProgress({
           aria-label="批次进度"
         />
       )}
-      <p className="line-clamp-2 wrap-anywhere text-muted-foreground">
-        当前：{current.map(label).join(" ") || "—"}
-      </p>
-      <p className="line-clamp-2 wrap-anywhere text-muted-foreground">
-        等待：{waiting.map(label).join(" ") || "—"}
-      </p>
+      {current.length > 0 && (
+        <p className="line-clamp-2 wrap-anywhere text-muted-foreground">
+          当前：{current.map(label).join(" ")}
+        </p>
+      )}
+      {waiting.length > 0 && (
+        <p className="line-clamp-2 wrap-anywhere text-muted-foreground">
+          等待：{waiting.map(label).join(" ")}
+        </p>
+      )}
       {(batch.error || details.length > 0) && (
         <details>
           <summary className="w-fit cursor-pointer text-muted-foreground">

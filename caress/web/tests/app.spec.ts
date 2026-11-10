@@ -573,6 +573,9 @@ test("running batch exposes progress and cancellation", async ({ page }) => {
   await expect(
     page.getByRole("progressbar", { name: "批次进度" }),
   ).toBeVisible();
+  const batch = page.getByRole("region", { name: "当前批次" });
+  await expect(batch.getByText("当前：ABC-123", { exact: true })).toBeVisible();
+  await expect(batch.getByText(/^等待：/)).toHaveCount(0);
   await page.getByRole("button", { name: "取消", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "取消", exact: true }),
@@ -600,6 +603,8 @@ test("completed batch is a compact summary with optional errors", async ({
   await page.goto("/");
   const batch = page.getByRole("region", { name: "当前批次" });
   await expect(batch).toContainText("已结束 · 1 成功 · 1 失败 · 1 跳过");
+  await expect(batch.getByText(/^当前：/)).toHaveCount(0);
+  await expect(batch.getByText(/^等待：/)).toHaveCount(0);
   await expect(batch.getByRole("progressbar")).toHaveCount(0);
   await expect(
     batch.getByText("来源暂不可用", { exact: false }),
@@ -942,6 +947,7 @@ test("both pages share queued progress and completed detail refreshes", async ({
     .check();
   await page.getByRole("button", { name: "开始执行", exact: true }).click();
   await expect(progress).toContainText("等待：ABC-123");
+  await expect(progress.getByText("当前：DEF-456", { exact: true })).toBeVisible();
   await expect(page.getByRole("checkbox", { name: "选择 ABC-123", exact: true })).not.toBeChecked();
   expect(submitted).toMatchObject({ ids: ["1"], action: "scrape" });
   const listProgress = await progress.boundingBox();
@@ -970,5 +976,7 @@ test("both pages share queued progress and completed detail refreshes", async ({
     page.getByRole("heading", { name: "已更新的作品" }),
   ).toBeVisible();
   await expect(progress).toContainText("2 成功");
+  await expect(progress.getByText(/^当前：/)).toHaveCount(0);
+  await expect(progress.getByText(/^等待：/)).toHaveCount(0);
   await expect(progress.getByRole("button", { name: "关闭", exact: true })).toHaveCount(0);
 });
