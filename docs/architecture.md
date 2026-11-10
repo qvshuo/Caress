@@ -30,6 +30,8 @@ Service 持有 Emby 连接池，请求与批次仅租用；首次连接验证服
 
 来源独占、限速、冷却和有限网络重试独立于作品并发。顺序命中即停，不做全来源预抓取。翻译只处理标题/简介，每批用无害文本验证，每次一个请求，失败保留有效原文；演员身份有歧义时不猜测。头像锁内处理，已有头像不覆盖，每人物每批最多两次尝试，仅成功或确认无需处理才记完成。
 
+JavDB 作品通过网页定位；演员优先使用作品页中关联的 ID，否则从演员网页精确匹配候选，再通过免 JWT 的演员详情 API 核对身份与类型。候选仍有歧义时保留原名，不保存猜测结果；不请求需要登录 JWT 的搜索及作品详情 API。
+
 ## Emby 写入
 
 写前读取完整 DTO，只合并来源实际返回的 Name、OriginalTitle、Overview、PremiereDate/ProductionYear、Studios、相关 Actor/Director、GenreItems、TagItems 和 caress Provider ID。缺失值不清空；无关 Provider ID、人物类型、标签、系统字段、用户数据及 LockData/LockedFields 原样保留。

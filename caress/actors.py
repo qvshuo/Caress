@@ -204,11 +204,18 @@ def map_actor_names(actors: list[Actor], names: ActorAliases, kind=None, ids=Non
     ids = ids or {}
     mapped, mappings, issues, seen = [], [], [], set()
     for actor in actors:
+        ambiguous = actor.name in ids and ids[actor.name] is None
         ident = ids.get(actor.name)
-        if ident not in names.actors:
+        if not ambiguous and ident not in names.actors:
             ident = names.resolve_id(actor.name, kind)
         record = names.actors.get(ident)
-        primary = record["name"] if record else names.resolve(actor.name, kind)
+        primary = (
+            None
+            if ambiguous
+            else record["name"]
+            if record
+            else names.resolve(actor.name, kind)
+        )
         name = primary or actor.name
         mappings.append(
             {
@@ -218,7 +225,8 @@ def map_actor_names(actors: list[Actor], names: ActorAliases, kind=None, ids=Non
                 "type": record["type"] if record else kind,
             }
         )
-        if not primary and len(candidates := names.candidates(actor.name, kind)) > 1:
+        candidates = names.candidates(actor.name, kind) if not primary else []
+        if ambiguous or len(candidates) > 1:
             issues.append(
                 {
                     "name": actor.name,

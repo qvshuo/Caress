@@ -225,7 +225,8 @@ class Scraper:
             names.reload(self.settings.database)
         kind = actor_type(category)
         if not any(
-            names.needs_lookup(actor.name, kind, ids.get(actor.name))
+            (actor.name not in ids or ids[actor.name] is not None)
+            and names.needs_lookup(actor.name, kind, ids.get(actor.name))
             for actor in actors
         ):
             return []
@@ -238,8 +239,9 @@ class Scraper:
             ):
                 try:
                     async with asyncio.timeout(SOURCE_TIMEOUT_SECONDS):
-                        return await self.sources[SourceId.JAVDB].app.resolve_actors(
-                            actors, names, category, ids
+                        javdb = self.sources[SourceId.JAVDB]
+                        return await javdb.app.resolve_actors(
+                            actors, names, category, ids, javdb.web.find_actor_ids
                         )
                 except TimeoutError:
                     return ["演员查询超时，保留原名"]

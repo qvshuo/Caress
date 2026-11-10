@@ -308,7 +308,7 @@ async def test_solver_uses_builtin_address_and_destroys_session():
 
 
 @pytest.mark.asyncio
-async def test_javdb_business_failure_keeps_complete_json_in_logs_and_fallback(caplog):
+async def test_javdb_business_failure_keeps_complete_json_and_uses_web(caplog):
     import json
     import logging
     from types import SimpleNamespace
@@ -336,13 +336,8 @@ async def test_javdb_business_failure_keeps_complete_json_in_logs_and_fallback(c
     message = str(error.value)
     assert json.loads(message.split("：", 1)[1]) == payload
     assert message in caplog.text
-    source.app.fetch = AsyncMock(
-        return_value=SourceResult(
-            source=SourceId.JAVDB,
-            requested_code="ABP-876",
-            status=Status.BLOCKED,
-            message=message,
-        )
+    source.app.api = AsyncMock(
+        side_effect=AssertionError("JWT-only API must not be used")
     )
     source.web.fetch = AsyncMock(
         return_value=SourceResult(
@@ -350,4 +345,204 @@ async def test_javdb_business_failure_keeps_complete_json_in_logs_and_fallback(c
         )
     )
     result = await source.fetch(ScrapeRequest(code="ABP-876"))
-    assert message in result.warnings[0]
+    assert result.status == Status.NOT_FOUND
+    source.app.api.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_javdb_actor_search_uses_exact_names_and_same_origin():
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from caress.http import Page
+    from caress.sources.javdb_web import JavDBWeb
+
+    html = """<div class="actor-box">
+      <a href="/actors/0JEb" title="大橋未久"><strong>大橋未久</strong></a>
+      <a href="/actors/21Jp" title="大橋未久"><strong>大橋未久</strong></a>
+      <a href="/actors/wrong" title="大橋未久子"><strong>大橋未久子</strong></a>
+      <a href="https://evil.invalid/actors/fake" title="大橋未久"><strong>大橋未久</strong></a>
+    </div>"""
+    client = SimpleNamespace(
+        get=AsyncMock(return_value=Page("https://javdb.com/search", 200, html.encode()))
+    )
+    source = JavDBWeb(client, Settings())
+    assert await source.find_actor_ids("大橋未久") == ["0JEb", "21Jp"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ambiguous", [False, True])
+async def test_javdb_actor_details_are_verified_before_remembering(tmp_path, ambiguous):
+    from unittest.mock import AsyncMock
+
+    from caress.actors import ActorAliases
+    from caress.models import Actor
+    from caress.sources.javdb_api import JavDBApi
+
+    settings = Settings(database=tmp_path / "rules.sqlite3")
+    names = ActorAliases.load(settings.database)
+    source = JavDBApi(None, settings)
+    source.api = AsyncMock(
+        side_effect=lambda path: {
+            "actor": {
+                "id": path.rsplit("/", 1)[1],
+                "name": "测试演员甲",
+                "type": 0 if path.endswith("a") or ambiguous else 1,
+            }
+        }
+    )
+    search = AsyncMock(return_value=["a", "b"])
+    warnings = await source.resolve_actors(
+        [Actor(name="测试演员甲")], names, Category.CENSORED, {}, search
+    )
+    assert all(
+        call.args[0].startswith("/api/v1/actors/")
+        for call in source.api.await_args_list
+    )
+    if ambiguous:
+        assert warnings and not names.candidates("测试演员甲", 0)
+    else:
+        assert not warnings and names.resolve_id("测试演员甲", 0) == "a"
+        assert ActorAliases.load(settings.database).resolve_id("测试演员甲", 0) == "a"
+
+
+def test_javdb_movie_actor_links_preserve_verified_ids():
+    from caress.http import Page
+    from caress.sources.javdb_web import JavDBWeb
+
+    html = """<a class="copy-to-clipboard" data-clipboard-text="ABP-967"></a>
+      <h2><strong class="current-title">Title</strong></h2>
+      <nav class="movie-panel-info"><div class="panel-block"><strong>演員</strong>
+      <span class="value"><a href="/actors/0JEb">大橋未久</a></span></div></nav>"""
+    result = JavDBWeb(None, Settings()).parse(
+        ScrapeRequest(code="ABP-967"),
+        Page("https://javdb.com/v/7YkA1", 200, html.encode()),
+    )
+    assert result.actor_ids == {"大橋未久": "0JEb"}
+    assert result.metadata.actors[0].name == "大橋未久"
+
+
+@pytest.mark.asyncio
+async def test_javdb_actor_candidate_failure_never_saves_partial_match(tmp_path):
+    from unittest.mock import AsyncMock
+
+    from caress.actors import ActorAliases
+    from caress.http import FetchError
+    from caress.models import Actor
+    from caress.sources.javdb_api import JavDBApi
+
+    settings = Settings(database=tmp_path / "rules.sqlite3")
+    names = ActorAliases.load(settings.database)
+    source = JavDBApi(None, settings)
+    source.api = AsyncMock(
+        side_effect=[
+            {"actor": {"id": "a", "name": "测试演员乙", "type": 0}},
+            FetchError(Status.BLOCKED, "演员详情不可用"),
+        ]
+    )
+    warnings = await source.resolve_actors(
+        [Actor(name="测试演员乙")],
+        names,
+        Category.CENSORED,
+        {},
+        AsyncMock(return_value=["a", "b"]),
+    )
+    assert warnings and "演员详情不可用" in warnings[0]
+    assert not ActorAliases.load(settings.database).candidates("测试演员乙", 0)
+
+
+def test_javdb_movie_same_name_different_ids_is_not_guessed():
+    from caress.actors import ActorAliases, map_actor_names
+    from caress.http import Page
+    from caress.sources.javdb_web import JavDBWeb
+
+    html = """<a class="copy-to-clipboard" data-clipboard-text="ABP-967"></a>
+      <h2><strong class="current-title">Title</strong></h2>
+      <nav class="movie-panel-info"><div class="panel-block"><strong>演員</strong>
+      <span class="value"><a href="/actors/0JEb">大橋未久</a>
+      <a href="/actors/rJ7k">大橋未久</a></span></div></nav>"""
+    result = JavDBWeb(None, Settings()).parse(
+        ScrapeRequest(code="ABP-967"),
+        Page("https://javdb.com/v/7YkA1", 200, html.encode()),
+    )
+    names = ActorAliases({"0JEb": {"type": 0, "name": "大橋未久"}})
+    _, mappings, issues = map_actor_names(
+        result.metadata.actors, names, 0, result.actor_ids
+    )
+    assert result.actor_ids == {"大橋未久": None}
+    assert all(mapping["actor_id"] is None for mapping in mappings)
+    assert issues
+
+
+@pytest.mark.asyncio
+async def test_javdb_scrape_uses_web_and_public_actor_detail_without_jwt(tmp_path):
+    import json
+    from urllib.parse import urlsplit
+
+    from caress.actors import ActorAliases
+    from caress.http import Page
+
+    class Client:
+        def __init__(self):
+            self.paths = []
+
+        async def get(self, source, url, **kwargs):
+            path = urlsplit(url).path
+            self.paths.append(path)
+            if path == "/search":
+                body = """<div class="movie-list"><a class="box" href="/v/film1">
+                  <div class="video-title"><strong>ABP-967</strong></div></a></div>"""
+            elif path == "/v/film1":
+                body = """<a class="copy-to-clipboard" data-clipboard-text="ABP-967"></a>
+                  <h2><strong class="current-title">Title</strong></h2>
+                  <nav class="movie-panel-info"><div class="panel-block"><strong>演員</strong>
+                  <span class="value"><a href="/actors/public1">测试演员甲</a></span></div></nav>"""
+            elif path == "/api/v1/actors/public1":
+                body = json.dumps(
+                    {
+                        "success": 1,
+                        "data": {
+                            "actor": {
+                                "id": "public1",
+                                "name": "测试演员甲",
+                                "type": 0,
+                            }
+                        },
+                    }
+                )
+            else:
+                raise AssertionError(f"unexpected or JWT-only endpoint: {path}")
+            return Page(url, 200, body.encode())
+
+    settings = Settings(database=tmp_path / "rules.sqlite3")
+    client = Client()
+    scraper = Scraper(settings, client=client)
+    result = await scraper.scrape(ScrapeRequest(code="ABP-967", source=SourceId.JAVDB))
+    assert result.status == Status.FOUND
+    assert result.metadata.code == "ABP-967"
+    selected = result.results[0]
+    assert selected.actor_ids == {"测试演员甲": "public1"}
+    names = ActorAliases.load(settings.database)
+    warnings = await scraper.resolve_actors(
+        result.metadata.actors, names, Category.CENSORED, selected.actor_ids
+    )
+    assert not warnings and names.resolve_id("测试演员甲", 0) == "public1"
+    assert client.paths == ["/search", "/v/film1", "/api/v1/actors/public1"]
+
+
+@pytest.mark.asyncio
+async def test_explicit_ambiguous_actor_never_triggers_lookup(tmp_path):
+    from unittest.mock import AsyncMock
+
+    from caress.actors import ActorAliases
+    from caress.models import Actor
+
+    settings = Settings(database=tmp_path / "rules.sqlite3")
+    names = ActorAliases.load(settings.database)
+    scraper = Scraper(settings, client=object())
+    scraper.sources[SourceId.JAVDB].app.resolve_actors = AsyncMock()
+    result = await scraper.resolve_actors(
+        [Actor(name="测试演员甲")], names, Category.CENSORED, {"测试演员甲": None}
+    )
+    assert result == []
+    scraper.sources[SourceId.JAVDB].app.resolve_actors.assert_not_awaited()
