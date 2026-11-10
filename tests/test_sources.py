@@ -265,12 +265,13 @@ async def test_solver_uses_builtin_address_and_destroys_session():
 
     commands = []
 
-    def handler(request):
+    async def handler(request):
         import json
 
         assert str(request.url) == FLARESOLVERR_URL
         command = json.loads(request.content)
         commands.append(command["cmd"])
+        await asyncio.sleep(0)
         return httpx.Response(
             200,
             json={
@@ -290,7 +291,17 @@ async def test_solver_uses_builtin_address_and_destroys_session():
             httpx.AsyncClient(transport=httpx.MockTransport(handler))
         )
         client._session = AsyncMock()
-        page = await client.get(SourceId.DMM, "https://example.invalid/", rendered=True)
-        assert page.fetcher == "flaresolverr" and page.status == 200
+        pages = await asyncio.gather(
+            client._render(SourceId.DMM, "https://example.invalid/", {}),
+            client._render(SourceId.DMM, "https://example.invalid/", {}),
+        )
+        assert all(
+            page.fetcher == "flaresolverr" and page.status == 200 for page in pages
+        )
         client._session.assert_not_awaited()
-    assert commands == ["sessions.create", "request.get", "sessions.destroy"]
+    assert commands == [
+        "sessions.create",
+        "request.get",
+        "request.get",
+        "sessions.destroy",
+    ]

@@ -75,20 +75,15 @@ def validate_image(data: bytes, source: SourceId | None = None) -> ImageData:
         if image_signature(bytes(value ^ key for value in data[1:17])):
             data = bytes(value ^ key for value in data[1:])
             decoded = True
-    if not image_signature(data):
-        raise ValueError("artwork response is not a supported image")
     try:
-        with Image.open(BytesIO(data)) as image:
+        with Image.open(BytesIO(data), formats=("JPEG", "PNG", "WEBP", "GIF")) as image:
             width, height = image.size
             image_format = image.format
+            if width < 1 or height < 1:
+                raise ValueError("invalid image dimensions")
             if width * height > 40_000_000:
                 raise ValueError("image exceeds 40 megapixels")
-            image.verify()
-        # Header verification alone can accept JPEGs whose pixel stream is corrupt.
-        with Image.open(BytesIO(data)) as image:
             image.load()
-        if not image_format or width < 1 or height < 1 or width * height > 40_000_000:
-            raise ValueError("invalid image dimensions")
         return ImageData(data, image_format.lower(), width, height, decoded)
     except (
         UnidentifiedImageError,

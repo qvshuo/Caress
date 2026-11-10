@@ -224,8 +224,7 @@ def create_app(settings: Settings | None = None):
 
     @app.delete("/api/works/{ident}/crop/{token}")
     async def crop_close(ident: str, token: str):
-        service.crop_session(ident, token)
-        service.crops.pop(token, None)
+        service.crop_close(ident, token)
         return {"closed": True}
 
     @app.post("/api/works/{ident}/crop/preview")

@@ -2,7 +2,7 @@ import asyncio
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
@@ -389,17 +389,12 @@ def test_unknown_actor_names_are_protected_without_a_cached_alias_pattern():
     )
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "fetch_source,has_backdrop", [(False, True), (True, True), (False, False)]
-)
-async def test_crop_opens_local_backdrop_without_source_or_face_detection(
-    tmp_path, monkeypatch, fetch_source, has_backdrop
-):
+@pytest.fixture
+async def crop_service(tmp_path, monkeypatch):
     from contextlib import asynccontextmanager
 
     import caress.service as service_module
-    from caress.images import crop_poster, validate_image
+    from caress.images import validate_image
     from test_images import image_bytes
 
     service = Service(Settings(database=tmp_path / "db.sqlite3"))
@@ -409,8 +404,6 @@ async def test_crop_opens_local_backdrop_without_source_or_face_detection(
             return_value=[
                 {"ImageType": "Backdrop", "Width": 600, "Height": 300, "ImageIndex": 0}
             ]
-            if has_backdrop
-            else []
         ),
         image=AsyncMock(return_value=validate_image(image_bytes(size=(600, 300)))),
     )
@@ -428,6 +421,26 @@ async def test_crop_opens_local_backdrop_without_source_or_face_detection(
         yield source
 
     monkeypatch.setattr(service_module, "Scraper", scraper)
+    try:
+        yield service, client, source
+    finally:
+        await service.close()
+        assert service.crop is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fetch_source,has_backdrop", [(False, True), (True, True), (False, False)]
+)
+async def test_crop_opens_local_backdrop_without_source_or_face_detection(
+    crop_service, monkeypatch, fetch_source, has_backdrop
+):
+    import caress.service as service_module
+    from caress.images import crop_poster
+
+    service, client, source = crop_service
+    if not has_backdrop:
+        client.image_info.return_value = []
     calls = []
 
     def crop(data, box=None, center=False):
@@ -435,25 +448,97 @@ async def test_crop_opens_local_backdrop_without_source_or_face_detection(
         return crop_poster(data, box, center)
 
     monkeypatch.setattr(service_module, "crop_poster", crop)
-    try:
-        result = await service.crop_source("1", "dmm", fetch_source=fetch_source)
-        assert calls == [True]
-        assert result["box"][2] * 3 == result["box"][3] * 2
-        if has_backdrop and not fetch_source:
-            source.cover.assert_not_awaited()
+    result = await service.crop_source("1", "dmm", fetch_source=fetch_source)
+    assert calls == [True]
+    assert result["box"][2] * 3 == result["box"][3] * 2
+    if has_backdrop and not fetch_source:
+        source.cover.assert_not_awaited()
+    else:
+        source.cover.assert_awaited_once_with("ABC-123", "dmm")
+    if fetch_source:
+        client.image_info.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["fetch", "preview"])
+async def test_crop_replaces_only_after_success_and_expires_lazily(
+    crop_service, monkeypatch, failure
+):
+    import caress.service as module
+
+    service, _, source = crop_service
+    first = await service.crop_source("1")
+    previous = service.crop_session("1", first["token"])
+    with monkeypatch.context() as patch:
+        if failure == "fetch":
+            patch.setattr(source, "cover", AsyncMock(side_effect=ValueError("offline")))
         else:
-            source.cover.assert_awaited_once_with("ABC-123", "dmm")
-        if fetch_source:
-            client.image_info.assert_not_awaited()
-        service.crops.clear()
-        monkeypatch.setattr(
-            service, "crop_preview", AsyncMock(side_effect=ValueError("preview failed"))
-        )
-        with pytest.raises(ValueError, match="preview failed"):
-            await service.crop_source("1", "dmm", fetch_source=fetch_source)
-        assert service.crops == {}
-    finally:
-        await service.close()
+            patch.setattr(
+                module, "crop_poster", Mock(side_effect=ValueError("preview failed"))
+            )
+        with pytest.raises(ValueError):
+            await service.crop_source("1", fetch_source=True)
+    assert service.crop_session("1", first["token"]) is previous
+
+    second = await service.crop_source("1")
+    with pytest.raises(ValueError, match="裁剪会话已过期"):
+        service.crop_session("1", first["token"])
+    service.crop_close("1", first["token"])
+    session = service.crop_session("1", second["token"])
+    session.expires = 0
+    with pytest.raises(ValueError, match="裁剪会话已过期"):
+        service.crop_session("1", second["token"])
+    assert service.crop is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replace_during_upload", [False, True])
+async def test_concurrent_crop_sources_keep_latest_token_and_save_only_primary(
+    crop_service, replace_during_upload
+):
+    service, client, source = crop_service
+    entered, resume = asyncio.Event(), asyncio.Event()
+    original = source.cover.return_value
+
+    async def cover(*args):
+        entered.set()
+        await resume.wait()
+        return original
+
+    source.cover.side_effect = cover
+    first_task = asyncio.create_task(service.crop_source("1", fetch_source=True))
+    await entered.wait()
+    second_task = asyncio.create_task(service.crop_source("1", fetch_source=True))
+    resume.set()
+    first, second = await asyncio.gather(first_task, second_task)
+    assert source.cover.await_count == 2
+    with pytest.raises(ValueError, match="裁剪会话已过期"):
+        service.crop_session("1", first["token"])
+    service.crop_session("1", second["token"])
+    uploading, finish = asyncio.Event(), asyncio.Event()
+
+    async def upload(*args):
+        uploading.set()
+        await finish.wait()
+
+    client.upload = AsyncMock(side_effect=upload)
+    service.detail = AsyncMock(return_value={})
+    saving = asyncio.create_task(
+        service.crop_apply("1", second["token"], second["box"])
+    )
+    await uploading.wait()
+    if replace_during_upload:
+        newer = await service.crop_source("1")
+    finish.set()
+    await saving
+    assert client.upload.await_args.args[:2] == ("1", "Primary")
+    if replace_during_upload:
+        service.crop_session("1", newer["token"])
+    else:
+        assert service.crop is None
+    third = await service.crop_source("1")
+    service.crop_close("1", third["token"])
+    assert service.crop is None
 
 
 @pytest.mark.asyncio

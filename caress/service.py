@@ -20,6 +20,7 @@ from .tasks import BatchRunner
 
 @dataclass
 class CropSession:
+    token: str
     server: str
     item: str
     identity: str
@@ -34,8 +35,8 @@ class Service:
         self.locks = WeakValueDictionary()
         self.writer_lock = asyncio.Lock()
         self.batches = BatchRunner(self)
-        self.crops = {}
-        self.crop_pending = 0
+        self.crop: CropSession | None = None
+        self.crop_lock = asyncio.Lock()
         self.emby_lock = asyncio.Lock()
         self.clients = {}
 
@@ -49,7 +50,8 @@ class Service:
 
     async def close(self):
         await self.batches.cancel()
-        self.crops.clear()
+        async with self.crop_lock:
+            self.crop = None
         for client, _ in self.clients.values():
             await client.close()
         self.clients.clear()
@@ -89,8 +91,9 @@ class Service:
                 await client.close()
 
     async def configure(self, settings):
-        self.settings = settings
-        self.crops.clear()
+        async with self.crop_lock:
+            self.settings = settings
+            self.crop = None
         async with self.emby_lock:
             await self.retire_clients()
 
@@ -138,27 +141,21 @@ class Service:
             )
             return result
 
-    def clean_crops(self):
-        for token, session in list(self.crops.items()):
-            if session.expires < time.monotonic():
-                del self.crops[token]
-
     def crop_session(self, ident, token):
-        self.clean_crops()
-        session = self.crops.get(token)
-        if not session or session.item != ident:
-            raise ValueError("裁剪会话已过期，请重新获取原始封面")
+        session = self.crop
+        if session and session.expires <= time.monotonic():
+            self.crop = session = None
+        if not session or session.token != token or session.item != ident:
+            raise ValueError("裁剪会话已过期，请重新获取原图")
         return session
 
+    def crop_close(self, ident, token):
+        if self.crop and self.crop.item == ident and self.crop.token == token:
+            self.crop = None
+
     async def crop_source(self, ident, source=None, *, fetch_source=False):
-        self.clean_crops()
-        if len(self.crops) + self.crop_pending >= 4:
-            raise ValueError("裁剪会话过多，请关闭其他裁剪器或十分钟后重试")
-        self.crop_pending += 1
-        try:
+        async with self.crop_lock:
             return await self._crop_source(ident, source, fetch_source=fetch_source)
-        finally:
-            self.crop_pending -= 1
 
     async def _crop_source(self, ident, source, *, fetch_source):
         async with self.emby() as client:
@@ -203,22 +200,20 @@ class Service:
                     ) from exc
                 data = await asyncio.to_thread(crop_source_image, data)
             token = uuid.uuid4().hex
-            self.crops[token] = CropSession(
-                client.server, ident, identity, data, time.monotonic() + 600
+            preview = await self._crop_preview(data, center=True)
+            self.crop = CropSession(
+                token, client.server, ident, identity, data, time.monotonic() + 600
             )
-            asyncio.get_running_loop().call_later(600, self.crops.pop, token, None)
-            try:
-                preview = await self.crop_preview(ident, token, center=True)
-            except BaseException:
-                self.crops.pop(token, None)
-                raise
             return {"token": token, **preview}
 
     async def crop_preview(self, ident, token, box=None, center=False):
+        session = self.crop_session(ident, token)
+        return await self._crop_preview(session.data, box, center)
+
+    async def _crop_preview(self, data, box=None, center=False):
         import base64
 
-        session = self.crop_session(ident, token)
-        crop = await asyncio.to_thread(crop_poster, session.data, box, center)
+        crop = await asyncio.to_thread(crop_poster, data, box, center)
         return {k: crop[k] for k in ("box", "width", "height")} | {
             "preview": "data:image/png;base64,"
             + base64.b64encode(crop["preview"]).decode()
@@ -236,5 +231,5 @@ class Service:
                     "content"
                 ]
                 await client.upload(ident, "Primary", data)
-                self.crops.pop(token, None)
+                self.crop_close(ident, token)
         return await self.detail(ident)

@@ -195,7 +195,6 @@ class WebClient:
         self._limit = asyncio.Semaphore(8)
         self._solver_limit = asyncio.Semaphore(1)
         self._solver_sessions: dict[tuple[SourceId, str], str] = {}
-        self._solver_lock = asyncio.Lock()
         self._control: httpx.AsyncClient | None = None
 
     def share_limits(self):
@@ -565,15 +564,14 @@ class WebClient:
         report_progress("challenge", source=source)
         key = (source, urlparse(url).netloc)
         async with self._solver_limit:
-            async with self._solver_lock:
-                if key not in self._solver_sessions:
-                    session = "caress-" + uuid.uuid4().hex
-                    command: dict[str, JsonValue] = {
-                        "cmd": "sessions.create",
-                        "session": session,
-                    }
-                    await self._solver_call(command)
-                    self._solver_sessions[key] = session
+            if key not in self._solver_sessions:
+                session = "caress-" + uuid.uuid4().hex
+                command: dict[str, JsonValue] = {
+                    "cmd": "sessions.create",
+                    "session": session,
+                }
+                await self._solver_call(command)
+                self._solver_sessions[key] = session
             payload = await self._solver_call(
                 {
                     "cmd": "request.get",
