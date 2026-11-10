@@ -1334,3 +1334,32 @@ async def test_related_item_merges_matching_queued_submission(fake_batch, monkey
     rows = fake_batch.runtime.batch()["items"]
     assert [row["status"] for row in rows].count("success") == 2
     assert any(row.get("note") == "已合并到同一作品的任务" for row in rows)
+
+
+def test_emby_failure_reports_operation_and_logs_response_without_key(caplog):
+    from caress.emby import sync_error
+
+    request = httpx.Request(
+        "POST",
+        "http://emby/emby/Items/1429/Images/Primary?api_key=hidden-query",
+        headers={"X-Emby-Token": "secret-key"},
+    )
+    response = httpx.Response(
+        500,
+        request=request,
+        json={
+            "ResponseStatus": {
+                "ErrorCode": "IOException",
+                "Message": "Read-only file system",
+                "echo": "secret-key",
+            }
+        },
+    )
+    with pytest.raises(httpx.HTTPStatusError) as error:
+        response.raise_for_status()
+    message = sync_error(error.value)
+    assert "POST /emby/Items/1429/Images/Primary" in message
+    assert "HTTP 500" in message
+    assert "Read-only file system" in caplog.text and "[redacted]" in caplog.text
+    assert "secret-key" not in caplog.text + message
+    assert "hidden-query" not in caplog.text + message

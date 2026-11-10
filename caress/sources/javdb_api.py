@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import sqlite3
 import time
@@ -10,6 +11,7 @@ from urllib.parse import urlencode
 from ..actors import ActorAliases, actor_record, actor_type, comparison_name
 from ..catalog import normalize_code
 from ..http import FetchError
+from ..logging import report_progress
 from ..models import (
     Actor,
     Candidate,
@@ -64,7 +66,9 @@ class JavDBApi(Source):
         if not isinstance(payload, dict):
             raise FetchError(Status.PARSE_ERROR, "JavDB API envelope changed")
         if payload.get("success") not in (1, True):
-            raise FetchError(Status.BLOCKED, "JavDB 拒绝了查询请求")
+            message = "JavDB API 返回失败：" + json.dumps(payload, ensure_ascii=False)
+            report_progress("response", status="failed", source=self.id, message=message)
+            raise FetchError(Status.BLOCKED, message)
         if not isinstance(payload.get("data"), dict):
             raise FetchError(Status.PARSE_ERROR, "JavDB API returned no data object")
         return payload["data"]

@@ -305,3 +305,49 @@ async def test_solver_uses_builtin_address_and_destroys_session():
         "request.get",
         "sessions.destroy",
     ]
+
+
+@pytest.mark.asyncio
+async def test_javdb_business_failure_keeps_complete_json_in_logs_and_fallback(caplog):
+    import json
+    import logging
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from caress.http import FetchError, Page
+    from caress.sources.javdb import JavDB
+
+    payload = {"success": 0, "message": "請登錄帳號", "data": None, "code": 401}
+    source = JavDB(
+        SimpleNamespace(
+            get=AsyncMock(
+                return_value=Page(
+                    "https://jdforrepam.com/api/v2/search",
+                    200,
+                    json.dumps(payload).encode(),
+                )
+            )
+        ),
+        Settings(),
+    )
+    caplog.set_level(logging.INFO, logger="caress.progress")
+    with pytest.raises(FetchError) as error:
+        await source.app.api("/api/v2/search", q="ABP-876")
+    message = str(error.value)
+    assert json.loads(message.split("：", 1)[1]) == payload
+    assert message in caplog.text
+    source.app.fetch = AsyncMock(
+        return_value=SourceResult(
+            source=SourceId.JAVDB,
+            requested_code="ABP-876",
+            status=Status.BLOCKED,
+            message=message,
+        )
+    )
+    source.web.fetch = AsyncMock(
+        return_value=SourceResult(
+            source=SourceId.JAVDB, requested_code="ABP-876", status=Status.NOT_FOUND
+        )
+    )
+    result = await source.fetch(ScrapeRequest(code="ABP-876"))
+    assert message in result.warnings[0]

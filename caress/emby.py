@@ -4,6 +4,7 @@ import asyncio
 import base64
 import hashlib
 import io
+import logging
 from copy import deepcopy
 from datetime import datetime
 from urllib.parse import quote
@@ -18,7 +19,16 @@ FIELDS = "Path,DateCreated,MediaSources,Overview,People,Studios,Genres,Tags,Prov
 
 def sync_error(exc):
     if isinstance(exc, httpx.HTTPStatusError):
-        return f"Emby 请求失败（HTTP {exc.response.status_code}）"
+        operation = f"{exc.request.method} {exc.request.url.path}"
+        if exc.response.is_stream_consumed:
+            body = exc.response.text
+            key = exc.request.headers.get("X-Emby-Token")
+            if key:
+                body = body.replace(key, "[redacted]")
+            logging.getLogger("caress.emby").error(
+                "Emby %s HTTP %s，响应：%s", operation, exc.response.status_code, body
+            )
+        return f"Emby 请求失败（{operation}，HTTP {exc.response.status_code}）"
     if isinstance(exc, httpx.TimeoutException):
         return "Emby 请求超时"
     if isinstance(exc, httpx.HTTPError):

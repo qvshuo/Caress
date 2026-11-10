@@ -32,5 +32,7 @@ class JavDB(Source):
             return result
         report_progress("source", source=self.id, message="打开网页")
         fallback = await self.web.fetch(request)
-        fallback.warnings.insert(0, f"JavDB App: {result.status}; used webpage fallback")
+        fallback.warnings.insert(
+            0, f"JavDB App: {result.message or result.status}；改用网页"
+        )
         return fallback
