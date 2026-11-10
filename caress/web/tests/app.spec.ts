@@ -516,6 +516,10 @@ for (const status of [
     ).toBeVisible();
     const primary = page.getByRole("button", { name: "开始执行", exact: true });
     await expect(primary).toHaveCount(status === "unsupported" ? 0 : 1);
+    if (status === "unsupported") {
+      await expect(page.getByText("不支持", { exact: true })).toBeVisible();
+      await expect(page.getByText("不可处理", { exact: true })).toHaveCount(0);
+    }
     if (status !== "unsupported") {
       const mode = page.getByRole("combobox", { name: "刮削操作" });
       await expect(mode).toHaveText("刮削缺少的元数据");

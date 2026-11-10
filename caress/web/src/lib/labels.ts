@@ -4,14 +4,14 @@ export const statuses = {
   failed: "失败",
   rescrape_failed: "失败",
   cancelled: "待处理",
-  unsupported: "不可处理",
+  unsupported: "不支持",
   running: "处理中",
 };
 export const statusFilters = {
-  pending: statuses.pending,
-  success: statuses.success,
-  failed: statuses.failed,
   unsupported: statuses.unsupported,
+  failed: statuses.failed,
+  success: statuses.success,
+  pending: statuses.pending,
 };
 export const actions = {
   scrape: "刮削缺少的元数据",

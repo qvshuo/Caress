@@ -124,6 +124,7 @@ class WorkProcessor:
             metadata,
             result.selected_source.value,
             warnings=[
+                *result.warnings,
                 *warnings,
                 *[i["error"] for i in report.errors],
                 *["演员别名存在歧义，保留原名" for _ in issues],

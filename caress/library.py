@@ -128,7 +128,7 @@ def filter_works(rows, query="", status=""):
         "pending": ("pending", "cancelled"),
         "failed": ("failed", "rescrape_failed"),
     }.get(status, (status,))
-    return [
+    filtered = [
         row
         for row in rows
         if (
@@ -138,6 +138,21 @@ def filter_works(rows, query="", status=""):
         )
         and (not status or row["status"] in accepted)
     ]
+    priority = {
+        "unsupported": 0,
+        "failed": 1,
+        "rescrape_failed": 1,
+        "success": 2,
+        "pending": 3,
+        "cancelled": 3,
+    }
+    return sorted(
+        filtered,
+        key=lambda row: (
+            priority[row["status"]],
+            (row["code"] or row["title"]).casefold(),
+        ),
+    )
 
 
 def navigation_order(rows):

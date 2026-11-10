@@ -571,16 +571,37 @@ async def test_connection_validates_server_then_reads_libraries(tmp_path, monkey
         assert upstream.close.await_count == 2
 
 
-def test_navigation_order_uses_current_filter():
+def test_navigation_order_uses_status_then_code_with_current_filter():
     from caress.library import filter_works, navigation_order
 
     rows = [
-        {"id": str(i), "code": "ABC-123", "title": "Title", "status": status}
-        for i, status in enumerate(["pending", "success", "pending"])
+        {"id": ident, "code": code, "title": title, "status": status}
+        for ident, code, title, status in [
+            ("p2", "XYZ-200", "title", "pending"),
+            ("s2", "DEF-999", "title", "success"),
+            ("f2", "DEF-100", "title", "rescrape_failed"),
+            ("u2", None, "Z film", "unsupported"),
+            ("p1", "ABC-300", "title", "cancelled"),
+            ("s1", "ABC-200", "title", "success"),
+            ("f1", "ABC-100", "title", "failed"),
+            ("u1", None, "A film", "unsupported"),
+        ]
     ]
+    order = navigation_order(filter_works(rows))
+    assert [row["id"] for row in order] == [
+        "u1",
+        "u2",
+        "f1",
+        "f2",
+        "s1",
+        "s2",
+        "p1",
+        "p2",
+    ]
+    assert [row["position"] for row in order] == list(range(8))
+    assert [row["id"] for row in filter_works(rows, status="failed")] == ["f1", "f2"]
     assert navigation_order(filter_works(rows, "abc", "pending")) == [
-        {"id": "0", "label": "ABC-123", "position": 0},
-        {"id": "2", "label": "ABC-123", "position": 1},
+        {"id": "p1", "label": "ABC-300", "position": 0},
     ]
 
 
@@ -1135,6 +1156,7 @@ async def preparing(tmp_path):
             status=Status.FOUND,
             metadata=metadata,
             selected_source=SourceId.DMM,
+            warnings=['JavDB API 返回失败：{"success": 0, "message": "請登錄帳號"}'],
             classification=Classification(category=Category.CENSORED),
             results=[SimpleNamespace(source=SourceId.DMM, actor_ids={})],
         )
@@ -1188,6 +1210,7 @@ async def test_shared_original_is_downloaded_once_and_primary_is_cropped_only_on
     monkeypatch.setattr("caress.processing.fetch_artwork", fetch)
     monkeypatch.setattr("caress.processing.crop_poster", crop)
     prepared = await processor.prepare("ABC-123")
+    assert processor.scraper.scrape.return_value.warnings[0] in prepared.warnings
     fetch.assert_awaited_once()
     crop.assert_not_called()
     client = SimpleNamespace(
