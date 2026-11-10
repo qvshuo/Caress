@@ -28,6 +28,7 @@ class Prepared:
     mappings: list = field(default_factory=list)
     kind: int | None = None
     digests: dict = field(default_factory=dict)
+    poster_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 class WorkProcessor:
@@ -136,37 +137,26 @@ class WorkProcessor:
         )
         folder.mkdir()
         try:
-            downloaded = {}
+            planned = {}
             for candidate, role in image_plan(metadata.artwork):
+                entry = planned.setdefault(candidate.url, (candidate, []))
+                kind = "Primary" if role == "poster" else "Backdrop"
+                if kind not in entry[1]:
+                    entry[1].append(kind)
+            for url, (candidate, kinds) in planned.items():
                 try:
-                    if candidate.url not in downloaded:
-                        image = await fetch_artwork(self.scraper.client, candidate)
-                        path = folder / (
-                            hashlib.sha256(candidate.url.encode()).hexdigest()
-                            + ".original"
-                        )
-                        await asyncio.to_thread(path.write_bytes, image)
-                        downloaded[candidate.url] = path
-                    path = downloaded[candidate.url]
-                    data = await asyncio.to_thread(path.read_bytes)
-                    if role == "poster":
-                        data = (await asyncio.to_thread(crop_poster, data))["content"]
-                        path = folder / "poster.png"
-                        await asyncio.to_thread(path.write_bytes, data)
-                    if role != "poster" and path not in prepared.digests:
+                    data = await fetch_artwork(self.scraper.client, candidate)
+                    path = folder / (
+                        hashlib.sha256(url.encode()).hexdigest() + ".original"
+                    )
+                    await asyncio.to_thread(path.write_bytes, data)
+                    if "Backdrop" in kinds:
                         prepared.digests[path] = await asyncio.to_thread(
                             pixel_digest, data
                         )
-                    prepared.images.append(
-                        ("Primary" if role == "poster" else "Backdrop", path)
-                    )
+                    prepared.images.extend((kind, path) for kind in kinds)
                 except (FetchError, ValueError, OSError) as exc:
-                    prepared.errors.append(
-                        (
-                            "Primary" if role == "poster" else "Backdrop",
-                            f"{role}: {exc}",
-                        )
-                    )
+                    prepared.errors.extend((kind, f"{kind}: {exc}") for kind in kinds)
             return prepared
 
         except BaseException:
@@ -179,21 +169,36 @@ class WorkProcessor:
         )
         existing = await client.image_info(ident)
         has_primary = any(row["ImageType"] == "Primary" for row in existing)
-        errors = [
-            message
-            for kind, message in prepared.errors
-            if replace or kind != "Primary" or not has_primary
-        ]
+        has_backdrop = any(row["ImageType"] == "Backdrop" for row in existing)
+        fatal, warnings = [], list(prepared.warnings)
+        for kind, message in prepared.errors:
+            if kind == "Primary" and (replace or not has_primary):
+                fatal.append(message)
+            else:
+                warnings.append(message)
         signatures = (
             await client.backdrop_signatures(ident)
             if any(kind == "Backdrop" for kind, _ in prepared.images)
             else set()
         )
+        has_backdrop = has_backdrop or bool(signatures)
         for kind, path in prepared.images:
             if kind == "Primary" and has_primary and not replace:
                 continue
-            data = await asyncio.to_thread(path.read_bytes)
             if kind == "Primary":
+                try:
+                    async with prepared.poster_lock:
+                        poster = path.parent / "poster.png"
+                        if not poster.exists():
+                            original = await asyncio.to_thread(path.read_bytes)
+                            result = await asyncio.to_thread(crop_poster, original)
+                            await asyncio.to_thread(
+                                poster.write_bytes, result["content"]
+                            )
+                    data = await asyncio.to_thread(poster.read_bytes)
+                except (ValueError, OSError) as exc:
+                    fatal.append(f"Primary: {exc}")
+                    continue
                 if has_primary:
                     try:
                         current_image = await client.image(ident, "Primary")
@@ -210,12 +215,15 @@ class WorkProcessor:
                 has_primary = True
                 changed = True
             else:
+                data = await asyncio.to_thread(path.read_bytes)
                 added = await client.append_backdrop(
                     ident, data, signatures, prepared.digests.get(path)
                 )
+                has_backdrop = has_backdrop or added
                 changed = changed or added
+        if not has_backdrop:
+            fatal.append("背景图未能补齐")
         # Portraits are optional and require a verified mapping, an Emby ID and no existing image.
-        warnings = list(prepared.warnings)
         async with self.people_lock:
             for mapping in prepared.mappings:
                 if not mapping["actor_id"]:
@@ -263,6 +271,8 @@ class WorkProcessor:
                     from .emby import sync_error
 
                     warnings.append(sync_error(exc))
-        if errors:
-            raise ValueError("元数据可能已写入，图片未全部成功：" + "; ".join(errors))
+        if fatal:
+            raise ValueError(
+                "元数据可能已写入，图片未全部成功：" + "; ".join([*fatal, *warnings])
+            )
         return warnings, changed

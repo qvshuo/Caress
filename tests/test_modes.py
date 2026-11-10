@@ -49,7 +49,10 @@ async def flow(tmp_path, monkeypatch):
     state = SimpleNamespace(
         items={"1": complete_item()},
         images={
-            "1": {"Primary": [image_bytes("red")], "Backdrop": [image_bytes("blue")]}
+            "1": {
+                "Primary": [image_bytes("red", size=(60, 90))],
+                "Backdrop": [image_bytes("blue")],
+            }
         },
         posts=[],
         prepared=0,
@@ -72,6 +75,7 @@ async def flow(tmp_path, monkeypatch):
         tags=["source tag"],
     )
     state.errors = []
+    state.mappings = []
     state.artwork = [("Primary", image_bytes("red")), ("Backdrop", image_bytes("blue"))]
 
     async def handler(request):
@@ -152,6 +156,7 @@ async def flow(tmp_path, monkeypatch):
             images=images,
             digests=digests,
             errors=state.errors,
+            mappings=state.mappings,
         )
 
     monkeypatch.setattr(WorkProcessor, "_prepare", prepare)
@@ -178,6 +183,7 @@ async def flow(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("replace", [False, True])
 async def test_final_dto_fill_or_replace_protects_user_data(flow, replace):
+    flow.items["1"]["ProviderIds"].pop("caress")
     original = deepcopy(flow.items["1"])
     flow.items["1"]["Overview"] = "  "
     rows = await flow.run("force" if replace else "scrape")
@@ -200,8 +206,14 @@ async def test_final_dto_fill_or_replace_protects_user_data(flow, replace):
         "PremiereDate",
         "ProductionYear",
     ]:
-        if not replace:
-            assert final[key] == original[key]
+        expected = {
+            "Studios": [{"Name": "source studio"}],
+            "GenreItems": [{"Name": "source genre"}],
+            "OriginalTitle": "source original",
+            "PremiereDate": "2024-02-03T00:00:00Z",
+            "ProductionYear": 2024,
+        }
+        assert final[key] == (expected[key] if replace else original[key])
     assert final["TagItems"] == (
         [{"Name": "user tag"}, {"Name": "source tag"}]
         if replace
@@ -209,7 +221,7 @@ async def test_final_dto_fill_or_replace_protects_user_data(flow, replace):
     )
     for key in ["UserData", "LockData", "LockedFields", "Path", "DateCreated", "Id"]:
         assert final[key] == original[key]
-    assert final["ProviderIds"] == original["ProviderIds"]
+    assert final["ProviderIds"] == {**original["ProviderIds"], "caress": "ABC-123"}
     assert len(flow.images["1"]["Backdrop"]) == 1
     assert not any("/Images/" in path for path in flow.posts)
 
@@ -217,23 +229,42 @@ async def test_final_dto_fill_or_replace_protects_user_data(flow, replace):
 @pytest.mark.asyncio
 async def test_complete_item_skips_source_and_history_does_not_block_missing_cover(
     flow,
+    monkeypatch,
 ):
+    from unittest.mock import AsyncMock
+
+    flow.service.settings.translation.model = "model"
+    flow.service.settings.translation.api_key = "secret"
+    verify = AsyncMock(return_value=True)
+    monkeypatch.setattr("caress.translation.Translator.verify", verify)
     code, identity, _ = identify(flow.items["1"])
     runtime = flow.service.runtime
     runtime.save_record("s", "1", identity, code, "success")
     old = runtime.record("s", "1", identity, code)
     assert (await flow.run())[0]["status"] == "skipped" and flow.prepared == 0
+    verify.assert_not_awaited()
     assert runtime.record("s", "1", identity, code) == old
     flow.images["1"].pop("Primary")
     assert (await flow.run())[0]["status"] == "success" and flow.prepared == 1
     assert flow.posts == ["Items/1/Images/Primary"]
-    assert flow.images["1"]["Primary"] == [image_bytes("red")]
+    assert flow.images["1"]["Primary"] == [image_bytes("red", size=(60, 90))]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("previous", [None, "success", "failed", "cancelled"])
-async def test_no_source_values_skip_without_inventing_success(flow, previous):
-    flow.items["1"]["Overview"] = ""
+@pytest.mark.parametrize(
+    "action,previous",
+    [
+        ("scrape", None),
+        ("scrape", "success"),
+        ("scrape", "failed"),
+        ("scrape", "cancelled"),
+        ("force", None),
+    ],
+)
+async def test_no_source_values_skip_without_inventing_success(flow, action, previous):
+    if action == "scrape":
+        flow.items["1"]["Overview"] = ""
+    original = deepcopy(flow.items["1"])
     code, identity, _ = identify(flow.items["1"])
     runtime = flow.service.runtime
     if previous:
@@ -241,7 +272,8 @@ async def test_no_source_values_skip_without_inventing_success(flow, previous):
     old = runtime.record("s", "1", identity, code)
     flow.metadata = SourceMetadata(code="ABC-123", title=" \t")
     flow.artwork = []
-    assert (await flow.run())[0]["status"] == "skipped"
+    assert (await flow.run(action))[0]["status"] == "skipped"
+    assert flow.items["1"] == original
     assert not flow.posts and runtime.record("s", "1", identity, code) == old
 
 
@@ -287,7 +319,7 @@ async def test_identical_force_is_noop_and_new_images_append_once(flow):
     assert len(flow.images["1"]["Backdrop"]) == 2 and flow.images["1"]["Backdrop"][
         0
     ] == image_bytes("blue")
-    assert flow.images["1"]["Primary"] == [image_bytes("green")]
+    assert flow.images["1"]["Primary"] == [image_bytes("green", size=(60, 90))]
 
 
 @pytest.mark.asyncio
@@ -295,6 +327,8 @@ async def test_identical_force_is_noop_and_new_images_append_once(flow):
 async def test_partial_write_can_be_completed_by_scrape(flow, cancel):
     flow.items["1"]["Overview"] = ""
     flow.images["1"].pop("Primary")
+    code, identity, _ = identify(flow.items["1"])
+    flow.service.runtime.save_record("s", "1", identity, code, "success")
     if cancel:
         flow.block_image = asyncio.Event()
         flow.service.batches.start(["1"], "scrape", None)
@@ -310,25 +344,50 @@ async def test_partial_write_can_be_completed_by_scrape(flow, cancel):
         rows[0]["status"] == ("cancelled" if cancel else "failed")
         and "部分" in rows[0]["error"]
     )
+    assert flow.service.runtime.record("s", "1", identity, code)["succeeded_at"]
     assert (
         flow.items["1"]["Overview"] == "source plot"
         and "Primary" not in flow.images["1"]
     )
+    if not cancel:
+        from caress.library import project
+
+        assert (
+            project(flow.items["1"], flow.service.runtime, "s")["status"]
+            == "rescrape_failed"
+        )
     assert (await flow.run())[0]["status"] == "success"
     assert flow.posts.count("Items/1") == 1 and flow.images["1"]["Primary"]
 
 
 @pytest.mark.asyncio
-async def test_same_code_items_share_one_prepare_and_write_independently(flow):
+@pytest.mark.parametrize("failure", [False, True])
+async def test_same_code_items_with_different_missing_fields_and_posters(flow, failure):
     flow.items["1"]["Overview"] = ""
     flow.items["2"] = deepcopy(flow.items["1"])
     flow.items["2"]["Id"] = "2"
     flow.images["2"] = deepcopy(flow.images["1"])
-    assert all(row["status"] == "success" for row in await flow.run(ids=["1", "2"]))
-    assert (
-        flow.prepared == 1
-        and flow.items["1"]["Overview"] == flow.items["2"]["Overview"] == "source plot"
-    )
+    flow.images["2"].pop("Primary")
+    flow.items["2"]["Overview"] = "keep this plot"
+    flow.items["2"]["Studios"] = []
+    flow.fail_image = failure
+    rows = await flow.run(ids=["1", "2"])
+    assert [row["status"] for row in rows] == [
+        "success",
+        "failed" if failure else "success",
+    ]
+    assert flow.prepared == 1 and flow.items["1"]["Overview"] == "source plot"
+    assert flow.items["2"]["Overview"] == "keep this plot" and flow.items["2"][
+        "Studios"
+    ] == [{"Name": "source studio"}]
+    assert flow.images["1"]["Primary"] == [image_bytes("red", size=(60, 90))]
+    if failure:
+        assert "Primary" not in flow.images["2"]
+    else:
+        assert flow.images["2"]["Primary"] == flow.images["1"]["Primary"]
+        assert [p for p in flow.posts if "/Images/Primary" in p] == [
+            "Items/2/Images/Primary"
+        ]
 
 
 def test_semantic_missing_fields_and_year_does_not_replace_date():
@@ -377,16 +436,9 @@ async def test_failed_poster_is_only_fatal_when_that_poster_is_requested(flow, r
     rows = await flow.run("force" if replace else "scrape")
     assert rows[0]["status"] == ("failed" if replace else "success")
     assert flow.items["1"]["Overview"] == "source plot"
-    assert flow.images["1"]["Primary"] == [image_bytes("red")]
-
-
-@pytest.mark.asyncio
-async def test_force_with_missing_source_values_preserves_everything(flow):
-    original = deepcopy(flow.items["1"])
-    flow.metadata = SourceMetadata(code="ABC-123", title=" ")
-    flow.artwork = []
-    assert (await flow.run("force"))[0]["status"] == "skipped"
-    assert flow.items["1"] == original and not flow.posts
+    assert flow.images["1"]["Primary"] == [image_bytes("red", size=(60, 90))]
+    if not replace:
+        assert "poster: crop failed" in rows[0]["warnings"]
 
 
 def test_fill_merges_only_filename_tags_into_nonempty_user_tags():
@@ -406,12 +458,77 @@ def test_fill_merges_only_filename_tags_into_nonempty_user_tags():
 
 
 @pytest.mark.asyncio
-async def test_complete_batch_does_not_contact_translation(flow, monkeypatch):
-    from unittest.mock import AsyncMock
+@pytest.mark.parametrize("replace", [False, True])
+@pytest.mark.parametrize(
+    "existing,valid", [(True, False), (False, False), (False, True)]
+)
+async def test_optional_backdrop_failure_only_blocks_when_no_background_remains(
+    flow, replace, existing, valid
+):
+    flow.items["1"]["Overview"] = ""
+    if not existing:
+        flow.images["1"].pop("Backdrop")
+    flow.artwork = [("Backdrop", image_bytes("yellow"))] if valid else []
+    flow.errors = [("Backdrop", "sample unavailable")]
+    rows = await flow.run("force" if replace else "scrape")
+    assert flow.items["1"]["Overview"] == "source plot"
+    if existing or valid:
+        assert (
+            rows[0]["status"] == "success"
+            and "sample unavailable" in rows[0]["warnings"]
+        )
+        assert flow.images["1"]["Backdrop"]
+    else:
+        assert rows[0]["status"] == "failed" and "背景图未能补齐" in rows[0]["error"]
+        assert "sample unavailable" in rows[0]["error"]
 
-    flow.service.settings.translation.model = "model"
-    flow.service.settings.translation.api_key = "secret"
-    verify = AsyncMock(return_value=True)
-    monkeypatch.setattr("caress.translation.Translator.verify", verify)
-    assert (await flow.run())[0]["status"] == "skipped"
-    verify.assert_not_awaited()
+
+@pytest.mark.asyncio
+async def test_portraits_only_fetch_missing_actor_once_per_batch_and_retry_on_next_run(
+    flow, monkeypatch
+):
+    people = [
+        {"Id": name, "Name": name, "Type": "Actor", "PrimaryImageTag": "tag"}
+        for name in ["A", "B"]
+    ] + [{"Id": "C", "Name": "C", "Type": "Actor"}]
+    flow.items["1"]["People"] = people
+    flow.metadata.actors = [Actor(name=name) for name in ["A", "B", "C"]]
+    flow.items["1"]["Overview"] = ""
+    flow.items["2"] = deepcopy(flow.items["1"])
+    flow.items["2"]["Id"] = "2"
+    flow.images["2"] = deepcopy(flow.images["1"])
+    for name in ["A", "B"]:
+        flow.images[name] = {"Primary": [image_bytes("red")]}
+    original = deepcopy({name: flow.images[name] for name in ["A", "B"]})
+    flow.mappings = [
+        {"name": name, "actor_id": "verified-" + name} for name in ["A", "B", "C"]
+    ]
+    calls = []
+
+    async def save(self, actors, *, kind=None):
+        calls.extend(actor.name for actor in actors)
+        if len(calls) == 1:
+            return [{"status": "not_found"}]
+        folder = self.output / "actors"
+        folder.mkdir(exist_ok=True)
+        (folder / "C.png").write_bytes(image_bytes("blue"))
+        return [{"status": "saved"}]
+
+    monkeypatch.setattr("caress.portraits.Gfriends.save", save)
+    await flow.run(ids=["1", "2"])
+    assert calls == ["C"] and not flow.images.get("C")
+    await flow.run(ids=["1", "2"])
+    assert calls == ["C", "C"] and flow.images["C"]["Primary"] == [image_bytes("blue")]
+    assert {name: flow.images[name] for name in ["A", "B"]} == original
+
+
+@pytest.mark.asyncio
+async def test_uncroppable_required_primary_preserves_old_poster_and_reports_partial_write(
+    flow,
+):
+    flow.items["1"]["Overview"] = ""
+    flow.artwork = [("Primary", image_bytes(size=(1, 1)))]
+    rows = await flow.run("force")
+    assert rows[0]["status"] == "failed" and "Primary" in rows[0]["error"]
+    assert flow.items["1"]["Overview"] == "source plot"
+    assert flow.images["1"]["Primary"] == [image_bytes("red", size=(60, 90))]

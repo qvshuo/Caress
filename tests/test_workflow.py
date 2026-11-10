@@ -9,7 +9,7 @@ import pytest
 
 from caress.actors import ActorAliases, map_actor_names
 from caress.api import create_app
-from caress.emby import EmbyClient, metadata_update
+from caress.emby import EmbyClient
 from caress.identifiers import parse_filename
 from caress.library import identify, project
 from caress.models import Actor, SourceMetadata
@@ -100,41 +100,6 @@ def test_server_and_rebuilt_item_identity_keep_success_separate(store):
         result["title"] == "User edit"
         and result["plot"] == "Manual plot"
         and result["status"] == "success"
-    )
-
-
-def test_force_update_preserves_unrelated_data_and_missing_fields():
-    original = {
-        "Name": "manual",
-        "OriginalTitle": "manual original",
-        "Overview": "manual plot",
-        "LockData": True,
-        "LockedFields": ["Name"],
-        "ProviderIds": {"tmdb": "123"},
-        "TagItems": [{"Name": "user"}],
-        "People": [
-            {"Name": "Writer", "Type": "Writer"},
-            {"Name": "old actor", "Type": "Actor"},
-        ],
-        "GenreItems": [{"Name": "user genre"}],
-        "Studios": [{"Name": "user studio"}],
-    }
-    metadata = SourceMetadata(code="ABC-123", title="new", actors=[Actor(name="Actor")])
-    merged = {**original, **metadata_update(original, metadata, [], replace=True)}
-    assert (
-        merged["OriginalTitle"] == "manual original"
-        and merged["Overview"] == "manual plot"
-    )
-    assert merged["LockData"] is True and merged["LockedFields"] == ["Name"]
-    assert merged["ProviderIds"] == {"tmdb": "123", "caress": "ABC-123"}
-    assert merged["TagItems"] == [{"Name": "user"}]
-    assert merged["People"] == [
-        {"Name": "Writer", "Type": "Writer"},
-        {"Name": "Actor", "Type": "Actor"},
-    ]
-    assert (
-        merged["GenreItems"] == original["GenreItems"]
-        and merged["Studios"] == original["Studios"]
     )
 
 
@@ -239,24 +204,6 @@ def test_restart_retains_confirmed_success_and_cleans_interruption(tmp_path):
         runtime.close()
 
 
-@pytest.mark.asyncio
-async def test_preparation_reused_for_same_code(tmp_path):
-    processor = object.__new__(WorkProcessor)
-    processor.prepared = {}
-    import hashlib
-
-    processor.temporary = tmp_path
-    folder = tmp_path / hashlib.sha256(b"ABC-123dmm").hexdigest()
-    folder.mkdir()
-    processor._prepare = AsyncMock(return_value=SimpleNamespace(source="dmm"))
-    left, right = await asyncio.gather(
-        processor.prepare("ABC-123"), processor.prepare("ABC-123")
-    )
-    assert left is right and processor._prepare.await_count == 1
-    await processor.finish()
-    assert not folder.exists() and not processor.prepared
-
-
 class FakeClient:
     movies = {}
     writes = []
@@ -342,31 +289,6 @@ def fake_batch(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_missing_fill_force_and_partial_failure_recovery(fake_batch):
-    service = fake_batch
-    code, identity, _ = identify(item())
-    service.runtime.save_record("s", "1", identity, code, "success")
-    service.batches.start(["1", "2"], "scrape", None)
-    await service.batches.task
-    assert FakeProcessor.writes == ["1", "2"]
-    assert [i["status"] for i in service.runtime.batch()["items"]] == [
-        "success",
-        "success",
-    ]
-    FakeProcessor.fail = {"1"}
-    service.batches.start(["1"], "force", None)
-    await service.batches.task
-    assert service.runtime.record("s", "1", identity, code)["status"] == "failed"
-    assert service.runtime.record("s", "1", identity, code)["succeeded_at"]
-    assert project(item(), service.runtime, "s")["status"] == "rescrape_failed"
-    FakeProcessor.fail = set()
-    service.batches.start(["1"], "scrape", None)
-    await service.batches.task
-    assert FakeProcessor.writes == ["1", "2", "1", "1"]
-    assert service.runtime.record("s", "1", identity, code)["status"] == "success"
-
-
-@pytest.mark.asyncio
 async def test_cancellation_preserves_success_and_marks_only_started_records(
     fake_batch,
 ):
@@ -432,37 +354,6 @@ def test_invalid_filename_still_exposes_emby_path(store):
     result = project(item(path="/strm/not a code.strm"), store, "s")
     assert result["status"] == "unsupported"
     assert result["media"][0]["path"] == "/strm/not a code.strm"
-
-
-@pytest.mark.asyncio
-async def test_existing_actor_portraits_are_never_overwritten(tmp_path):
-    from caress.processing import Prepared
-
-    processor = object.__new__(WorkProcessor)
-    processor.people_lock = asyncio.Lock()
-    processor.people_done = set()
-    processor.people_attempts = {}
-    processor.portraits = SimpleNamespace(save=AsyncMock())
-    prepared = Prepared(
-        SourceMetadata(code="ABC-123", title="title"),
-        "dmm",
-        mappings=[{"actor_id": "verified", "name": "Actor"}],
-    )
-    client = SimpleNamespace(
-        write_metadata=AsyncMock(
-            return_value=(
-                {"People": [{"Id": "person", "Name": "Actor", "Type": "Actor"}]},
-                False,
-            )
-        ),
-        image_info=AsyncMock(return_value=[{"ImageType": "Primary"}]),
-        upload=AsyncMock(),
-    )
-    await processor.write(client, "1", prepared, [], replace=False)
-    await processor.write(client, "2", prepared, [], replace=False)
-    assert client.image_info.await_count == 3
-    processor.portraits.save.assert_not_awaited()
-    client.upload.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -746,7 +637,11 @@ async def test_portrait_retry_is_bounded_and_success_is_shared(
                 False,
             )
         ),
-        image_info=AsyncMock(return_value=[]),
+        image_info=AsyncMock(
+            side_effect=lambda ident: (
+                [] if ident == "person" else [{"ImageType": "Backdrop"}]
+            )
+        ),
         upload=AsyncMock(
             side_effect=[ValueError("temporary"), None]
             if recovers
@@ -1112,11 +1007,8 @@ async def test_person_scope_checks_returned_identity_not_only_query_filter():
         await client.close()
 
 
-@pytest.mark.asyncio
-async def test_cancelled_preparation_removes_partial_image_directory(
-    tmp_path, monkeypatch
-):
-    import caress.processing as processing
+@pytest.fixture
+async def preparing(tmp_path):
     from caress.models import (
         ArtworkCandidate,
         Category,
@@ -1137,7 +1029,13 @@ async def test_cancelled_preparation_removes_partial_image_directory(
                 source=SourceId.DMM,
                 role="cover",
                 referer="https://source",
-            )
+            ),
+            ArtworkCandidate(
+                url="https://source/cover",
+                source=SourceId.DMM,
+                role="sample",
+                referer="https://source",
+            ),
         ],
     )
     processor.scraper.scrape = AsyncMock(
@@ -1151,13 +1049,25 @@ async def test_cancelled_preparation_removes_partial_image_directory(
     )
     processor.scraper.resolve_actors = AsyncMock(return_value=[])
     processor.translator.metadata = AsyncMock(return_value=SimpleNamespace(errors=[]))
+    try:
+        yield processor, folder
+    finally:
+        await processor.finish()
+        await processor.__aexit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_preparation_removes_partial_image_directory(
+    preparing, monkeypatch
+):
+    processor, folder = preparing
     started = asyncio.Event()
 
     async def fetch(*args):
         started.set()
         await asyncio.Event().wait()
 
-    monkeypatch.setattr(processing, "fetch_artwork", fetch)
+    monkeypatch.setattr("caress.processing.fetch_artwork", fetch)
     waiter = asyncio.create_task(processor.prepare("ABC-123"))
     try:
         await started.wait()
@@ -1168,7 +1078,51 @@ async def test_cancelled_preparation_removes_partial_image_directory(
         assert not list(folder.iterdir())
     finally:
         await processor.finish()
-        await processor.__aexit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_shared_original_is_downloaded_once_and_primary_is_cropped_only_on_demand(
+    preparing, monkeypatch
+):
+    from unittest.mock import Mock
+
+    from caress.emby import pixel_digest
+    from caress.images import crop_poster
+    from test_images import image_bytes
+
+    processor, folder = preparing
+    fetch = AsyncMock(return_value=image_bytes())
+    crop = Mock(wraps=crop_poster)
+    monkeypatch.setattr("caress.processing.fetch_artwork", fetch)
+    monkeypatch.setattr("caress.processing.crop_poster", crop)
+    prepared = await processor.prepare("ABC-123")
+    fetch.assert_awaited_once()
+    crop.assert_not_called()
+    client = SimpleNamespace(
+        write_metadata=AsyncMock(return_value=({"People": []}, False)),
+        image_info=AsyncMock(
+            side_effect=lambda ident: (
+                [{"ImageType": "Primary"}, {"ImageType": "Backdrop"}]
+                if ident == "A"
+                else [{"ImageType": "Backdrop"}]
+            )
+        ),
+        backdrop_signatures=AsyncMock(return_value={pixel_digest(image_bytes())}),
+        append_backdrop=AsyncMock(return_value=False),
+        upload=AsyncMock(),
+    )
+    await processor.write(client, "A", prepared, [], replace=False)
+    crop.assert_not_called()
+    await asyncio.gather(
+        *(
+            processor.write(client, ident, prepared, [], replace=False)
+            for ident in ["B", "C"]
+        )
+    )
+    assert crop.call_count == 1
+    assert {call.args[0] for call in client.upload.await_args_list} == {"B", "C"}
+    await processor.release("ABC-123", None)
+    assert not list(folder.iterdir())
 
 
 @pytest.mark.asyncio

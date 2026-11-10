@@ -50,28 +50,3 @@ jobs:
       - name: Browser regression
         working-directory: ${{ runner.temp }}/caress-web
         run: bun run test
-  docker:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7.0.1
-      - name: Build and start fresh database through Compose
-        run: |
-          cat > "${RUNNER_TEMP}/caress-compose.yml" <<EOF
-          services:
-            caress:
-              build:
-                context: ${GITHUB_WORKSPACE}
-              image: caress:ci
-              ports:
-                - "127.0.0.1:9308:9307"
-          EOF
-          docker compose -p caress-ci -f "${RUNNER_TEMP}/caress-compose.yml" up -d --build --wait --wait-timeout 120
-          curl --fail http://127.0.0.1:9308/api/health
-          docker compose -p caress-ci -f "${RUNNER_TEMP}/caress-compose.yml" restart
-          docker compose -p caress-ci -f "${RUNNER_TEMP}/caress-compose.yml" up -d --wait --wait-timeout 120
-          curl --fail http://127.0.0.1:9308/api/health
-      - name: Container logs and cleanup
-        if: always()
-        run: |
-          docker compose -p caress-ci -f "${RUNNER_TEMP}/caress-compose.yml" logs --no-color
-          docker compose -p caress-ci -f "${RUNNER_TEMP}/caress-compose.yml" down

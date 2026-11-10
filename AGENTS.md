@@ -17,6 +17,7 @@
 
 ## 开发与交付
 - 用 Docker Compose 构建、部署、重启；生产只有 Python 运行时，以非 root 运行，仅挂载 `/data`。
+- CI 保留 Python 与前端两个 Job；发布前在本地通过 Compose 验证构建、启动和重启。
 - 后端：`uv run --no-project --python 3.15 --with-requirements requirements-dev.txt ruff check --no-cache caress tests`；同一环境运行 `python -m pytest tests -q`。
 - 前端在仓库外的副本执行 `bun install --frozen-lockfile`、`bun run build`（含严格类型检查）及 `bun run test`；Playwright 需安装 Chromium。
 - 测试源、bun.lock、YuNet 模型和许可必须跟踪 Git；依赖环境、缓存、构建产物、测试输出和临时夹具放仓库外。真实密钥、数据库、日志、图片缓存和本地 Compose 不得提交。
