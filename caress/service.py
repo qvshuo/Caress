@@ -106,7 +106,7 @@ class Service:
 
     async def scoped_item(self, client, ident):
         if not await client.contains(ident):
-            raise ValueError("项目不属于已选择的媒体库，请刷新列表")
+            raise ValueError("作品不属于所选媒体库，请刷新列表")
         return await client.item(ident)
 
     async def detail(self, ident):
@@ -146,7 +146,7 @@ class Service:
         if session and session.expires <= time.monotonic():
             self.crop = session = None
         if not session or session.token != token or session.item != ident:
-            raise ValueError("裁剪会话已过期，请重新获取原图")
+            raise ValueError("裁剪已过期，请重新打开")
         return session
 
     def crop_close(self, ident, token):
@@ -196,7 +196,7 @@ class Service:
                     TimeoutError,
                 ) as exc:
                     raise ValueError(
-                        "无法获取完整原图，请稍后重试或在 Emby 检查背景图"
+                        "无法获取原图，请检查 Emby 背景图或数据来源"
                     ) from exc
                 data = await asyncio.to_thread(crop_source_image, data)
             token = uuid.uuid4().hex
@@ -226,7 +226,7 @@ class Service:
                 item = await self.scoped_item(client, ident)
                 _, identity, _ = identify(item)
                 if client.server != session.server or identity != session.identity:
-                    raise ValueError("Emby 项目已变化，请重新获取原图")
+                    raise ValueError("Emby 作品已变化，请重新打开裁剪窗口")
                 data = (await asyncio.to_thread(crop_poster, session.data, box))[
                     "content"
                 ]

@@ -30,7 +30,7 @@ export function ArtworkImage({
     return (
       <span
         role="img"
-        aria-label={fallback ? "暂无头像" : "图片加载失败"}
+        aria-label={fallback ? "头像加载失败" : "图片加载失败"}
         className={cn(
           "inline-flex items-center justify-center bg-muted text-muted-foreground",
           className,

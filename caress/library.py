@@ -30,18 +30,18 @@ def file_paths(item):
 def identify(item):
     paths = file_paths(item)
     if not paths:
-        raise ValueError("Emby 未提供实际视频或 STRM 文件路径")
+        raise ValueError("Emby 未返回视频或 STRM 文件路径")
     codes, media = set(), []
     for path in paths:
         if urlsplit(path).scheme and not PureWindowsPath(path).is_absolute():
-            raise ValueError("无法从播放 URL 确定文件身份")
+            raise ValueError("无法通过播放地址识别作品")
         code, row = parse_filename(Path(PureWindowsPath(path).as_posix()))
         codes.add(code)
         media.append(row)
     if len(codes) != 1:
-        raise ValueError("同一 Item 的文件对应不同番号，请在 Emby 检查关联")
+        raise ValueError("同一作品包含不同番号的文件，请检查 Emby 关联关系")
     if not item.get("DateCreated"):
-        raise ValueError("Emby 未返回创建时间，无法安全识别重新入库项目")
+        raise ValueError("Emby 未返回作品创建时间，无法确认作品身份")
     code = codes.pop()
     identity = hashlib.sha256(
         json.dumps([item["DateCreated"], code]).encode()

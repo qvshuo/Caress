@@ -100,7 +100,7 @@ export default function Work({
             }}
           >
             <ArrowLeft className="size-4" />
-            上一个作品
+            上一部
           </Button>
           <Button variant="ghost" onClick={back}>
             返回
@@ -114,7 +114,7 @@ export default function Work({
               if (next) open(next);
             }}
           >
-            下一个作品
+            下一部
             <ArrowRight className="size-4" />
           </Button>
         </div>
@@ -124,7 +124,7 @@ export default function Work({
         <Alert role="alert">
           <p>{error}</p>
           <Button variant="outline" onClick={refresh}>
-            重试加载
+            重新加载
           </Button>
         </Alert>
       ) : !work ? (
@@ -180,7 +180,7 @@ export default function Work({
               <div className="flex flex-wrap items-center gap-2">
                 {work.status !== "unsupported" && (
                   <Select
-                    label="刮削操作"
+                    label="刮削方式"
                     value={action}
                     onChange={(value) => setAction(value as Action)}
                     options={actions}
@@ -188,7 +188,7 @@ export default function Work({
                 )}
                 {work.status !== "unsupported" && (
                   <Select
-                    label="刮削来源"
+                    label="数据来源"
                     value={source}
                     onChange={(value) => setSource(value as Source | "")}
                     options={{
@@ -220,13 +220,13 @@ export default function Work({
               <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm [&>dd]:wrap-anywhere">
                 {(work.release_date || work.year) && (
                   <>
-                    <dt className="text-muted-foreground">发行</dt>
+                    <dt className="text-muted-foreground">发行日期</dt>
                     <dd>{work.release_date?.slice(0, 10) || work.year}</dd>
                   </>
                 )}
                 {!!work.studios.length && (
                   <>
-                    <dt className="text-muted-foreground">厂商</dt>
+                    <dt className="text-muted-foreground">制作商</dt>
                     <dd>{work.studios.join("、")}</dd>
                   </>
                 )}
@@ -330,7 +330,7 @@ export default function Work({
                       {[
                         media.subtitles ? "字幕" : "",
                         media.uncensored ? "无码破解" : "",
-                        media.part ? `第 ${media.part} 分集` : "",
+                        media.part ? `第 ${media.part} 集` : "",
                       ]
                         .filter(Boolean)
                         .join(" · ")}
@@ -351,7 +351,7 @@ export default function Work({
             />
           )}
           {crop && (
-            <Suspense fallback={<Empty>正在载入…</Empty>}>
+            <Suspense fallback={<Empty>正在加载…</Empty>}>
               <CropEditor
                 id={id}
                 source={source || undefined}

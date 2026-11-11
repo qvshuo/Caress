@@ -67,7 +67,7 @@ class FC2(Source):
                 )
                 if plot and "preparing for translation" in plot.lower():
                     plot = None
-                    warnings.append("FC2 简介尚未准备好")
+                    warnings.append("FC2 暂无简介")
             except FetchError as exc:
                 warnings.append(f"FC2 简介获取失败：{exc}")
         metadata = SourceMetadata(

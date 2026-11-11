@@ -39,9 +39,9 @@ class CatalogRules(BaseModel):
             for value in getattr(self, f"{category.value}_prefixes"):
                 prefix = value.upper()
                 if not re.fullmatch(r"[A-Z0-9]+(?:-[A-Z0-9]+)*", prefix):
-                    raise ValueError(f"invalid prefix: {value!r}")
+                    raise ValueError(f"番号前缀无效：{value!r}")
                 if prefix in self._categories and self._categories[prefix] != category:
-                    raise ValueError(f"conflicting prefix: {prefix}")
+                    raise ValueError(f"番号前缀冲突：{prefix}")
                 self._categories[prefix] = category
         return self
 
@@ -105,7 +105,7 @@ def normalize_code(value: str) -> str:
     if match := FC2.fullmatch(code):
         return f"FC2PPV-{match[1]}"
     if code.startswith("FC2"):
-        raise ValueError("invalid FC2 article number")
+        raise ValueError("FC2 番号无效")
     code = re.sub(r"\s+", "", code)
     if NUMERIC.fullmatch(code):
         return code
@@ -115,4 +115,4 @@ def normalize_code(value: str) -> str:
         return code
     if match := STANDARD.fullmatch(code) or CONCATENATED.fullmatch(code):
         return f"{match[1].rstrip('-_')}-{match[2]}"
-    raise ValueError(f"unsupported catalog number: {value!r}; supply a number, not a filename")
+    raise ValueError(f"不支持的番号格式：{value!r}")

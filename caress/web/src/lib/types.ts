@@ -73,8 +73,6 @@ export type Action = "scrape" | "force";
 export interface Batch {
   id: string;
   status: string;
-  action: Action;
-  source: Source | null;
   error?: string;
   items: {
     id: string;
@@ -83,6 +81,7 @@ export interface Batch {
     error?: string;
     warnings?: string[];
     note?: string;
+    writing?: boolean;
     action?: Action;
     source?: Source | null;
   }[];

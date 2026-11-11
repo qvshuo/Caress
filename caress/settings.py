@@ -46,7 +46,7 @@ class TranslationSettings(BaseModel):
             or parsed.query
             or parsed.fragment
         ):
-            raise ValueError("translation endpoint requires an HTTP or HTTPS URL")
+            raise ValueError("翻译服务地址必须使用 HTTP 或 HTTPS")
         return self
 
     @property
@@ -73,7 +73,7 @@ class EmbySettings(BaseModel):
                 or parsed.query
                 or parsed.fragment
             ):
-                raise ValueError("Emby requires an HTTP or HTTPS URL")
+                raise ValueError("Emby 地址必须使用 HTTP 或 HTTPS")
         return value.rstrip("/")
 
 

@@ -5,22 +5,29 @@ export function BatchProgress({
   batch,
   order,
   cancel,
+  stopping,
 }: {
   batch: Batch;
   order: WorkNeighbor[];
   cancel: () => void;
+  stopping: boolean;
 }) {
   const busy = batch.status === "running";
   const done = batch.items.filter(
     (i) => !["pending", "running"].includes(i.status),
   ).length;
-  const label = (item: Batch["items"][number]) =>
-    item.code || order.find((w) => w.id === item.id)?.label || item.id;
+  const mixed = new Set(batch.items.map((i) => `${i.action || "scrape"}:${i.source || ""}`)).size > 1;
+  const label = (item: Batch["items"][number]) => {
+    const code = item.code || order.find((w) => w.id === item.id)?.label || item.id;
+    const sourceNames: Record<string, string> = { javdb: "JavDB", javbus: "JavBus", dmm: "DMM", fc2: "FC2", avsox: "AVSOX", airav: "AirAV", "1pondo": "一本道", caribbeancom: "Caribbeancom", heyzo: "HEYZO", avbase: "AVbase" };
+    return [code, mixed && item.action === "force" ? "替换" : "", mixed && item.source ? sourceNames[item.source] || item.source : ""].filter(Boolean).join(" · ");
+  };
   const current = batch.items.filter((i) => i.status === "running");
   const waiting = batch.items.filter((i) => i.status === "pending");
   const details = batch.items.filter(
     (i) => i.error || i.warnings?.length || i.note,
   );
+  const cancelled = batch.items.filter((i) => i.status === "cancelled").length;
   const heading = busy
     ? `处理中 · ${done}/${batch.items.length}`
     : batch.status === "cancelled"
@@ -37,13 +44,17 @@ export function BatchProgress({
         <p className="tabular-nums text-muted-foreground">
           {heading}
           {` · ${batch.items.filter((i) => i.status === "success").length} 成功 · ${batch.items.filter((i) => i.status === "failed").length} 失败 · ${batch.items.filter((i) => i.status === "skipped").length} 跳过`}
+          {cancelled > 0 && ` · ${cancelled} 取消`}
         </p>
         {busy && (
-          <Button size="sm" variant="outline" onClick={cancel}>
-            取消
+          <Button size="sm" variant="outline" onClick={cancel} disabled={stopping}>
+            {stopping ? "正在停止…" : "取消"}
           </Button>
         )}
       </div>
+      {stopping && batch.items.some((item) => item.status === "running" && item.writing) && (
+        <p className="text-muted-foreground">当前写入完成后停止</p>
+      )}
       {busy && (
         <progress
           className="h-1.5 w-full accent-primary"
@@ -81,7 +92,7 @@ export function BatchProgress({
                     {item.status === "skipped"
                       ? "跳过"
                       : item.status === "cancelled"
-                        ? "取消"
+                        ? "已取消"
                         : "失败"}{" "}
                     · {item.error}
                   </span>

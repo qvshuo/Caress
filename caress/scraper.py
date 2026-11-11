@@ -120,8 +120,10 @@ class Scraper:
             finally:
                 lock.release()
             result.elapsed_seconds = time.monotonic() - started
-            logger.info(
-                "来源请求完成",
+            failed = result.status not in (Status.FOUND, Status.NOT_FOUND, Status.UNSUPPORTED)
+            logger.log(
+                logging.WARNING if failed else logging.INFO,
+                result.message if failed and result.message else "来源请求完成",
                 extra={
                     "event": "source.fetched",
                     "source": source,
@@ -184,9 +186,9 @@ class Scraper:
         )
         if metadata:
             if not metadata.plot:
-                warnings.append(f"{selected.source}：未获取到简介")
+                warnings.append(f"{selected.source}：来源未提供简介")
             if not metadata.artwork:
-                warnings.append(f"{selected.source}：未获取到图片")
+                warnings.append(f"{selected.source}：来源未提供图片")
         failures = [
             r for r in results if r.status not in (Status.NOT_FOUND, Status.UNSUPPORTED)
         ]

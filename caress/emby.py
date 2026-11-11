@@ -4,7 +4,9 @@ import asyncio
 import base64
 import hashlib
 import io
+import json
 import logging
+import re
 from copy import deepcopy
 from datetime import datetime
 from urllib.parse import quote
@@ -21,18 +23,28 @@ def sync_error(exc):
     if isinstance(exc, httpx.HTTPStatusError):
         operation = f"{exc.request.method} {exc.request.url.path}"
         if exc.response.is_stream_consumed:
-            body = exc.response.text
+            try:
+                body = json.dumps(exc.response.json(), ensure_ascii=False)
+            except ValueError:
+                body = "非 JSON 响应"
             key = exc.request.headers.get("X-Emby-Token")
             if key:
                 body = body.replace(key, "[redacted]")
+            body = re.sub(
+                r'(?i)("(?:api.?key|token|secret|password|authorization|cookie)"\s*:\s*)"[^"]*"',
+                r'\1"[redacted]"',
+                body,
+            )[:2000]
             logging.getLogger("caress.emby").error(
                 "Emby %s HTTP %s，响应：%s", operation, exc.response.status_code, body
             )
-        return f"Emby 请求失败（{operation}，HTTP {exc.response.status_code}）"
+        if exc.response.status_code in (401, 403):
+            return f"Emby 认证失败或权限不足（HTTP {exc.response.status_code}）"
+        return f"Emby 请求失败（HTTP {exc.response.status_code}）"
     if isinstance(exc, httpx.TimeoutException):
         return "Emby 请求超时"
     if isinstance(exc, httpx.HTTPError):
-        return "无法连接 Emby，请检查地址、网络与 API Key"
+        return "无法连接 Emby，请检查服务器地址和网络连接"
     return str(exc)
 
 
@@ -225,7 +237,7 @@ class EmbyClient:
     async def test(self):
         info = await self.request("GET", "System/Info")
         if not info.get("Id"):
-            raise ValueError("Emby 没有返回服务器身份")
+            raise ValueError("Emby 未返回服务器信息")
         self.server = info["Id"]
         return {
             "valid": True,
@@ -316,13 +328,13 @@ class EmbyClient:
                     None,
                 )
                 if admin is None:
-                    raise ValueError("Emby API Key 无管理员用户")
+                    raise ValueError("Emby API Key 没有管理员权限")
                 self.user = admin["Id"]
         item = await self.request(
             "GET", f"Users/{self.user}/Items/{quote(str(ident), safe='')}"
         )
         if self.server and item.get("ServerId") != self.server:
-            raise ValueError("Emby 服务器身份变化，请重新连接")
+            raise ValueError("Emby 服务器已变化，请重新连接")
         return item
 
     async def parts(self, item):
@@ -373,11 +385,11 @@ class EmbyClient:
             row["ImageType"] == kind and row.get("ImageIndex", 0) == index
             for row in saved
         ):
-            raise ValueError("Emby 图片回读验证失败")
+            raise ValueError("Emby 图片保存验证失败")
         if not await asyncio.to_thread(
             image_pixels_match, data, (await self.image(ident, kind, index)).content
         ):
-            raise ValueError("Emby 图片内容回读不一致")
+            raise ValueError("Emby 保存的图片与上传内容不一致")
 
     async def write_metadata(self, ident, metadata, media, *, replace):
         original = await self.item(ident)
@@ -393,7 +405,7 @@ class EmbyClient:
                 current.get(k) != original.get(k) for k in ("LockData", "LockedFields")
             )
         ):
-            raise ValueError("Emby 元数据或锁定状态回读不一致；可能已部分写入，请重试")
+            raise ValueError("Emby 元数据保存验证失败，部分内容可能已写入")
         return current, changed
 
     async def backdrop_signatures(self, ident):

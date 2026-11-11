@@ -48,7 +48,7 @@ class Source:
             result = await self._fetch(request)
             if result.metadata and not self.rules.matches(request.code, result.metadata.code):
                 raise FetchError(
-                    Status.IDENTITY_MISMATCH, "来源作品番号与请求不一致"
+                    Status.IDENTITY_MISMATCH, "来源作品番号不匹配"
                 )
             return result
         except FetchError as exc:
@@ -63,7 +63,7 @@ class Source:
                 source=self.id,
                 requested_code=request.code,
                 status=Status.PARSE_ERROR,
-                message=f"来源页面内容无法解析 ({type(exc).__name__})",
+                message=f"来源页面解析失败（{type(exc).__name__}）",
             )
 
     def found(self, request: ScrapeRequest, metadata: SourceMetadata, **kwargs: object) -> SourceResult:

@@ -41,6 +41,8 @@ export function App() {
   const [settings, setSettings] = useState<Preferences | null>(null);
   const [batch, setBatch] = useState<Batch | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const stoppingRef = useRef(false);
   const batchRef = useRef<Batch | null>(null);
   const batchGeneration = useRef(0);
   const [revision, setRevision] = useState(0);
@@ -98,9 +100,7 @@ export function App() {
             setBatch(value);
           }
         })
-        .catch((e: Error) => {
-          if (active) setNotice(e.message);
-        })
+        .catch(() => {})
         .finally(() => {
           pending = false;
         });
@@ -145,11 +145,20 @@ export function App() {
       <BatchProgress
         batch={batch}
         order={order}
+        stopping={stopping}
         cancel={() =>
           run(async () => {
+            if (stoppingRef.current) return;
+            stoppingRef.current = true;
+            setStopping(true);
+            try {
             batchGeneration.current++;
             setBatch(await api<Batch>("batch/cancel", "POST"));
             refresh();
+            } finally {
+              stoppingRef.current = false;
+              setStopping(false);
+            }
           })
         }
       />

@@ -21,14 +21,14 @@ def parse_filename(path: Path) -> tuple[str, MediaFile]:
         if token.startswith("CD"):
             number = int(token[2:])
             if part is not None and part != number:
-                raise ValueError("分集后缀冲突")
+                raise ValueError("文件名中的分集编号冲突")
             part = number
         else:
             subtitles |= token in {"C", "UC"}
             uncensored |= token in {"U", "UC"}
         code = code[: match.start()]
     if path.suffix.lower() not in EXTENSIONS:
-        raise ValueError("不支持的媒体扩展名")
+        raise ValueError("不支持此文件格式")
     code = validate_code(code)
     return code, MediaFile(
         path=path,
@@ -42,11 +42,11 @@ def parse_filename(path: Path) -> tuple[str, MediaFile]:
 def validate_code(value: str) -> str:
     # Only case and supported catalog spelling are normalized; no filename cleanup.
     if not value or value != value.strip() or any(c.isspace() for c in value):
-        raise ValueError("文件名不是有效番号")
+        raise ValueError("无法从文件名识别有效番号")
     try:
         normalized = normalize_code(value)
     except ValueError:
-        raise ValueError("文件名不是有效番号") from None
+        raise ValueError("无法从文件名识别有效番号") from None
     if normalized != value.upper():
-        raise ValueError("文件名不是标准番号")
+        raise ValueError("文件名中的番号格式不符合要求")
     return normalized

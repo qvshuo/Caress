@@ -139,7 +139,7 @@ export function Library({
   const mediaLabel = (w: Work) =>
     [
       w.media.some((m) => m.subtitles) ? "字幕" : "",
-      w.media.some((m) => m.uncensored) ? "破解" : "",
+      w.media.some((m) => m.uncensored) ? "无码破解" : "",
       w.media.some((m) => m.part) ? "分集" : "",
       w.media.length > 1 ? `${w.media.length} 个版本` : "",
     ]
@@ -165,7 +165,7 @@ export function Library({
       {progress}
       <div className="flex flex-wrap items-center gap-2">
         <Select
-          label="刮削操作"
+          label="刮削方式"
           value={action}
           onChange={(value) => setAction(value as Action)}
           options={actions}
@@ -219,7 +219,7 @@ export function Library({
         ) : loading ? (
           <Empty>正在加载…</Empty>
         ) : !rows.length ? (
-          <Empty>没有匹配的作品</Empty>
+          <Empty>没有符合条件的作品</Empty>
         ) : (
           <Table className="min-w-[760px]">
             <TableHeader>
@@ -250,7 +250,7 @@ export function Library({
                         className="block truncate"
                         title={w.code || w.media[0]?.filename}
                       >
-                        {w.code || w.media[0]?.filename || "无法识别"}
+                        {w.code || w.media[0]?.filename || "无法识别番号"}
                       </span>
                     </TableCell>
                     <TableCell>

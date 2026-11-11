@@ -31,7 +31,7 @@ class Runtime:
                     "CREATE TABLE IF NOT EXISTS cooldowns (id TEXT PRIMARY KEY, data TEXT NOT NULL)"
                 )
                 self.connection.execute(
-                    "UPDATE scrapes SET status='failed',error=CASE WHEN error IS NOT NULL THEN '服务重启，写入可能已部分完成' ELSE '服务重启，尚未开始写入' END WHERE status='running'"
+                    "UPDATE scrapes SET status='failed',error=CASE WHEN error IS NOT NULL THEN '服务重启，部分内容可能已写入' ELSE '服务重启，任务未开始写入' END WHERE status='running'"
                 )
                 batch = self.batch()
                 if batch and batch["status"] == "running":
@@ -39,9 +39,9 @@ class Runtime:
                         if item["status"] in ("pending", "running"):
                             item.update(
                                 status="cancelled",
-                                error="服务重启，写入可能已部分完成"
+                                error="服务重启，部分内容可能已写入"
                                 if item.get("writing")
-                                else "服务重启，尚未开始写入",
+                                else "服务重启，任务未开始写入",
                             )
                     batch.update(status="interrupted", current=[])
                     self.connection.execute(

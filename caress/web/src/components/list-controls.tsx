@@ -17,7 +17,7 @@ export function SearchInput({
       <Input
         type="search"
         aria-label="搜索番号或标题"
-        placeholder="搜索"
+        placeholder="搜索番号或标题"
         className="pl-9"
         value={value}
         onChange={(e) => onChange(e.target.value)}
@@ -46,9 +46,9 @@ export function Pagination({
           value={String(pageSize)}
           onChange={(n) => onPageSizeChange(Number(n))}
           options={{
-            100: "100 条/页",
-            1000: "1000 条/页",
-            10000: "10000 条/页",
+            100: "每页 100 条",
+            1000: "每页 1000 条",
+            10000: "每页 10000 条",
           }}
         />
         <Button

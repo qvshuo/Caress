@@ -75,14 +75,14 @@ class DMM(Source):
         if not isinstance(document, dict) or not isinstance(document.get("data"), dict):
             if isinstance(document, dict) and document.get("errors"):
                 raise FetchError(Status.PARSE_ERROR, json_error(document))
-            raise FetchError(Status.PARSE_ERROR, "DMM 接口未返回数据")
+            raise FetchError(Status.PARSE_ERROR, "DMM 未返回作品数据")
         work = document["data"].get("ppvContent")
         if work is None and not document.get("errors"):
             return None
         if not isinstance(work, dict) or not work.get("title"):
             if document.get("errors"):
                 raise FetchError(Status.PARSE_ERROR, json_error(document))
-            raise FetchError(Status.PARSE_ERROR, "DMM 接口缺少作品数据或标题")
+            raise FetchError(Status.PARSE_ERROR, "DMM 返回的作品信息不完整")
         if work.get("id") != cid:
             raise FetchError(Status.IDENTITY_MISMATCH, "DMM 返回的作品 ID 不匹配")
         return work

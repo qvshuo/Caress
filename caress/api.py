@@ -63,7 +63,7 @@ def updated_settings(current, body):
         return Settings.model_validate({**data, "database": current.database})
     except ValidationError, ValueError:
         raise ValueError(
-            "设置无效，请检查地址、来源顺序和参数；密钥不会在错误中显示"
+            "设置无效，请检查服务器地址和来源配置"
         ) from None
 
 
@@ -85,7 +85,7 @@ def create_app(settings: Settings | None = None):
 
     @app.exception_handler(RequestValidationError)
     async def bad_request(request, exc):
-        return JSONResponse({"detail": "请求参数无效，请检查输入"}, status_code=422)
+        return JSONResponse({"detail": "请求参数无效"}, status_code=422)
 
     @app.exception_handler(ValueError)
     async def invalid(request, exc):
@@ -108,7 +108,7 @@ def create_app(settings: Settings | None = None):
         async with service.writer_lock:
             value = updated_settings(service.settings, body)
             if service.batches.running and value.emby != service.settings.emby:
-                raise ValueError("批次运行期间不能更换 Emby 连接或目标媒体库")
+                raise ValueError("任务运行期间无法更改 Emby 连接或媒体库")
             value.save()
             await service.configure(value)
             return safe_settings(value)
@@ -175,12 +175,12 @@ def create_app(settings: Settings | None = None):
             and service.settings.emby.api_key
             and service.settings.emby.library_ids
         ):
-            raise ValueError("请先配置 Emby 并选择目标媒体库")
+            raise ValueError("请先连接 Emby 并选择媒体库")
         if body.action == "force" and not body.confirmed:
-            raise ValueError("替换所有的元数据可能覆盖手动修改，必须明确确认")
+            raise ValueError("请确认替换元数据")
         ids = list(dict.fromkeys(body.ids))
         if any(not i.isalnum() for i in ids):
-            raise ValueError("无效的 Emby Item ID")
+            raise ValueError("Emby 项目 ID 无效")
         return service.batches.start(ids, body.action, body.source)
 
     @app.post("/api/batch/cancel")
@@ -198,7 +198,7 @@ def create_app(settings: Settings | None = None):
             if not await client.contains(ident) and not (
                 kind == "Primary" and await client.contains_person(ident)
             ):
-                raise HTTPException(404, "图片不属于已选择的媒体库或关联人物")
+                raise HTTPException(404, "图片不属于所选媒体库")
             image = await client.image(ident, kind, index, tag=tag)
         return Response(
             image.content, media_type=image.mime, headers={"Cache-Control": "no-cache"}
@@ -234,7 +234,7 @@ def create_app(settings: Settings | None = None):
     @app.post("/api/works/{ident}/crop/apply")
     async def crop_apply(ident: str, body: CropRequest):
         if body.box is None:
-            raise ValueError("请选择裁剪范围")
+            raise ValueError("请选择裁剪区域")
         return await service.crop_apply(ident, body.token, body.box)
 
     static = Path(__file__).parent / "web/dist"

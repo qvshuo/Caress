@@ -119,7 +119,7 @@ async def test_http_204_is_not_proof_of_persistence():
         transport=httpx.MockTransport(handler),
     )
     try:
-        with pytest.raises(ValueError, match="回读不一致"):
+        with pytest.raises(ValueError, match="不一致|保存验证失败"):
             await client.write_metadata(
                 "1", SourceMetadata(code="ABC-123", title="new"), [], replace=True
             )
@@ -481,12 +481,12 @@ async def test_crop_replaces_only_after_success_and_expires_lazily(
     assert service.crop_session("1", first["token"]) is previous
 
     second = await service.crop_source("1")
-    with pytest.raises(ValueError, match="裁剪会话已过期"):
+    with pytest.raises(ValueError, match="裁剪已过期"):
         service.crop_session("1", first["token"])
     service.crop_close("1", first["token"])
     session = service.crop_session("1", second["token"])
     session.expires = 0
-    with pytest.raises(ValueError, match="裁剪会话已过期"):
+    with pytest.raises(ValueError, match="裁剪已过期"):
         service.crop_session("1", second["token"])
     assert service.crop is None
 
@@ -512,7 +512,7 @@ async def test_concurrent_crop_sources_keep_latest_token_and_save_only_primary(
     resume.set()
     first, second = await asyncio.gather(first_task, second_task)
     assert source.cover.await_count == 2
-    with pytest.raises(ValueError, match="裁剪会话已过期"):
+    with pytest.raises(ValueError, match="裁剪已过期"):
         service.crop_session("1", first["token"])
     service.crop_session("1", second["token"])
     uploading, finish = asyncio.Event(), asyncio.Event()
@@ -975,7 +975,7 @@ async def test_uploaded_image_requires_matching_readback(mismatch):
     )
     try:
         if mismatch:
-            with pytest.raises(ValueError, match="回读不一致"):
+            with pytest.raises(ValueError, match="不一致|保存验证失败"):
                 await client.upload("1", "Primary", original)
         else:
             await client.upload("1", "Primary", original)
@@ -1369,7 +1369,7 @@ async def test_related_item_merges_matching_queued_submission(fake_batch, monkey
     assert sorted(FakeProcessor.writes) == ["1", "2"]
     rows = fake_batch.runtime.batch()["items"]
     assert [row["status"] for row in rows].count("success") == 2
-    assert any(row.get("note") == "已合并到同一作品的任务" for row in rows)
+    assert any(row.get("note") == "已合并到关联作品" for row in rows)
 
 
 def test_emby_failure_reports_operation_and_logs_response_without_key(caplog):
@@ -1394,8 +1394,21 @@ def test_emby_failure_reports_operation_and_logs_response_without_key(caplog):
     with pytest.raises(httpx.HTTPStatusError) as error:
         response.raise_for_status()
     message = sync_error(error.value)
-    assert "POST /emby/Items/1429/Images/Primary" in message
+    assert "POST /emby/Items/1429/Images/Primary" in caplog.text
     assert "HTTP 500" in message
     assert "Read-only file system" in caplog.text and "[redacted]" in caplog.text
     assert "secret-key" not in caplog.text + message
     assert "hidden-query" not in caplog.text + message
+
+
+def test_emby_error_log_does_not_expose_html_or_secret_fields(caplog):
+    from caress.emby import sync_error
+
+    request = httpx.Request("GET", "http://emby/Items")
+    for content in ('<html>private page</html>', '{"password":"secret-value"}'):
+        response = httpx.Response(500, request=request, text=content)
+        with pytest.raises(httpx.HTTPStatusError) as error:
+            response.raise_for_status()
+        sync_error(error.value)
+    assert "private page" not in caplog.text
+    assert "secret-value" not in caplog.text

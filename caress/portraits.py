@@ -79,22 +79,22 @@ class Gfriends:
                     async for chunk in response.aiter_bytes():
                         data.extend(chunk)
                         if len(data) > limit:
-                            raise ValueError("演员头像来源响应超过大小限制")
+                            raise ValueError("头像文件超过大小限制")
                     return bytes(data)
             except httpx.HTTPStatusError as exc:
                 if exc.response.status_code < 500 and exc.response.status_code != 429:
                     raise ValueError(
-                        f"gfriends HTTP {exc.response.status_code}"
+                        f"Gfriends 请求失败（HTTP {exc.response.status_code}）"
                     ) from None
             except httpx.RequestError:
                 pass
             if attempt < NETWORK_RETRIES:
                 await asyncio.sleep(RETRY_DELAY_SECONDS)
-        raise ValueError("演员头像来源请求失败")
+        raise ValueError("头像来源请求失败")
 
     def select(self, name: str, kind: int | None = None) -> str | None:
         if len(self.names.candidates(name, kind)) > 1:
-            raise ValueError("演员别名对应多人")
+            raise ValueError("演员名称对应多个候选")
         primary = self.names.resolve(name, kind) or name
         candidates = [primary, *self.names.aliases_for(name, kind)]
         for candidate in dict.fromkeys(candidates):
@@ -149,7 +149,7 @@ class Gfriends:
                     self.completed[(name, kind)] = records[-1]
                     continue
                 if len(self.names.candidates(name, kind)) > 1:
-                    raise ValueError("演员别名对应多人")
+                    raise ValueError("演员名称对应多个候选")
                 report_progress("portraits", source="gfriends")
                 if self.index is None and self.index_error is None:
                     try:
@@ -159,10 +159,10 @@ class Gfriends:
                             )
                         )
                         if not isinstance(tree, dict):
-                            raise ValueError("演员头像来源索引无效")
+                            raise ValueError("头像来源索引无效")
                         self.index = tree["Content"]
                         if not isinstance(self.index, dict):
-                            raise ValueError("演员头像来源索引无效")
+                            raise ValueError("头像来源索引无效")
                     except (ValueError, KeyError) as exc:
                         self.index_error = str(exc)
                 if self.index_error:

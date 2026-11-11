@@ -16,7 +16,7 @@ export async function api<T>(
     });
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") throw error;
-    throw new Error("无法连接服务，请检查网络。");
+    throw new Error("无法连接 Caress，请检查网络连接");
   }
   let value: unknown;
   try {
@@ -25,15 +25,15 @@ export async function api<T>(
     if (error instanceof Error && error.name === "AbortError") throw error;
     throw new Error(
       response.ok
-        ? "服务响应格式异常，请重试。"
-        : `服务暂不可用（${response.status}）`,
+        ? "服务返回的数据无效"
+        : `服务暂不可用（HTTP ${response.status}）`,
     );
   }
   if (!response.ok) {
     const detail = (value as { detail?: unknown } | null)?.detail;
     throw new Error(
       detail === undefined
-        ? `服务请求失败（${response.status}）`
+        ? `请求失败（HTTP ${response.status}）`
         : validationText(detail),
     );
   }

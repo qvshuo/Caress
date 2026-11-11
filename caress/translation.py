@@ -108,7 +108,7 @@ class Translator:
                 return self.available
             self.available = False
             self.validation_sample = ""
-            self.validation_error = "请填写模型与 API Key"
+            self.validation_error = "请配置翻译模型和 API Key"
             if not self.settings.enabled:
                 return False
             try:
@@ -131,7 +131,7 @@ class Translator:
             return value
         async with self.lock:
             if not self.settings.api_key or not self.settings.model:
-                raise ValueError("translation API key or model is not configured")
+                raise ValueError("请配置翻译模型和 API Key")
             for attempt in range(retries + 1):
                 await asyncio.sleep(
                     max(
@@ -153,14 +153,14 @@ class Translator:
                         },
                     )
                     if response.status_code in (401, 403):
-                        raise ValueError("translation authentication failed")
+                        raise ValueError("翻译服务认证失败，请检查 API Key")
                     response.raise_for_status()
                     text = response.json()["choices"][0]["message"]["content"]
                     if not isinstance(text, str):
-                        raise ValueError("translation returned empty text")
+                        raise ValueError("翻译服务未返回有效内容")
                     text = html.unescape(text).strip()
                     if not text:
-                        raise ValueError("translation returned empty text")
+                        raise ValueError("翻译服务未返回有效内容")
                     return text
                 except httpx.HTTPStatusError as exc:
                     if (
@@ -168,13 +168,13 @@ class Translator:
                         and exc.response.status_code < 500
                     ):
                         raise ValueError(
-                            f"translation HTTP {exc.response.status_code}"
+                            f"翻译服务请求失败（HTTP {exc.response.status_code}）"
                         ) from None
                 except httpx.RequestError, KeyError, IndexError, TypeError:
                     pass
                 if attempt < retries:
                     await asyncio.sleep(RETRY_DELAY_SECONDS)
-            raise ValueError("translation failed after bounded retries")
+            raise ValueError("翻译服务多次请求失败")
 
     async def _segmented_text(self, value: str, spans: list[tuple[int, int]]) -> str:
         async def fragment(text):

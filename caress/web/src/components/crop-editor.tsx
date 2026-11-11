@@ -64,7 +64,7 @@ export default function CropEditor({
         if (old) void api(`${base}/${old}`, "DELETE").catch(() => {});
       } catch (e) {
         if (active.current && ticket === version.current)
-          setError(e instanceof Error ? e.message : "原图获取失败");
+          setError(e instanceof Error ? e.message : "无法获取原图");
       } finally {
         if (active.current && ticket === version.current) {
           setPending(null);
@@ -143,7 +143,7 @@ export default function CropEditor({
         className="h-[90dvh] grid-rows-[auto_auto_minmax(0,1fr)_auto] overflow-hidden sm:max-w-4xl"
       >
         <DialogHeader>
-          <DialogTitle>裁剪</DialogTitle>
+          <DialogTitle>裁剪封面</DialogTitle>
         </DialogHeader>
         <div className="flex flex-wrap items-center gap-2">
           <Button
@@ -234,7 +234,7 @@ export default function CropEditor({
             className="flex min-h-0 items-center justify-center gap-2 text-sm text-muted-foreground"
           >
             {pending && <LoaderCircle className="size-4 animate-spin" />}
-            {pending ? "加载中…" : ""}
+            {pending ? "正在加载…" : ""}
           </div>
         )}
         <div className="flex flex-wrap items-center justify-end gap-3">

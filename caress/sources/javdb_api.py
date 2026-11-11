@@ -9,7 +9,6 @@ from urllib.parse import urlencode
 
 from ..actors import ActorAliases, actor_record, actor_type, comparison_name
 from ..http import FetchError, json_error
-from ..logging import report_progress
 from ..models import SourceId, Status
 
 
@@ -51,12 +50,9 @@ class JavDBApi:
         )
         payload = page.json()
         if not isinstance(payload, dict):
-            raise FetchError(Status.PARSE_ERROR, "JavDB 接口返回的数据格式无效")
+            raise FetchError(Status.PARSE_ERROR, "JavDB 返回的数据格式无效")
         if payload.get("success") not in (1, True):
-            message = "JavDB API 返回失败：" + json_error(payload)
-            report_progress(
-                "response", status="failed", source=self.id, message=message
-            )
+            message = "JavDB 请求失败：" + json_error(payload)
             raise FetchError(Status.BLOCKED, message)
         if not isinstance(payload.get("data"), dict):
             raise FetchError(Status.PARSE_ERROR, "JavDB 接口未返回数据")
@@ -78,7 +74,7 @@ class JavDBApi:
             try:
                 candidates = [ident] if ident else await search(actor.name)
                 if len(candidates) > 20:
-                    warnings.append(f"{actor.name}: 演员候选过多，保留原名")
+                    warnings.append(f"{actor.name}: 找到多个演员候选，已保留原名")
                     continue
                 records = {}
                 for candidate in candidates:
@@ -104,7 +100,7 @@ class JavDBApi:
                 if len(records) == 1:
                     names.remember(records, self.settings.database)
                 elif len(records) > 1:
-                    warnings.append(f"{actor.name}: 演员匹配存在歧义，保留原名")
+                    warnings.append(f"{actor.name}: 无法唯一确认演员，已保留原名")
             except (FetchError, OSError, sqlite3.Error, ValueError, TypeError) as exc:
-                warnings.append(f"{actor.name}: 演员查询失败（{exc}）")
+                warnings.append(f"{actor.name}: 演员信息获取失败：{exc}")
         return warnings

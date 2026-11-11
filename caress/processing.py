@@ -94,8 +94,8 @@ class WorkProcessor:
     async def _prepare(self, code, source):
         result = await self.scraper.scrape(ScrapeRequest(code=code, source=source))
         if result.status != Status.FOUND or result.metadata is None:
-            errors = "；".join(f"{r.source}：{r.message or ('未找到作品' if r.status == Status.NOT_FOUND else '来源不支持该作品' if r.status == Status.UNSUPPORTED else '来源请求失败')}" for r in result.results)
-            raise ValueError("刮削未成功：" + errors)
+            errors = "；".join(f"{r.source}：{r.message or ('未找到作品' if r.status == Status.NOT_FOUND else '来源不支持此作品' if r.status == Status.UNSUPPORTED else '来源请求失败')}" for r in result.results)
+            raise ValueError("未获取到作品元数据：" + errors)
         metadata = result.metadata.model_copy(deep=True)
         selected = next(r for r in result.results if r.source == result.selected_source)
         warnings = await self.scraper.resolve_actors(
@@ -127,7 +127,7 @@ class WorkProcessor:
                 *result.warnings,
                 *warnings,
                 *[i["error"] for i in report.errors],
-                *["演员别名存在歧义，保留原名" for _ in issues],
+                *["无法唯一确认演员，已保留原名" for _ in issues],
             ],
             mappings=mappings,
             kind=actor_type(result.classification.category),
@@ -274,13 +274,13 @@ class WorkProcessor:
                     elif records and records[0]["status"] == "not_found":
                         self.people_done.add(person["Id"])
                 except (ValueError, OSError, FetchError) as exc:
-                    warnings.append(f"演员头像：{exc}")
+                    warnings.append(f"演员头像获取失败：{exc}")
                 except Exception as exc:
                     from .emby import sync_error
 
                     warnings.append(sync_error(exc))
         if fatal:
             raise ValueError(
-                "元数据可能已写入，图片未全部成功：" + "; ".join([*fatal, *warnings])
+                "部分元数据可能已写入，但图片处理未完成：" + "; ".join([*fatal, *warnings])
             )
         return warnings, changed

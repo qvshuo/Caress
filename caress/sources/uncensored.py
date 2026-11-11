@@ -93,7 +93,7 @@ class OnePondo(Uncensored):
                         )
                 images += artwork(self.id, url, [], samples[:100])
             except FetchError as exc:
-                warnings.append(f"剧照列表获取失败：{exc}")
+                warnings.append(f"剧照获取失败：{exc}")
         return self.found(
             request,
             SourceMetadata(

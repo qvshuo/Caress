@@ -27,13 +27,11 @@ class BatchRunner:
 
     def start(self, ids, action, source):
         if self.running and self.task.cancelling():
-            raise ValueError("正在取消，请稍后再试")
+            raise ValueError("正在停止任务")
         if not self.running:
             self.batch = {
                 "id": uuid.uuid4().hex,
                 "status": "running",
-                "action": action,
-                "source": source,
                 "started_at": now(),
                 "items": [],
                 "current": [],
@@ -85,7 +83,7 @@ class BatchRunner:
                 if row["status"] in ("pending", "running"):
                     row.update(
                         status="failed" if batch["status"] == "failed" else "cancelled",
-                        error=batch.get("error") or "已取消；尚未开始写入",
+                        error=batch.get("error") or "已取消，未开始写入",
                     )
             batch.update(current=[], finished_at=now())
             self.service.runtime.save_batch(batch)
@@ -101,7 +99,7 @@ class BatchRunner:
                 batch.update(status="cancelled", current=[], finished_at=now())
                 for row in batch["items"]:
                     if row["status"] in ("pending", "running"):
-                        row.update(status="cancelled", error="批次已取消")
+                        row.update(status="cancelled", error="任务已取消")
                 self.service.runtime.save_batch(batch)
             if self.task is task:
                 self.queue.clear()
@@ -138,7 +136,7 @@ class BatchRunner:
                             "id": ident,
                             "status": "skipped",
                             "code": None,
-                            "error": "关联项目不属于已选择的媒体库或无法确认归属",
+                            "error": "关联作品不属于所选媒体库，或无法确认归属",
                         }
                     )
                     return
@@ -150,7 +148,7 @@ class BatchRunner:
                             "id": ident,
                             "status": "skipped",
                             "code": None,
-                            "error": "无法确认关联项目：" + sync_error(exc),
+                            "error": "无法确认关联作品：" + sync_error(exc),
                         }
                     )
                     return
@@ -169,11 +167,11 @@ class BatchRunner:
                         and (pending["action"], pending["source"])
                         == (job["action"], job["source"])
                     ):
-                        pending.update(status="skipped", note="已合并到同一作品的任务")
+                        pending.update(status="skipped", note="已合并到关联作品")
                 try:
                     others = [str(p["Id"]) for p in await client.parts(item)]
                 except (httpx.HTTPError, ValueError) as exc:
-                    expanded[-1]["warnings"] = ["无法读取附加分集：" + sync_error(exc)]
+                    expanded[-1]["warnings"] = ["无法读取关联分集：" + sync_error(exc)]
                     others = []
                 others += [
                     str(m["ItemId"])
@@ -217,7 +215,7 @@ class BatchRunner:
                                 code, identity, media = identify(item)
                                 if code != row["code"]:
                                     raise ValueError(
-                                        "Emby 项目番号已变化，请刷新后重试"
+                                        "Emby 作品番号已变化，请刷新列表"
                                     )
                                 old = runtime.record(server, row["id"], identity, code)
                                 replace = job["action"] == "force"
@@ -225,7 +223,7 @@ class BatchRunner:
                                     item, await client.image_info(row["id"]), media
                                 ):
                                     row.update(
-                                        status="skipped", note="未发现需要补齐的内容"
+                                        status="skipped", note="没有需要补齐的元数据"
                                     )
                                     return
                                 row["status"] = "running"
@@ -236,13 +234,13 @@ class BatchRunner:
                                 prepared = await processor.prepare(code, job["source"])
                                 # Revalidate identity immediately before the write, after potentially slow scraping.
                                 if not await client.contains(row["id"]):
-                                    raise ValueError("项目已离开所选媒体库，未执行写入")
+                                    raise ValueError("作品已移出所选媒体库，未写入")
                                 live_code, live_identity, live_media = identify(
                                     await client.item(row["id"])
                                 )
                                 if (live_code, live_identity) != (code, identity):
                                     raise ValueError(
-                                        "刮削期间 Emby 项目身份变化，请刷新后重试"
+                                        "刮削期间 Emby 作品已变化，请刷新列表"
                                     )
                                 if self.task.cancelling():
                                     raise asyncio.CancelledError
@@ -254,7 +252,7 @@ class BatchRunner:
                                     identity,
                                     code,
                                     "running",
-                                    error="写入已开始，可能部分完成",
+                                    error="正在写入，取消后可能部分完成",
                                 )
                                 save()
                                 write_task = asyncio.create_task(
@@ -274,7 +272,7 @@ class BatchRunner:
                                     runtime.restore_record(server, row["id"], old)
                                     row.update(
                                         status="skipped",
-                                        note="本次来源数据未产生变更",
+                                        note="元数据未发生变化",
                                         writing=False,
                                         warnings=[*row.get("warnings", []), *warnings],
                                     )
@@ -294,9 +292,9 @@ class BatchRunner:
                         except asyncio.CancelledError:
                             row.update(
                                 status="cancelled",
-                                error="已取消；写入可能已部分完成"
+                                error="已取消，部分内容可能已写入"
                                 if writing
-                                else "已取消；尚未开始写入",
+                                else "已取消，未开始写入",
                             )
                             if identity:
                                 runtime.save_record(
@@ -311,7 +309,7 @@ class BatchRunner:
                         except Exception as exc:
                             row.update(
                                 status="failed",
-                                error=("写入可能已部分完成：" if writing else "")
+                                error=("部分内容可能已写入：" if writing else "")
                                 + sync_error(exc),
                             )
                             if identity:
@@ -350,7 +348,7 @@ class BatchRunner:
         finally:
             for row in job["items"]:
                 if row["status"] in ("pending", "running"):
-                    row.update(status="cancelled", error="已取消；尚未开始写入")
+                    row.update(status="cancelled", error="已取消，未开始写入")
             save()
             try:
                 if client is not None:
