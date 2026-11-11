@@ -1,4 +1,5 @@
 import asyncio
+import json
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
@@ -164,6 +165,20 @@ async def test_translation_failure_retains_valid_source():
         assert len(report.errors) == 2
     finally:
         await translator.close()
+
+
+@pytest.mark.asyncio
+async def test_translation_key_stays_in_header_and_out_of_logs(caplog):
+    def handler(request):
+        assert request.headers["authorization"] == "Bearer example-key"
+        assert b"example-key" not in request.content
+        return httpx.Response(401, json={"error": "denied"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        translator = Translator(TranslationSettings(model="model", api_key="example-key"), client)
+        with pytest.raises(ValueError, match="认证失败"):
+            await translator.text("test", retries=0)
+    assert "example-key" not in caplog.text
 
 
 def test_actor_alias_ambiguity_and_verified_id():
@@ -1369,10 +1384,11 @@ async def test_related_item_merges_matching_queued_submission(fake_batch, monkey
     assert sorted(FakeProcessor.writes) == ["1", "2"]
     rows = fake_batch.runtime.batch()["items"]
     assert [row["status"] for row in rows].count("success") == 2
+    assert all(row["action"] == "scrape" and row["source"] is None for row in rows)
     assert any(row.get("note") == "已合并到关联作品" for row in rows)
 
 
-def test_emby_failure_reports_operation_and_logs_response_without_key(caplog):
+def test_emby_failure_returns_json_and_logs_operation_without_key(caplog):
     from caress.emby import sync_error
 
     request = httpx.Request(
@@ -1387,7 +1403,7 @@ def test_emby_failure_reports_operation_and_logs_response_without_key(caplog):
             "ResponseStatus": {
                 "ErrorCode": "IOException",
                 "Message": "Read-only file system",
-                "echo": "secret-key",
+                "code": "example",
             }
         },
     )
@@ -1395,13 +1411,13 @@ def test_emby_failure_reports_operation_and_logs_response_without_key(caplog):
         response.raise_for_status()
     message = sync_error(error.value)
     assert "POST /emby/Items/1429/Images/Primary" in caplog.text
-    assert "HTTP 500" in message
-    assert "Read-only file system" in caplog.text and "[redacted]" in caplog.text
+    assert json.loads(message)["ResponseStatus"]["Message"] == "Read-only file system"
+    assert "Emby request failed" in caplog.text and "HTTP 500" in caplog.text
     assert "secret-key" not in caplog.text + message
     assert "hidden-query" not in caplog.text + message
 
 
-def test_emby_error_log_does_not_expose_html_or_secret_fields(caplog):
+def test_emby_error_log_does_not_expose_html_or_response(caplog):
     from caress.emby import sync_error
 
     request = httpx.Request("GET", "http://emby/Items")
@@ -1412,3 +1428,17 @@ def test_emby_error_log_does_not_expose_html_or_secret_fields(caplog):
         sync_error(error.value)
     assert "private page" not in caplog.text
     assert "secret-value" not in caplog.text
+
+
+def test_emby_http_and_connection_errors_use_chinese_fallbacks():
+    from caress.emby import sync_error
+
+    request = httpx.Request("GET", "http://emby/Items")
+    for status, expected in [(401, "认证失败或权限不足"), (500, "Emby 请求失败")]:
+        response = httpx.Response(status, request=request, text="<html>error</html>")
+        with pytest.raises(httpx.HTTPStatusError) as error:
+            response.raise_for_status()
+        assert expected in sync_error(error.value)
+        assert f"HTTP {status}" in sync_error(error.value)
+    assert sync_error(httpx.ReadTimeout("timeout", request=request)) == "Emby 请求超时"
+    assert "无法连接 Emby" in sync_error(httpx.ConnectError("offline", request=request))

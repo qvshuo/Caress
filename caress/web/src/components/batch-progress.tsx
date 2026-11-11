@@ -1,26 +1,34 @@
 import { Button } from "@/components/ui/button";
-import type { Batch, WorkNeighbor } from "@/lib/types";
+import { sourceLabels } from "@/lib/labels";
+import type { Batch, BatchItem, WorkNeighbor } from "@/lib/types";
 
 export function BatchProgress({
   batch,
   order,
   cancel,
   stopping,
+  offline,
 }: {
   batch: Batch;
   order: WorkNeighbor[];
   cancel: () => void;
   stopping: boolean;
+  offline: boolean;
 }) {
   const busy = batch.status === "running";
   const done = batch.items.filter(
     (i) => !["pending", "running"].includes(i.status),
   ).length;
-  const mixed = new Set(batch.items.map((i) => `${i.action || "scrape"}:${i.source || ""}`)).size > 1;
-  const label = (item: Batch["items"][number]) => {
+  const mixed = new Set(
+    batch.items.map((item) => `${item.action}:${item.source ?? ""}`),
+  ).size > 1;
+  const label = (item: BatchItem) => {
     const code = item.code || order.find((w) => w.id === item.id)?.label || item.id;
-    const sourceNames: Record<string, string> = { javdb: "JavDB", javbus: "JavBus", dmm: "DMM", fc2: "FC2", avsox: "AVSOX", airav: "AirAV", "1pondo": "一本道", caribbeancom: "Caribbeancom", heyzo: "HEYZO", avbase: "AVbase" };
-    return [code, mixed && item.action === "force" ? "替换" : "", mixed && item.source ? sourceNames[item.source] || item.source : ""].filter(Boolean).join(" · ");
+    return [
+      code,
+      mixed && item.action === "force" ? "替换" : "",
+      mixed && item.source ? sourceLabels[item.source] : "",
+    ].filter(Boolean).join(" · ");
   };
   const current = batch.items.filter((i) => i.status === "running");
   const waiting = batch.items.filter((i) => i.status === "pending");
@@ -63,6 +71,9 @@ export function BatchProgress({
           aria-label="批次进度"
         />
       )}
+      {busy && offline && (
+        <p role="status" className="text-muted-foreground">无法更新任务进度</p>
+      )}
       {current.length > 0 && (
         <p className="line-clamp-2 wrap-anywhere text-muted-foreground">
           当前：{current.map(label).join(" ")}
@@ -94,7 +105,7 @@ export function BatchProgress({
                       : item.status === "cancelled"
                         ? "已取消"
                         : "失败"}{" "}
-                    · {item.error}
+                    · {item.status === "cancelled" ? item.error.replace(/^已取消[，；]\s*/, "") : item.error}
                   </span>
                 )}
                 {item.note && <span>跳过 · {item.note}</span>}

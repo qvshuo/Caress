@@ -89,7 +89,7 @@ class Scraper:
                 report_progress(
                     "wait",
                     source=source,
-                    message=f"冷却 {seconds} 秒" if seconds else "等待来源可用",
+                    message=f"Source cooldown: {seconds} seconds" if seconds else "Waiting for source availability",
                 )
                 try:
                     await asyncio.wait_for(lock.acquire(), timeout=1)
@@ -123,7 +123,7 @@ class Scraper:
             failed = result.status not in (Status.FOUND, Status.NOT_FOUND, Status.UNSUPPORTED)
             logger.log(
                 logging.WARNING if failed else logging.INFO,
-                result.message if failed and result.message else "来源请求完成",
+                "Source request failed" if failed else "Source request completed",
                 extra={
                     "event": "source.fetched",
                     "source": source,

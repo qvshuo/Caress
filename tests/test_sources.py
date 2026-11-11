@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import pytest
 
@@ -16,15 +17,14 @@ from caress.settings import Settings
 from caress.sources.base import Source
 
 
-def test_http_json_error_keeps_source_details_and_hides_secrets(caplog):
+def test_http_json_error_keeps_source_details(caplog):
     from caress.http import Page, response_issue
 
     page = Page("https://example.invalid/api", 403, b'{"error":"denied","token":"secret"}')
     status, message = response_issue(page)
     assert status == Status.BLOCKED
-    assert message == "denied"
-    assert "secret" not in message
-    assert "[已隐藏]" in caplog.text and "secret" not in caplog.text
+    assert json.loads(message) == {"error": "denied", "token": "secret"}
+    assert not caplog.records
     assert response_issue(Page("https://example.invalid", 404, b'{}'))[0] == Status.NOT_FOUND
 
 
@@ -37,8 +37,24 @@ async def test_dmm_graphql_error_retains_original_response():
         async def post_json(self, *args, **kwargs):
             return Page("https://example.invalid", 200, b'{"errors":[{"message":"denied"}],"data":null}')
 
-    with pytest.raises(FetchError, match="denied"):
+    with pytest.raises(FetchError) as error:
         await DMM(Client(), Settings()).content("abc123")
+    assert json.loads(str(error.value)) == {"errors": [{"message": "denied"}], "data": None}
+
+
+@pytest.mark.asyncio
+async def test_solver_error_preserves_original_json():
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from caress.http import FetchError, WebClient
+
+    payload = {"status": "error", "message": "challenge failed", "code": 123}
+    client = WebClient()
+    client._control = SimpleNamespace(post=AsyncMock(return_value=SimpleNamespace(json=lambda: payload)))
+    with pytest.raises(FetchError) as error:
+        await client._solver_call({"cmd": "request.get"})
+    assert json.loads(str(error.value)) == payload
 
 
 @pytest.mark.asyncio
@@ -380,8 +396,8 @@ async def test_javdb_business_failure_keeps_complete_json_and_uses_web(caplog):
     with pytest.raises(FetchError) as error:
         await source.app.api("/api/v2/search", q="ABP-876")
     message = str(error.value)
-    assert "請登錄帳號" in message
-    assert json.dumps(payload, ensure_ascii=False) in caplog.text
+    assert json.loads(message) == payload
+    assert not caplog.records
     source.app.api = AsyncMock(
         side_effect=AssertionError("JWT-only API must not be used")
     )

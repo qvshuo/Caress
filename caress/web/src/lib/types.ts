@@ -70,21 +70,24 @@ export interface LibraryPreferences {
   pageSize: number;
 }
 export type Action = "scrape" | "force";
+export type BatchStatus = "running" | "finished" | "failed" | "cancelled" | "interrupted";
+export type BatchItemStatus = "pending" | "running" | "success" | "failed" | "skipped" | "cancelled";
+export interface BatchItem {
+  id: string;
+  code: string | null;
+  status: BatchItemStatus;
+  action: Action;
+  source: Source | null;
+  error?: string | null;
+  warnings?: string[];
+  note?: string;
+  writing?: boolean;
+}
 export interface Batch {
   id: string;
-  status: string;
-  error?: string;
-  items: {
-    id: string;
-    code: string | null;
-    status: string;
-    error?: string;
-    warnings?: string[];
-    note?: string;
-    writing?: boolean;
-    action?: Action;
-    source?: Source | null;
-  }[];
+  status: BatchStatus;
+  error?: string | null;
+  items: BatchItem[];
   current: string[];
 }
 export interface Settings {

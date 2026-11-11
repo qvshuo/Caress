@@ -42,6 +42,7 @@ export function App() {
   const [batch, setBatch] = useState<Batch | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [stopping, setStopping] = useState(false);
+  const [progressOffline, setProgressOffline] = useState(false);
   const stoppingRef = useRef(false);
   const batchRef = useRef<Batch | null>(null);
   const batchGeneration = useRef(0);
@@ -75,9 +76,13 @@ export function App() {
     batchRef.current = batch;
   }, [batch]);
   useEffect(() => {
-    if (!busy) return;
+    if (!busy) {
+      setProgressOffline(false);
+      return;
+    }
     let active = true,
-      pending = false;
+      pending = false,
+      failures = 0;
     const timer = setInterval(() => {
       if (pending || document.hidden) return;
       pending = true;
@@ -85,6 +90,8 @@ export function App() {
       void api<Batch | null>("batch")
         .then((value) => {
           if (active && generation === batchGeneration.current) {
+            failures = 0;
+            setProgressOffline(false);
             const detail = route.startsWith("library/work/")
               ? route.split("/")[2]
               : undefined;
@@ -100,7 +107,10 @@ export function App() {
             setBatch(value);
           }
         })
-        .catch(() => {})
+        .catch(() => {
+          if (active && generation === batchGeneration.current && ++failures >= 3)
+            setProgressOffline(true);
+        })
         .finally(() => {
           pending = false;
         });
@@ -146,15 +156,16 @@ export function App() {
         batch={batch}
         order={order}
         stopping={stopping}
+        offline={progressOffline}
         cancel={() =>
           run(async () => {
             if (stoppingRef.current) return;
             stoppingRef.current = true;
             setStopping(true);
             try {
-            batchGeneration.current++;
-            setBatch(await api<Batch>("batch/cancel", "POST"));
-            refresh();
+              batchGeneration.current++;
+              setBatch(await api<Batch>("batch/cancel", "POST"));
+              refresh();
             } finally {
               stoppingRef.current = false;
               setStopping(false);

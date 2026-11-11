@@ -13,7 +13,7 @@ import { Status } from "@/components/status";
 import { ArtworkImage, ImageViewer } from "@/components/image-viewer";
 import { Select } from "@/components/form-controls";
 import { api } from "@/lib/api";
-import { actions } from "@/lib/labels";
+import { actions, sourceLabels } from "@/lib/labels";
 import {
   sources,
   type Action,
@@ -193,7 +193,7 @@ export default function Work({
                     onChange={(value) => setSource(value as Source | "")}
                     options={{
                       "": "自动选择来源",
-                      ...Object.fromEntries(sources.map((s) => [s, s])),
+                      ...Object.fromEntries(sources.map((s) => [s, sourceLabels[s]])),
                     }}
                   />
                 )}

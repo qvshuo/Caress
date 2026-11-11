@@ -17,5 +17,5 @@ class JavDB(Source):
         self.web = JavDBWeb(*args, **kwargs)
 
     async def fetch(self, request):
-        report_progress("source", source=self.id, message="打开网页")
+        report_progress("source", source=self.id, message="Opening webpage")
         return await self.web.fetch(request)

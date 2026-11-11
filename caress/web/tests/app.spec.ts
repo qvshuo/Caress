@@ -528,8 +528,8 @@ test("source is always visible and can return to automatic", async ({
   const select = page.getByRole("combobox", { name: "数据来源" });
   await expect(select).toHaveText("自动选择来源");
   await select.click();
-  await page.getByRole("option", { name: "javdb", exact: true }).click();
-  await expect(select).toHaveText("javdb");
+  await page.getByRole("option", { name: "JavDB", exact: true }).click();
+  await expect(select).toHaveText("JavDB");
   await select.click();
   await page.getByRole("option", { name: "自动选择来源", exact: true }).click();
   await expect(select).toHaveText("自动选择来源");
@@ -583,6 +583,29 @@ test("running batch exposes progress and cancellation", async ({ page }) => {
   expect(cancelled).toBe(true);
 });
 
+test("progress reports repeated polling failures and recovers", async ({ page }) => {
+  let requests = 0;
+  let recover = false;
+  const batch = { id: "batch", status: "running", current: ["1"], items: [
+    { id: "1", code: "ABC-123", status: "running", action: "scrape", source: null },
+  ] };
+  await page.route("**/api/batch", (route) => {
+    requests++;
+    return route.fulfill(requests === 1 || recover
+      ? { json: batch }
+      : { status: 503, json: { detail: "offline" } });
+  });
+  await page.goto("/");
+  const region = page.getByRole("region", { name: "当前批次" });
+  await expect.poll(() => requests, { timeout: 6000 }).toBeGreaterThanOrEqual(3);
+  await expect(region.getByText("无法更新任务进度")).toHaveCount(0);
+  await expect(region.getByText("无法更新任务进度")).toBeVisible({ timeout: 6000 });
+  await expect(page.getByText("offline", { exact: true })).toHaveCount(0);
+  recover = true;
+  await expect(region.getByText("无法更新任务进度")).toHaveCount(0, { timeout: 6000 });
+  await expect(region).toContainText("当前：ABC-123");
+});
+
 test("stopping waits for active writes and identifies mixed queued work", async ({ page }) => {
   let release!: () => void;
   const pending = new Promise<void>((resolve) => { release = resolve; });
@@ -596,7 +619,7 @@ test("stopping waits for active writes and identifies mixed queued work", async 
     calls++;
     await pending;
     await route.fulfill({ json: { id: "batch", status: "cancelled", current: [], items: [
-      { ...items[0], status: "success" }, { ...items[1], status: "cancelled" },
+      { ...items[0], status: "success" }, { ...items[1], status: "cancelled", error: "已取消，未开始写入" },
     ] } });
   });
   await page.goto("/");
@@ -608,6 +631,9 @@ test("stopping waits for active writes and identifies mixed queued work", async 
   expect(calls).toBe(1);
   release();
   await expect(progress).toContainText("已取消 · 1 成功 · 0 失败 · 0 跳过 · 1 取消");
+  await progress.locator("summary").click();
+  await expect(progress).toContainText("已取消 · 未开始写入");
+  await expect(progress).not.toContainText("已取消 · 已取消");
 });
 
 test("completed batch is a compact summary with optional errors", async ({
@@ -847,7 +873,7 @@ for (const [status, missing, expected] of [
     });
     await page.goto("/#library/work/1");
     await page.getByRole("combobox", { name: "数据来源" }).click();
-    await page.getByRole("option", { name: "javdb", exact: true }).click();
+    await page.getByRole("option", { name: "JavDB", exact: true }).click();
     if (expected === "force") {
       await page.getByRole("combobox", { name: "刮削方式" }).click();
       await page

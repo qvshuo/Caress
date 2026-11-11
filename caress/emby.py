@@ -6,7 +6,6 @@ import hashlib
 import io
 import json
 import logging
-import re
 from copy import deepcopy
 from datetime import datetime
 from urllib.parse import quote
@@ -22,22 +21,13 @@ FIELDS = "Path,DateCreated,MediaSources,Overview,People,Studios,Genres,Tags,Prov
 def sync_error(exc):
     if isinstance(exc, httpx.HTTPStatusError):
         operation = f"{exc.request.method} {exc.request.url.path}"
-        if exc.response.is_stream_consumed:
-            try:
-                body = json.dumps(exc.response.json(), ensure_ascii=False)
-            except ValueError:
-                body = "非 JSON 响应"
-            key = exc.request.headers.get("X-Emby-Token")
-            if key:
-                body = body.replace(key, "[redacted]")
-            body = re.sub(
-                r'(?i)("(?:api.?key|token|secret|password|authorization|cookie)"\s*:\s*)"[^"]*"',
-                r'\1"[redacted]"',
-                body,
-            )[:2000]
-            logging.getLogger("caress.emby").error(
-                "Emby %s HTTP %s，响应：%s", operation, exc.response.status_code, body
-            )
+        logging.getLogger("caress.emby").error(
+            "Emby request failed: %s HTTP %s", operation, exc.response.status_code
+        )
+        try:
+            return json.dumps(exc.response.json(), ensure_ascii=False)
+        except (ValueError, httpx.ResponseNotRead):
+            pass
         if exc.response.status_code in (401, 403):
             return f"Emby 认证失败或权限不足（HTTP {exc.response.status_code}）"
         return f"Emby 请求失败（HTTP {exc.response.status_code}）"

@@ -17,3 +17,17 @@ export const actions = {
   scrape: "刮削缺少的元数据",
   force: "替换所有的元数据",
 };
+import type { Source } from "./types";
+
+export const sourceLabels: Record<Source, string> = {
+  dmm: "DMM",
+  javdb: "JavDB",
+  javbus: "JavBus",
+  fc2: "FC2",
+  avsox: "AVSOX",
+  airav: "AirAV",
+  "1pondo": "一本道",
+  caribbeancom: "Caribbeancom",
+  heyzo: "HEYZO",
+  avbase: "AVbase",
+};

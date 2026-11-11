@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import re
 import time
 import uuid
@@ -90,29 +89,7 @@ class FetchError(Exception):
 
 
 def json_error(value: JsonValue) -> str:
-    def redact(item):
-        if isinstance(item, dict):
-            return {
-                key: "[已隐藏]" if re.search(r"api.?key|token|secret|password|authorization|cookie", key, re.I) else redact(value)
-                for key, value in item.items()
-            }
-        if isinstance(item, list):
-            return [redact(value) for value in item]
-        return item
-
-    safe = redact(value)
-    summary = json.dumps(safe, ensure_ascii=False)
-    logging.getLogger("caress.sources").warning("来源错误响应：%s", summary[:2000])
-    if isinstance(safe, dict):
-        for key in ("message", "error", "detail"):
-            if isinstance(safe.get(key), str) and safe[key]:
-                return safe[key][:500]
-        errors = safe.get("errors")
-        if isinstance(errors, list):
-            messages = [e.get("message") for e in errors if isinstance(e, dict) and isinstance(e.get("message"), str)]
-            if messages:
-                return "；".join(messages)[:500]
-    return summary[:500]
+    return json.dumps(value, ensure_ascii=False)
 
 
 class Session(Protocol):
@@ -386,7 +363,7 @@ class WebClient:
             report_progress(
                 "wait",
                 source=source,
-                message=f"{'图片间隔' if binary else '冷却'} {ceil(delay)} 秒",
+                message=f"{'Image request delay' if binary else 'Source cooldown'}: {ceil(delay)} seconds",
             )
             await asyncio.sleep(delay)
         history[key] = time.monotonic()
@@ -493,7 +470,7 @@ class WebClient:
                 report_progress(
                     "request",
                     source=source,
-                    message=f"{'图片' if binary else method} {parsed.netloc}{parsed.path}",
+                    message=f"{'Image' if binary else method} {parsed.netloc}{parsed.path}",
                 )
                 try:
                     kwargs = {
@@ -509,7 +486,7 @@ class WebClient:
                 except CurlError as exc:
                     if attempt < NETWORK_RETRIES:
                         report_progress(
-                            "retry", source=source, message="网络请求失败，正在重试"
+                            "retry", source=source, message="Network request failed; retrying"
                         )
                         await asyncio.sleep(RETRY_DELAY_SECONDS)
                         continue

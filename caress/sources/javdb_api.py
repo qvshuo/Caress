@@ -52,8 +52,7 @@ class JavDBApi:
         if not isinstance(payload, dict):
             raise FetchError(Status.PARSE_ERROR, "JavDB 返回的数据格式无效")
         if payload.get("success") not in (1, True):
-            message = "JavDB 请求失败：" + json_error(payload)
-            raise FetchError(Status.BLOCKED, message)
+            raise FetchError(Status.BLOCKED, json_error(payload))
         if not isinstance(payload.get("data"), dict):
             raise FetchError(Status.PARSE_ERROR, "JavDB 接口未返回数据")
         return payload["data"]
