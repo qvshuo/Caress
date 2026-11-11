@@ -227,6 +227,44 @@ async def test_final_dto_fill_or_replace_protects_user_data(flow, replace):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("name,path", [
+    ("ABC-123", "/strm/ABC-123.strm"),
+    ("ABC-123", "/strm/ABC-123-UC.strm"),
+    ("ABC-123-cd1", "/strm/ABC-123-cd1.strm"),
+])
+async def test_scrape_replaces_filename_placeholder_even_after_success(flow, name, path):
+    flow.items["1"].update(Name=name, Path=path, LockData=False, LockedFields=[])
+    code, identity, _ = identify(flow.items["1"])
+    flow.service.runtime.save_record("s", "1", identity, code, "success")
+    rows = await flow.run()
+    assert rows[0]["status"] == "success"
+    assert flow.items["1"]["Name"] == "source title"
+    assert flow.items["1"]["OriginalTitle"] == "original"
+    assert flow.items["1"]["ProviderIds"]["tmdb"] == "user"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("locks", [
+    {"LockData": True, "LockedFields": []},
+    {"LockData": False, "LockedFields": ["Name"]},
+])
+async def test_scrape_keeps_locked_filename_title(flow, locks):
+    flow.items["1"].update(Name="ABC-123", Overview="", **locks)
+    assert (await flow.run())[0]["status"] == "success"
+    assert flow.items["1"]["Name"] == "ABC-123"
+    assert flow.items["1"]["Overview"] == "source plot"
+
+
+@pytest.mark.asyncio
+async def test_manual_title_changed_during_fetch_is_preserved(flow):
+    flow.items["1"].update(Name="ABC-123", LockData=False, LockedFields=[])
+    flow.during = lambda: flow.items["1"].update(Name="人工修改的标题")
+    assert (await flow.run())[0]["status"] == "skipped"
+    assert flow.items["1"]["Name"] == "人工修改的标题"
+    assert not flow.posts
+
+
+@pytest.mark.asyncio
 async def test_complete_item_skips_source_and_history_does_not_block_missing_cover(
     flow,
     monkeypatch,

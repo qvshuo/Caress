@@ -8,11 +8,13 @@ import json
 import logging
 from copy import deepcopy
 from datetime import datetime
+from pathlib import Path
 from urllib.parse import quote
 
 import httpx
 from PIL import Image
 
+from .identifiers import parse_filename
 from .images import validate_image
 
 FIELDS = "Path,DateCreated,MediaSources,Overview,People,Studios,Genres,Tags,ProviderIds,OriginalTitle"
@@ -96,9 +98,26 @@ def filename_tags(media):
     )
 
 
+def missing_title(item, media):
+    name = item.get("Name")
+    if not has_content("Name", name):
+        return True
+    if item.get("LockData") or "Name" in (item.get("LockedFields") or []):
+        return False
+    for file in media:
+        try:
+            code, _ = parse_filename(Path(file.filename))
+        except ValueError:
+            continue
+        if name.strip().casefold() in {code.casefold(), Path(file.filename).stem.casefold()}:
+            return True
+    return False
+
+
 def needs_enrichment(item, images, media):
+    if missing_title(item, media):
+        return True
     for key in (
-        "Name",
         "OriginalTitle",
         "Overview",
         "PremiereDate",
@@ -141,8 +160,9 @@ def metadata_update(original, metadata, media, *, replace):
         ):
             changes[key] = value
 
+    if has_content("Name", metadata.title) and (replace or missing_title(original, media)):
+        changes["Name"] = metadata.title
     for key, value in [
-        ("Name", metadata.title),
         ("OriginalTitle", metadata.original_title),
         ("Overview", metadata.plot),
     ]:

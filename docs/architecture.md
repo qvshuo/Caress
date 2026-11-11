@@ -38,7 +38,7 @@ JavDB 作品通过网页定位；演员优先使用作品页中关联的 ID，�
 
 写前读取完整 DTO，只合并来源实际返回的 Name、OriginalTitle、Overview、PremiereDate/ProductionYear、Studios、相关 Actor/Director、GenreItems、TagItems 和 caress Provider ID。缺失值不清空；无关 Provider ID、人物类型、标签、系统字段、用户数据及 LockData/LockedFields 原样保留。
 
-scrape 只填缺失的有效标量或空集合，保留已有 Actor/Director 集合与 Primary；force 有有效来源值才替换受管字段。标签在 force 中非破坏性合并，scrape 只补空标签集合与文件名标识。背景图只能按内容去重追加，不推测来源图片是否完整。预检查用于避免无意义抓取，写前重新读取并按模式合并。最终无变更时不伪造成功写入，批次记跳过并恢复原处理记录。
+scrape 只填缺失的有效标量或空集合，保留已有 Actor/Director 集合与 Primary；未锁定的标题若与视频文件名主干或规范番号完全相同，视作文件名占位标题，允许补齐。force 有有效来源值才替换受管字段。标签在 force 中非破坏性合并，scrape 只补空标签集合与文件名标识。背景图只能按内容去重追加，不推测来源图片是否完整。预检查用于避免无意义抓取，写前重新读取并按模式合并。最终无变更时不伪造成功写入，批次记跳过并恢复原处理记录。
 
 元数据和图片均回读验证；HTTP 成功不代表持久化。Emby 没有跨 HTTP 请求事务，失败可能已部分写入，必须准确标记并允许安全重试。
 
