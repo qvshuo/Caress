@@ -8,7 +8,7 @@ Emby 所选库分页读取 → 文件名识别番号 → 检查当前补齐需�
 
 模块边界见 AGENTS.md。Emby 是持久化目标，临时加工文件只活在当前批次或裁剪会话中。
 
-`docker-compose.yml` 使用 Docker 自动创建的命名卷，Caress 数据持久化于 `/data`，FlareSolverr 配置持久化于 `/config`；不需要挂载 Emby 媒体目录。已有绑定挂载数据不会自动迁移，删除命名卷会丢失其中的数据。
+`docker-compose.yml` 使用 Docker 命名卷，Caress 数据持久化于 `/data`，FlareSolverr 配置持久化于 `/config`；无需挂载 Emby 媒体目录。
 
 ## SQLite
 

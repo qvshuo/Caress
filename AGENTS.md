@@ -18,7 +18,7 @@
 - 安全与数据流细节以 `docs/architecture.md` 为准。修复确有问题的实现，不增加缓存框架、兼容层、ORM 或通用任务框架。
 
 ## 开发与交付
-- 用 `docker-compose.yml` 构建、部署、重启；Docker 自动创建命名卷，Caress 以非 root 运行，数据持久化于 `/data`，无需挂载 Emby 媒体目录。已有绑定挂载数据不会自动迁移，删除命名卷会丢失持久化数据。
+- 用 `docker-compose.yml` 构建、部署、重启；Docker 自动创建命名卷，Caress 以非 root 运行，数据持久化于 `/data`，无需挂载 Emby 媒体目录。
 - CI 保留 Python 与前端两个 Job；发布前在本地通过 Compose 验证构建、启动和重启。
 - 后端：`uv run --no-project --python 3.15 --with-requirements requirements-dev.txt ruff check --no-cache caress tests`；同一环境运行 `python -m pytest tests -q`。
 - 前端在仓库外的副本执行 `bun install --frozen-lockfile`、`bun run build`（含严格类型检查）及 `bun run test`；Playwright 需安装 Chromium。
