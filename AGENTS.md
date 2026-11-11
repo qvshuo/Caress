@@ -1,7 +1,7 @@
 # Caress
 
 ## 边界
-- Python 3.15、React/TypeScript、Tailwind CSS 4、Base UI、Bun、SQLite；版本为 2.0.1。只维护 main，可打匹配版本的 Git Tag，不创建 GitHub Release。
+- Python 3.15、React/TypeScript、Tailwind CSS 4、Base UI、Bun、SQLite；版本为 2.1.0。只维护 main，可打匹配版本的 Git Tag，不创建 GitHub Release。
 - Emby 独占媒体、元数据、人物与图片；Caress 只做 JAV 数据获取、翻译、匹配、封面裁剪和 REST 写入。不得挂载或修改媒体源，不写 NFO，不引入独立媒体库、编辑器或账户体系。
 - SQLite 仅保存设置、匹配规则、处理记录、当前批次和来源冷却；不提供历史配置或数据库导入、转换、升级逻辑。
 - 按视频/STRM 文件名主干识别，仅剥离末尾 `-C`、`-U`、`-UC`、`-cdN`，不依赖父目录，不模糊匹配或重命名。

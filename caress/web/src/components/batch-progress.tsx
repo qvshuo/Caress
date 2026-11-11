@@ -23,12 +23,17 @@ export function BatchProgress({
     batch.items.map((item) => `${item.action}:${item.source ?? ""}`),
   ).size > 1;
   const label = (item: BatchItem) => {
-    const code = item.code || order.find((w) => w.id === item.id)?.label || item.id;
+    const code =
+      item.code ||
+      order.find((work) => work.id === item.id)?.label ||
+      item.id;
     return [
       code,
       mixed && item.action === "force" ? "替换" : "",
       mixed && item.source ? sourceLabels[item.source] : "",
-    ].filter(Boolean).join(" · ");
+    ]
+      .filter(Boolean)
+      .join(" · ");
   };
   const current = batch.items.filter((i) => i.status === "running");
   const waiting = batch.items.filter((i) => i.status === "pending");
@@ -95,27 +100,34 @@ export function BatchProgress({
             </p>
           )}
           <ul className="mt-2 max-h-48 space-y-2 overflow-auto wrap-anywhere">
-            {details.map((item, index) => (
-              <li key={`${item.id}-${index}`}>
-                {label(item)}：
-                {item.error && (
-                  <span>
-                    {item.status === "skipped"
-                      ? "跳过"
-                      : item.status === "cancelled"
-                        ? "已取消"
-                        : "失败"}{" "}
-                    · {item.status === "cancelled" ? item.error.replace(/^已取消[，；]\s*/, "") : item.error}
-                  </span>
-                )}
-                {item.note && <span>跳过 · {item.note}</span>}
-                {item.warnings?.map((message, index) => (
-                  <p key={index} className="text-muted-foreground">
-                    警告 · {message}
-                  </p>
-                ))}
-              </li>
-            ))}
+            {details.map((item, index) => {
+              const error =
+                item.status === "cancelled"
+                  ? item.error?.replace(/^已取消[，；]\s*/, "")
+                  : item.error;
+
+              return (
+                <li key={`${item.id}-${index}`}>
+                  {label(item)}：
+                  {item.error && (
+                    <span>
+                      {item.status === "skipped"
+                        ? "跳过"
+                        : item.status === "cancelled"
+                          ? "已取消"
+                          : "失败"}{" "}
+                      · {error}
+                    </span>
+                  )}
+                  {item.note && <span>跳过 · {item.note}</span>}
+                  {item.warnings?.map((message, warningIndex) => (
+                    <p key={warningIndex} className="text-muted-foreground">
+                      警告 · {message}
+                    </p>
+                  ))}
+                </li>
+              );
+            })}
           </ul>
         </details>
       )}

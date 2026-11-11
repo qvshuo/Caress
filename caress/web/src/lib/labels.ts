@@ -1,3 +1,5 @@
+import type { Source } from "./types";
+
 export const statuses = {
   pending: "待处理",
   success: "已完成",
@@ -17,8 +19,6 @@ export const actions = {
   scrape: "刮削缺少的元数据",
   force: "替换所有的元数据",
 };
-import type { Source } from "./types";
-
 export const sourceLabels: Record<Source, string> = {
   dmm: "DMM",
   javdb: "JavDB",
