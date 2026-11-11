@@ -6,7 +6,7 @@ services:
     ports:
       - "0.0.0.0:9307:9307"
     volumes:
-      - /path/to/caress-data:/data # 设置和处理记录；无需挂载媒体目录
+      - caress-data:/data
     environment:
       TZ: Asia/Shanghai
     stop_grace_period: 45s
@@ -19,9 +19,13 @@ services:
     environment:
       TZ: Asia/Shanghai
     volumes:
-      - /path/to/caress-data/flaresolverr:/config
+      - flaresolverr-data:/config
     healthcheck:
       test: [CMD, curl, -fsS, http://127.0.0.1:8191/]
       interval: 5s
       timeout: 5s
       retries: 10
+
+volumes:
+  caress-data:
+  flaresolverr-data:

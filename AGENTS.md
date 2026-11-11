@@ -18,10 +18,10 @@
 - 安全与数据流细节以 `docs/architecture.md` 为准。修复确有问题的实现，不增加缓存框架、兼容层、ORM 或通用任务框架。
 
 ## 开发与交付
-- 用 Docker Compose 构建、部署、重启；生产只有 Python 运行时，以非 root 运行，仅挂载 `/data`。
+- 用 `docker-compose.yml` 构建、部署、重启；Docker 自动创建命名卷，Caress 以非 root 运行，数据持久化于 `/data`，无需挂载 Emby 媒体目录。已有绑定挂载数据不会自动迁移，删除命名卷会丢失持久化数据。
 - CI 保留 Python 与前端两个 Job；发布前在本地通过 Compose 验证构建、启动和重启。
 - 后端：`uv run --no-project --python 3.15 --with-requirements requirements-dev.txt ruff check --no-cache caress tests`；同一环境运行 `python -m pytest tests -q`。
 - 前端在仓库外的副本执行 `bun install --frozen-lockfile`、`bun run build`（含严格类型检查）及 `bun run test`；Playwright 需安装 Chromium。
-- 测试源、bun.lock、YuNet 模型和许可必须跟踪 Git；依赖环境、缓存、构建产物、测试输出和临时夹具放仓库外。真实密钥、数据库、日志、图片缓存和本地 Compose 不得提交。
+- 测试源、bun.lock、YuNet 模型、许可和正式 Compose 配置必须跟踪 Git；依赖环境、缓存、构建产物、测试输出和临时夹具放仓库外。真实密钥、数据库、日志、图片缓存和本地 Compose 覆盖配置不得提交。
 - 保留透明 Logo `assets/logo.png`（512px）和 `caress/web/assets/favicon.png`（64px）的原比例。注释只解释必要的契约、安全边界与算法取舍。
 - 真实 Emby 验证优先只读；写入只针对明确隔离的测试 Item。任何清理不得触及媒体源或其他应用资源；未执行的验证不得宣称通过。

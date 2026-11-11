@@ -109,7 +109,7 @@ export function BatchProgress({
               return (
                 <li key={`${item.id}-${index}`}>
                   {label(item)}：
-                  {item.error && (
+                  {error && (
                     <span>
                       {item.status === "skipped"
                         ? "跳过"

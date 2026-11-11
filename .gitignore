@@ -2,7 +2,6 @@
 __pycache__/
 node_modules/
 /caress/web/dist/
-/docker-compose.yml
 /data/
 /temp/
 ._*
