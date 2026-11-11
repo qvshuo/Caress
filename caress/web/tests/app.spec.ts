@@ -73,6 +73,23 @@ test("offline errors do not show stale library data", async ({ page }) => {
   await expect(page.getByRole("alert")).toContainText("无法连接 Emby");
   await expect(page.getByText("Emby 当前标题")).toHaveCount(0);
 });
+
+test("unconfigured library shows only the setup prompt", async ({ page }) => {
+  let workRequests = 0;
+  await page.route("**/api/settings", (route) =>
+    route.fulfill({ json: { ...settings, configured: false } }),
+  );
+  await page.route("**/api/works?**", (route) => {
+    workRequests++;
+    return route.fulfill({ status: 400, json: { detail: "请先配置 Emby 地址和 API Key" } });
+  });
+  await page.goto("/");
+  await page.getByRole("navigation").getByRole("button", { name: "作品" }).click();
+  await expect(page.getByText("请先连接 Emby 并选择媒体库")).toBeVisible();
+  await expect(page.getByText("请先配置 Emby 地址和 API Key")).toHaveCount(0);
+  await expect(page.getByText("没有符合条件的作品")).toHaveCount(0);
+  expect(workRequests).toBe(0);
+});
 test("settings use comma-separated routes without operational knobs", async ({
   page,
 }) => {

@@ -73,8 +73,14 @@ export function Library({
     const controller = new AbortController();
     setRows([]);
     setError("");
-    setLoading(true);
     setSelected(new Set());
+    if (!configured) {
+      setTotal(0);
+      setOrder([]);
+      setLoading(false);
+      return () => controller.abort();
+    }
+    setLoading(true);
     const timer = setTimeout(
       () => {
         void api<{ items: Work[]; total: number; order: WorkNeighbor[] }>(
@@ -104,7 +110,7 @@ export function Library({
       clearTimeout(timer);
       controller.abort();
     };
-  }, [query, filter, page, pageSize, revision, setState, setOrder]);
+  }, [configured, query, filter, page, pageSize, revision, setState, setOrder]);
   const pages = Math.max(1, Math.ceil(total / pageSize));
   const results = new Map(batch?.items.map((item) => [item.id, item]));
   function select(ids: string[], checked: boolean) {
@@ -209,7 +215,7 @@ export function Library({
             />
           </div>
         </div>
-        {error ? (
+        {!configured ? null : error ? (
           <Alert role="alert" className="m-4 w-auto">
             <p>{error}</p>
             <Button variant="outline" onClick={refresh}>
