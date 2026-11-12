@@ -111,6 +111,9 @@ export function Library({
       controller.abort();
     };
   }, [configured, query, filter, page, pageSize, revision, setState, setOrder]);
+  if (!configured) {
+    return <Empty>请先连接 Emby 并选择媒体库</Empty>;
+  }
   const pages = Math.max(1, Math.ceil(total / pageSize));
   const results = new Map(batch?.items.map((item) => [item.id, item]));
   function select(ids: string[], checked: boolean) {
@@ -167,7 +170,6 @@ export function Library({
           label="刷新作品列表"
         />
       </div>
-      {!configured && <Alert>请先连接 Emby 并选择媒体库</Alert>}
       {progress}
       <div className="flex flex-wrap items-center gap-2">
         <Select
@@ -215,7 +217,7 @@ export function Library({
             />
           </div>
         </div>
-        {!configured ? null : error ? (
+        {error ? (
           <Alert role="alert" className="m-4 w-auto">
             <p>{error}</p>
             <Button variant="outline" onClick={refresh}>

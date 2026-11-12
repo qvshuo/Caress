@@ -88,7 +88,40 @@ test("unconfigured library shows only the setup prompt", async ({ page }) => {
   await expect(page.getByText("请先连接 Emby 并选择媒体库")).toBeVisible();
   await expect(page.getByText("请先配置 Emby 地址和 API Key")).toHaveCount(0);
   await expect(page.getByText("没有符合条件的作品")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "刷新作品列表" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "开始执行" })).toHaveCount(0);
+  await expect(page.getByRole("combobox", { name: "刮削方式" })).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: "搜索番号或标题" })).toHaveCount(0);
+  await expect(page.getByRole("table")).toHaveCount(0);
   expect(workRequests).toBe(0);
+});
+
+test("library clears stale works when configuration changes and reloads after setup", async ({ page }) => {
+  let configured = true;
+  let workRequests = 0;
+  await page.route("**/api/settings", (route) => {
+    if (route.request().method() === "PUT") configured = !configured;
+    return route.fulfill({ json: { ...settings, configured } });
+  });
+  await page.route("**/api/works?**", (route) => {
+    workRequests++;
+    return route.fulfill({ json: { items: [work], total: 1, order: [] } });
+  });
+  await page.goto("/");
+  await expect(page.getByRole("row", { name: "查看 ABC-123" })).toBeVisible();
+  await page.getByRole("navigation").getByRole("button", { name: "设置" }).click();
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(page.getByText("已保存")).toBeVisible();
+  await page.getByRole("navigation").getByRole("button", { name: "作品" }).click();
+  await expect(page.getByText("请先连接 Emby 并选择媒体库")).toBeVisible();
+  await expect(page.getByText("Emby 当前标题")).toHaveCount(0);
+  const before = workRequests;
+  await page.getByRole("navigation").getByRole("button", { name: "设置" }).click();
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(page.getByText("已保存")).toBeVisible();
+  await page.getByRole("navigation").getByRole("button", { name: "作品" }).click();
+  await expect(page.getByRole("row", { name: "查看 ABC-123" })).toBeVisible();
+  expect(workRequests).toBeGreaterThan(before);
 });
 test("settings use comma-separated routes without operational knobs", async ({
   page,

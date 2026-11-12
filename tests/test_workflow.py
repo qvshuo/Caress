@@ -129,6 +129,25 @@ async def test_http_204_is_not_proof_of_persistence():
 
 
 @pytest.mark.asyncio
+async def test_metadata_readback_checks_managed_fields_only():
+    original = item(Name="old", LockData=False, LockedFields=[])
+    current = {**original, "Name": "new", "LockData": True, "LockedFields": ["Name"],
+               "ProviderIds": {"caress": "ABC-123"}}
+    client = EmbyClient(EmbySettings(url="http://emby"))
+    client.item = AsyncMock(side_effect=[original, current])
+    client.request = AsyncMock()
+    try:
+        result, changed = await client.write_metadata(
+            "1", SourceMetadata(code="ABC-123", title="new"), [], replace=True
+        )
+        assert changed and result == current
+        sent = client.request.await_args.kwargs["json"]
+        assert sent["LockData"] is False and sent["LockedFields"] == []
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
 async def test_emby_library_pagination_and_duplicate_items():
     starts = []
 
@@ -1266,6 +1285,71 @@ async def test_shared_original_is_downloaded_once_and_primary_is_cropped_only_on
     assert {call.args[0] for call in client.upload.await_args_list} == {"B", "C"}
     await processor.release("ABC-123", None)
     assert not list(folder.iterdir())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "candidates,expected_primary,expected_backdrops",
+    [
+        ([("poster", (90, 120))], True, []),
+        ([("cover", (120, 90))], True, [(120, 90)]),
+        ([("cover", (90, 120))], True, []),
+        ([("sample", (120, 90)), ("sample", (90, 120))], False, [(120, 90)]),
+    ],
+)
+async def test_only_landscape_artwork_is_uploaded_as_backdrop(
+    preparing, monkeypatch, candidates, expected_primary, expected_backdrops
+):
+    from io import BytesIO
+
+    from PIL import Image
+
+    from caress.models import ArtworkCandidate, SourceId
+    from test_images import image_bytes
+
+    processor, _ = preparing
+    metadata = processor.scraper.scrape.return_value.metadata
+    metadata.artwork = [
+        ArtworkCandidate(url=f"https://source/{i}", source=SourceId.DMM,
+                         role=role, referer="https://source")
+        for i, (role, _) in enumerate(candidates)
+    ]
+    async def fetch(client, candidate):
+        return image_bytes(size=candidates[int(candidate.url.rsplit("/", 1)[1])][1])
+
+    monkeypatch.setattr("caress.processing.fetch_artwork", fetch)
+    monkeypatch.setattr("caress.processing.crop_poster", lambda data: {"content": image_bytes(size=(60, 90))})
+    prepared = await processor.prepare("ABC-123")
+    client = SimpleNamespace(
+        write_metadata=AsyncMock(return_value=({"People": []}, False)),
+        image_info=AsyncMock(return_value=[]),
+        backdrop_signatures=AsyncMock(return_value=set()),
+        append_backdrop=AsyncMock(return_value=True),
+        upload=AsyncMock(),
+    )
+    await processor.write(client, "1", prepared, [], replace=False)
+    assert bool(client.upload.await_count) == expected_primary
+    assert [Image.open(BytesIO(call.args[1])).size for call in client.append_backdrop.await_args_list] == expected_backdrops
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("size,backdrop", [((90, 120), True), ((120, 90), False)])
+async def test_backdrop_orientation_uses_exif(preparing, monkeypatch, size, backdrop):
+    from io import BytesIO
+
+    from PIL import Image
+
+    processor, _ = preparing
+    metadata = processor.scraper.scrape.return_value.metadata
+    metadata.artwork = metadata.artwork[:1]
+    output = BytesIO()
+    exif = Image.Exif()
+    exif[274] = 6
+    Image.new("RGB", size, "red").save(output, format="JPEG", exif=exif)
+    monkeypatch.setattr("caress.processing.fetch_artwork", AsyncMock(return_value=output.getvalue()))
+    prepared = await processor.prepare("ABC-123")
+    assert any(kind == "Primary" for kind, _ in prepared.images)
+    assert any(kind == "Backdrop" for kind, _ in prepared.images) is backdrop
 
 
 @pytest.mark.asyncio

@@ -248,11 +248,12 @@ async def test_scrape_replaces_filename_placeholder_even_after_success(flow, nam
     {"LockData": True, "LockedFields": []},
     {"LockData": False, "LockedFields": ["Name"]},
 ])
-async def test_scrape_keeps_locked_filename_title(flow, locks):
+async def test_scrape_fills_filename_title_regardless_of_emby_locks(flow, locks):
     flow.items["1"].update(Name="ABC-123", Overview="", **locks)
     assert (await flow.run())[0]["status"] == "success"
-    assert flow.items["1"]["Name"] == "ABC-123"
+    assert flow.items["1"]["Name"] == "source title"
     assert flow.items["1"]["Overview"] == "source plot"
+    assert all(flow.items["1"][key] == value for key, value in locks.items())
 
 
 @pytest.mark.asyncio
@@ -506,7 +507,7 @@ def test_fill_merges_only_filename_tags_into_nonempty_user_tags():
 @pytest.mark.parametrize(
     "existing,valid", [(True, False), (False, False), (False, True)]
 )
-async def test_optional_backdrop_failure_only_blocks_when_no_background_remains(
+async def test_optional_backdrop_failure_is_nonfatal(
     flow, replace, existing, valid
 ):
     flow.items["1"]["Overview"] = ""
@@ -516,15 +517,11 @@ async def test_optional_backdrop_failure_only_blocks_when_no_background_remains(
     flow.errors = [("Backdrop", "sample unavailable")]
     rows = await flow.run("force" if replace else "scrape")
     assert flow.items["1"]["Overview"] == "source plot"
+    assert rows[0]["status"] == "success" and "sample unavailable" in rows[0]["warnings"]
     if existing or valid:
-        assert (
-            rows[0]["status"] == "success"
-            and "sample unavailable" in rows[0]["warnings"]
-        )
         assert flow.images["1"]["Backdrop"]
     else:
-        assert rows[0]["status"] == "failed" and "背景图获取失败" in rows[0]["error"]
-        assert "sample unavailable" in rows[0]["error"]
+        assert "Backdrop" not in flow.images["1"]
 
 
 @pytest.mark.asyncio

@@ -4,9 +4,11 @@ import asyncio
 import hashlib
 import shutil
 from dataclasses import dataclass, field
+from io import BytesIO
 from pathlib import Path
 
 import httpx
+from PIL import Image
 
 from .actors import ActorAliases, actor_type, map_actor_names
 from .emby import image_pixels_match, pixel_digest
@@ -147,6 +149,15 @@ class WorkProcessor:
             for url, (candidate, kinds) in planned.items():
                 try:
                     data = await fetch_artwork(self.scraper.client, candidate)
+                    if "Backdrop" in kinds:
+                        with Image.open(BytesIO(data)) as image:
+                            width, height = image.size
+                            if image.getexif().get(274) in (5, 6, 7, 8):
+                                width, height = height, width
+                        if width <= height:
+                            kinds = [kind for kind in kinds if kind != "Backdrop"]
+                    if not kinds:
+                        continue
                     path = folder / (
                         hashlib.sha256(url.encode()).hexdigest() + ".original"
                     )
@@ -173,7 +184,6 @@ class WorkProcessor:
         )
         existing = await client.image_info(ident)
         has_primary = any(row["ImageType"] == "Primary" for row in existing)
-        has_backdrop = any(row["ImageType"] == "Backdrop" for row in existing)
         fatal, warnings = [], list(prepared.warnings)
         for kind, message in prepared.errors:
             if kind == "Primary" and (replace or not has_primary):
@@ -185,7 +195,6 @@ class WorkProcessor:
             if any(kind == "Backdrop" for kind, _ in prepared.images)
             else set()
         )
-        has_backdrop = has_backdrop or bool(signatures)
         for kind, path in prepared.images:
             if kind == "Primary" and has_primary and not replace:
                 continue
@@ -223,14 +232,7 @@ class WorkProcessor:
                 added = await client.append_backdrop(
                     ident, data, signatures, prepared.digests.get(path)
                 )
-                has_backdrop = has_backdrop or added
                 changed = changed or added
-        backdrop_offered = any(
-            kind == "Backdrop"
-            for kind, _ in (*prepared.images, *prepared.errors)
-        )
-        if backdrop_offered and not has_backdrop:
-            fatal.append("背景图获取失败")
         # Portraits are optional and require a verified mapping, an Emby ID and no existing image.
         async with self.people_lock:
             for mapping in prepared.mappings:

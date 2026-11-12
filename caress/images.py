@@ -100,8 +100,8 @@ def image_plan(items):
     plan = []
     if posters or covers:
         plan.append((covers[0] if covers else posters[0], "poster"))
-    if covers or posters:
-        plan.append((covers[0] if covers else posters[0], "fanart"))
+    if covers:
+        plan.append((covers[0], "fanart"))
     samples = list(
         {
             (item.source, item.url): item for item in items if item.role == "sample"

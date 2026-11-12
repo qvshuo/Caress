@@ -102,8 +102,6 @@ def missing_title(item, media):
     name = item.get("Name")
     if not has_content("Name", name):
         return True
-    if item.get("LockData") or "Name" in (item.get("LockedFields") or []):
-        return False
     for file in media:
         try:
             code, _ = parse_filename(Path(file.filename))
@@ -404,17 +402,12 @@ class EmbyClient:
     async def write_metadata(self, ident, metadata, media, *, replace):
         original = await self.item(ident)
         changes = metadata_update(original, metadata, media, replace=replace)
-        # Full DTO preserves system/user fields and the existing lock state.
+        # Preserve fields outside the managed set by merging into the full DTO.
         changed = not fields_match(original, changes)
         if changed:
             await self.request("POST", f"Items/{ident}", json={**original, **changes})
         current = await self.item(ident)
-        if not fields_match(current, changes) or (
-            changed
-            and any(
-                current.get(k) != original.get(k) for k in ("LockData", "LockedFields")
-            )
-        ):
+        if not fields_match(current, changes):
             raise ValueError("Emby 元数据保存验证失败，部分内容可能已写入")
         return current, changed
 
