@@ -526,6 +526,32 @@ async def test_crop_replaces_only_after_success_and_expires_lazily(
 
 
 @pytest.mark.asyncio
+async def test_crop_save_does_not_reload_detail(crop_service):
+    service, client, _ = crop_service
+    client.upload = AsyncMock()
+    service.detail = AsyncMock(side_effect=ValueError("详情查询失败"))
+    crop = await service.crop_source("1")
+
+    assert await service.crop_apply("1", crop["token"], crop["box"]) == {
+        "success": True
+    }
+    client.upload.assert_awaited_once()
+    service.detail.assert_not_awaited()
+    assert service.crop is None
+
+
+@pytest.mark.asyncio
+async def test_crop_save_failure_keeps_session(crop_service):
+    service, client, _ = crop_service
+    client.upload = AsyncMock(side_effect=ValueError("图片保存验证失败"))
+    crop = await service.crop_source("1")
+
+    with pytest.raises(ValueError, match="图片保存验证失败"):
+        await service.crop_apply("1", crop["token"], crop["box"])
+    assert service.crop_session("1", crop["token"])
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("replace_during_upload", [False, True])
 async def test_concurrent_crop_sources_keep_latest_token_and_save_only_primary(
     crop_service, replace_during_upload

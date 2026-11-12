@@ -232,4 +232,4 @@ class Service:
                 ]
                 await client.upload(ident, "Primary", data)
                 self.crop_close(ident, token)
-        return await self.detail(ident)
+        return {"success": True}

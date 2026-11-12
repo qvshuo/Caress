@@ -20,16 +20,14 @@ import {
 } from "@/components/ui/dialog";
 import { api } from "@/lib/api";
 import { cropBox, percentCrop } from "@/lib/crop";
-import type { Crop, Source } from "@/lib/types";
+import type { Crop } from "@/lib/types";
 export default function CropEditor({
   id,
-  source,
   busy,
   close,
   applied,
 }: {
   id: string;
-  source?: Source;
   busy: boolean;
   close: () => void;
   applied: () => void;
@@ -49,10 +47,8 @@ export default function CropEditor({
       const ticket = ++version.current;
       setPending("source");
       setError("");
-      const query = new URLSearchParams();
-      if (source) query.set("source", source);
       try {
-        const value = await api<Crop>(`${base}/source?${query}`, "POST");
+        const value = await api<Crop>(`${base}/source`, "POST");
         if (!active.current || ticket !== version.current) {
           void api(`${base}/${value.token}`, "DELETE").catch(() => {});
           return;
@@ -71,7 +67,7 @@ export default function CropEditor({
         }
       }
     },
-    [base, source],
+    [base],
   );
   useEffect(() => {
     active.current = true;
@@ -254,11 +250,11 @@ export default function CropEditor({
             onClick={() => {
               if (!crop) return;
               setSaving(true);
-              void api(`${base}/apply`, "POST", {
+              void api<{ success: boolean }>(`${base}/apply`, "POST", {
                 token: crop.token,
                 box: crop.box,
               })
-                .then(applied)
+                .then(() => applied())
                 .catch((e: Error) => setError(e.message))
                 .finally(() => setSaving(false));
             }}

@@ -354,7 +354,6 @@ export default function Work({
             <Suspense fallback={<Empty>正在加载…</Empty>}>
               <CropEditor
                 id={id}
-                source={source || undefined}
                 busy={writing}
                 close={() => setCrop(false)}
                 applied={() => {

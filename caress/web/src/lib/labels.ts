@@ -2,7 +2,7 @@ import type { Source } from "./types";
 
 export const statuses = {
   pending: "待处理",
-  success: "已完成",
+  success: "已处理",
   failed: "失败",
   rescrape_failed: "失败",
   cancelled: "待处理",

@@ -263,7 +263,7 @@ test("crop drags at 2:3 and saves Primary without starting a scrape", async ({
     const input = route.request().postDataJSON() as { box?: number[] } | null;
     if (path.endsWith("/apply")) {
       applied = input?.box;
-      await route.fulfill({ json: work });
+      await route.fulfill({ json: { success: true } });
       return;
     }
     if (path.endsWith("/preview")) previews++;
@@ -307,6 +307,56 @@ test("crop drags at 2:3 and saves Primary without starting a scrape", async ({
   expect(applied).toBeDefined();
   expect(applied![2] * 3).toBe(applied![3] * 2);
   expect(batches).toBe(0);
+});
+
+test("crop save remains successful when the subsequent detail refresh fails", async ({ page }) => {
+  let saved = false;
+  await page.route("**/api/works/1", (route) =>
+    saved
+      ? route.fulfill({ status: 502, json: { detail: "详情查询失败" } })
+      : route.fulfill({ json: work }),
+  );
+  await page.route("**/api/works/1/crop/**", (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith("/source")) {
+      expect(url.searchParams.has("source")).toBe(false);
+      return route.fulfill({ json: { token: "session", box: [0, 0, 60, 90], width: 120, height: 90, preview: "" } });
+    }
+    if (url.pathname.endsWith("/image"))
+      return route.fulfill({ contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="90"/>' });
+    if (url.pathname.endsWith("/apply")) {
+      saved = true;
+      return route.fulfill({ json: { success: true } });
+    }
+    return route.fulfill({ json: {} });
+  });
+  await page.goto("/#library/work/1");
+  await page.getByRole("combobox", { name: "数据来源" }).click();
+  await page.getByRole("option", { name: "JavDB", exact: true }).click();
+  await page.getByRole("button", { name: "裁剪封面" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("img", { name: "裁剪原图" })).toBeVisible();
+  await dialog.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole("alert")).toContainText("详情查询失败");
+  await expect(page.getByRole("button", { name: "重新加载" })).toBeVisible();
+});
+
+test("processed work status is shared by list, filter and detail", async ({ page }) => {
+  let selected = "";
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.pathname === "/api/works") selected = url.searchParams.get("status") || "";
+  });
+  await page.goto("/");
+  await expect(page.getByRole("row", { name: "查看 ABC-123" }).locator("[data-slot=badge]")).toHaveText("已处理");
+  await page.getByRole("combobox", { name: "筛选状态" }).click();
+  await expect(page.getByRole("option", { name: "处理中" })).toHaveCount(0);
+  await page.getByRole("option", { name: "已处理" }).click();
+  await expect.poll(() => selected).toBe("success");
+  await page.getByRole("row", { name: "查看 ABC-123" }).click();
+  await expect(page.getByRole("heading", { name: "Emby 当前标题" })).toBeVisible();
+  await expect(page.locator("[data-slot=badge]").filter({ hasText: "已处理" })).toBeVisible();
 });
 
 test("works remain usable at mobile width", async ({ page }) => {
@@ -393,7 +443,7 @@ test("start button is stable when mode changes and grid is absent", async ({
     page
       .getByRole("row", { name: "查看 ABC-123" })
       .locator("[data-slot=badge]"),
-  ).toHaveText("已完成");
+  ).toHaveText("已处理");
 });
 
 test("detail next and previous follow current list and return has no icon", async ({
