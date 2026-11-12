@@ -1552,3 +1552,102 @@ def test_emby_http_and_connection_errors_use_chinese_fallbacks():
         assert f"HTTP {status}" in sync_error(error.value)
     assert sync_error(httpx.ReadTimeout("timeout", request=request)) == "Emby 请求超时"
     assert "无法连接 Emby" in sync_error(httpx.ConnectError("offline", request=request))
+
+
+@pytest.mark.asyncio
+async def test_crop_source_wait_and_cancel_preserve_previous_session(crop_service):
+    service, _, source = crop_service
+    first = await service.crop_source('1')
+    previous = service.crop_session('1', first['token'])
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def cover(*args):
+        entered.set()
+        await release.wait()
+        return previous.data
+
+    source.cover.side_effect = cover
+    pending = asyncio.create_task(service.crop_source('1', fetch_source=True))
+    await entered.wait()
+    assert service.crop is previous
+    pending.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await pending
+    assert service.crop is previous
+    release.set()
+    second = await service.crop_source('1', fetch_source=True)
+    assert second['token'] != first['token']
+
+
+@pytest.mark.asyncio
+async def test_source_queue_releases_and_times_out_separately(tmp_path, monkeypatch):
+    import caress.scraper as module
+    from caress.models import ScrapeRequest, SourceId, Status
+
+    scraper = module.Scraper(Settings(database=tmp_path / 'db'), client=object())
+    source = SourceId.JAVDB
+    lock = asyncio.Lock()
+    scraper.source_locks[source] = lock
+    metadata = SourceMetadata(code='ABC-123', title='title')
+    adapter = scraper.sources[source]
+    adapter.fetch = AsyncMock(return_value=adapter.found(ScrapeRequest(code='ABC-123'), metadata))
+    await lock.acquire()
+    pending = asyncio.create_task(scraper.scrape(ScrapeRequest(code='ABC-123', source=source)))
+    await asyncio.sleep(0)
+    adapter.fetch.assert_not_awaited()
+    lock.release()
+    assert (await pending).status == Status.FOUND
+    assert not lock.locked()
+    await lock.acquire()
+    monkeypatch.setattr(module, 'SOURCE_TIMEOUT_SECONDS', 0.01)
+    result = await scraper.scrape(ScrapeRequest(code='ABC-123', source=source))
+    assert result.status == Status.TIMEOUT
+    assert result.results[0].message == '等待来源可用超时'
+    assert lock.locked()  # The waiting request must not release another owner's lock.
+    lock.release()
+    async def stalled(request):
+        await asyncio.Event().wait()
+
+    adapter.fetch.side_effect = stalled
+    result = await scraper.scrape(ScrapeRequest(code='ABC-123', source=source))
+    assert result.results[0].message == '超过来源处理时限'
+    assert not lock.locked()
+
+
+@pytest.mark.asyncio
+async def test_crop_accepts_normal_sixty_second_source_pacing(crop_service, monkeypatch):
+    import caress.service as module
+    from caress.http import WebClient
+    from caress.models import SourceId
+
+    service, _, source = crop_service
+    first = await service.crop_source('1')
+    data = service.crop_session('1', first['token']).data
+    clock = [100.0]
+    delays, timeouts = [], []
+    timeout = asyncio.timeout
+    monkeypatch.setattr('caress.http.time.monotonic', lambda: clock[0])
+
+    async def sleep(delay):
+        delays.append(delay)
+        clock[0] += delay
+
+    def timed(seconds):
+        timeouts.append(seconds)
+        return timeout(seconds)
+
+    monkeypatch.setattr(module.asyncio, 'timeout', timed)
+    client = WebClient()
+    client._metadata_last['source:javdb'] = clock[0]
+
+    async def cover(*args):
+        with monkeypatch.context() as patch:
+            patch.setattr('caress.http.asyncio.sleep', sleep)
+            await client._throttle(SourceId.JAVDB, 'javdb.com')
+        return data
+
+    source.cover.side_effect = cover
+    result = await service.crop_source('1', fetch_source=True)
+    assert delays == [60]
+    assert 45 not in timeouts
+    assert result['token'] != first['token']

@@ -1038,7 +1038,7 @@ test("settings automatically restores libraries; failed reload preserves selecti
   await expect(page.getByText("按顺序查询，命中即停止")).toHaveCount(0);
 });
 
-test("crop failure shows the error without a source fetch button", async ({
+test("crop failure allows explicit source acquisition retry", async ({
   page,
 }) => {
   await page.route("**/api/works/1/crop/**", (route) => {
@@ -1056,8 +1056,8 @@ test("crop failure shows the error without a source fetch button", async ({
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByRole("alert")).toHaveText("无法获取原图，请检查 Emby 背景图或数据来源");
   await expect(
-    dialog.getByRole("button", { name: "从来源获取原图", exact: true }),
-  ).toHaveCount(0);
+    dialog.getByRole("button", { name: "从来源获取封面", exact: true }),
+  ).toBeEnabled();
 });
 
 test("both pages share queued progress and completed detail refreshes", async ({
@@ -1132,4 +1132,88 @@ test("both pages share queued progress and completed detail refreshes", async ({
   await expect(progress.getByText(/^当前：/)).toHaveCount(0);
   await expect(progress.getByText(/^等待：/)).toHaveCount(0);
   await expect(progress.getByRole("button", { name: "关闭", exact: true })).toHaveCount(0);
+});
+
+test("source cover replaces crop only on success and failed acquisition remains savable", async ({ page }) => {
+  let acquisitions = 0, uploads = 0;
+  await page.route("**/api/works/1/crop/**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith("/source")) {
+      acquisitions++;
+      expect(url.searchParams.get("fetch_source")).toBe(acquisitions === 1 ? null : "true");
+      expect(url.searchParams.has("source")).toBe(false);
+      if (acquisitions === 3) return route.fulfill({ status: 502, json: { detail: "来源暂不可用" } });
+      return route.fulfill({ json: { token: `session${acquisitions}`, box: [0, 0, 60, 90], width: 120, height: 90, preview: "" } });
+    }
+    if (url.pathname.endsWith("/image")) return route.fulfill({ contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="90"/>' });
+    if (url.pathname.endsWith("/apply")) uploads++;
+    return route.fulfill({ json: { success: true } });
+  });
+  await page.goto('/#library/work/1');
+  await page.getByRole('button', { name: '裁剪封面' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('img', { name: '裁剪原图' })).toHaveAttribute('src', /session1/);
+  await dialog.getByRole('button', { name: '从来源获取封面' }).click();
+  await expect(dialog.getByRole('img', { name: '裁剪原图' })).toHaveAttribute('src', /session2/);
+  expect(uploads).toBe(0);
+  await dialog.getByRole('button', { name: '从来源获取封面' }).click();
+  await expect(dialog.getByRole('alert')).toContainText('来源暂不可用');
+  await expect(dialog.getByRole('img', { name: '裁剪原图' })).toHaveAttribute('src', /session2/);
+  await dialog.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(uploads).toBe(1);
+});
+
+test("idle page discovers external batch on focus and refresh without idle polling", async ({ page }) => {
+  let requests = 0;
+  let external: object | null = null;
+  await page.route('**/api/batch', route => {
+    requests++;
+    return route.fulfill({ json: external });
+  });
+  await page.goto('/');
+  await expect(page.getByRole('row', { name: '查看 ABC-123' })).toBeVisible();
+  const initial = requests;
+  await page.waitForTimeout(1700);
+  expect(requests).toBe(initial);
+  external = { id: 'external', status: 'running', current: ['1'], items: [{ id: '1', code: 'ABC-123', action: 'scrape', source: null, status: 'running' }] };
+  await page.evaluate(() => {
+    window.dispatchEvent(new Event('focus'));
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await expect(page.getByRole('button', { name: '取消', exact: true })).toBeVisible();
+  expect(requests).toBe(initial + 1);
+  external = { id: 'external', status: 'finished', current: [], items: [{ id: '1', action: 'scrape', source: null, status: 'success' }] };
+  await expect(page.getByLabel('当前批次')).toContainText('1 成功');
+  await page.getByRole('button', { name: '刷新作品列表' }).click();
+  await expect.poll(() => requests).toBeGreaterThan(initial + 2);
+});
+
+test("late batch synchronization cannot replace a newly submitted batch", async ({ page }) => {
+  let reads = 0;
+  let release: (() => Promise<void>) | undefined;
+  const running = { id: 'new', status: 'running', current: ['1'], items: [{ id: '1', code: 'ABC-123', action: 'scrape', source: null, status: 'running' }] };
+  await page.route('**/api/batch', async route => {
+    if (route.request().method() === 'POST') return route.fulfill({ json: running });
+    reads++;
+    if (reads === 2) {
+      await new Promise<void>(resolve => {
+        release = async () => {
+          await route.fulfill({ json: { id: 'old', status: 'finished', current: [], items: [] } });
+          resolve();
+        };
+      });
+      return;
+    }
+    await route.fulfill({ json: reads === 1 ? null : running });
+  });
+  await page.goto('/');
+  await expect(page.getByRole('row', { name: '查看 ABC-123' })).toBeVisible();
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect.poll(() => !!release).toBe(true);
+  await page.getByRole('checkbox', { name: '选择 ABC-123', exact: true }).click();
+  await page.getByRole('button', { name: '开始执行', exact: true }).click();
+  await expect(page.getByRole('button', { name: '取消', exact: true })).toBeVisible();
+  await release!();
+  await expect(page.getByLabel('当前批次')).toContainText('处理中');
 });

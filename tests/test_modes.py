@@ -588,3 +588,38 @@ async def test_uncroppable_required_primary_preserves_old_poster_and_reports_par
     assert rows[0]["status"] == "failed" and "Primary" in rows[0]["error"]
     assert flow.items["1"]["Overview"] == "source plot"
     assert flow.images["1"]["Primary"] == [image_bytes("red", size=(60, 90))]
+
+
+@pytest.mark.asyncio
+async def test_failed_scrape_retries_missing_backdrop_without_overwriting(flow, monkeypatch):
+    flow.items['1']['Overview'] = ''
+    flow.artwork = [('Backdrop', image_bytes('yellow')), ('Backdrop', image_bytes('green'))]
+    original_primary = flow.images['1']['Primary'][:]
+    append = EmbyClient.append_backdrop
+
+    async def fail_second(client, ident, data, signatures, digest=None):
+        if len(flow.images[ident]['Backdrop']) >= 2:
+            raise ValueError('upload failed')
+        return await append(client, ident, data, signatures, digest)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(EmbyClient, 'append_backdrop', fail_second)
+        assert (await flow.run())[0]['status'] == 'failed'
+    assert len(flow.images['1']['Backdrop']) == 2
+    assert (await flow.run())[0]['status'] == 'success'
+    assert len(flow.images['1']['Backdrop']) == 3
+    assert flow.images['1']['Primary'] == original_primary
+    assert flow.items['1']['Overview'] == 'source plot'
+    assert flow.prepared == 2
+    assert (await flow.run())[0]['status'] == 'skipped'
+    assert flow.prepared == 2
+
+
+@pytest.mark.asyncio
+async def test_failed_scrape_without_changes_preserves_failure(flow):
+    code, identity, _ = identify(flow.items['1'])
+    flow.service.runtime.save_record('s', '1', identity, code, 'failed', error='previous failure')
+    assert (await flow.run())[0]['status'] == 'skipped'
+    assert flow.prepared == 1
+    record = flow.service.runtime.record('s', '1', identity, code)
+    assert record['status'] == 'failed' and record['error'] == 'previous failure'

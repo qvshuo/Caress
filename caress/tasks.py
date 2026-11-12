@@ -219,8 +219,13 @@ class BatchRunner:
                                     )
                                 old = runtime.record(server, row["id"], identity, code)
                                 replace = job["action"] == "force"
-                                if not replace and not needs_enrichment(
-                                    item, await client.image_info(row["id"]), media
+                                retry_failed = bool(old and old["status"] == "failed")
+                                if (
+                                    not replace
+                                    and not retry_failed
+                                    and not needs_enrichment(
+                                        item, await client.image_info(row["id"]), media
+                                    )
                                 ):
                                     row.update(
                                         status="skipped", note="没有需要补齐的元数据"

@@ -181,12 +181,9 @@ class Service:
                 record = self.runtime.record(client.server, ident, identity, code)
                 selected = source or (record["source"] if record else None)
                 try:
-                    async with (
-                        asyncio.timeout(45),
-                        Scraper(
-                            self.settings.model_copy(deep=True), runtime=self.runtime
-                        ) as scraper,
-                    ):
+                    async with Scraper(
+                        self.settings.model_copy(deep=True), runtime=self.runtime
+                    ) as scraper:
                         data = await scraper.cover(code, selected)
                 except (
                     ValueError,

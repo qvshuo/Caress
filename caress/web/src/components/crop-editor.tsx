@@ -36,6 +36,7 @@ export default function CropEditor({
     [selection, setSelection] = useState<PercentCrop>(),
     [pending, setPending] = useState<"source" | "preview" | null>("source"),
     [error, setError] = useState(""),
+    [sourceError, setSourceError] = useState(""),
     [saving, setSaving] = useState(false);
   const session = useRef(""),
     version = useRef(0);
@@ -43,24 +44,26 @@ export default function CropEditor({
   const active = useRef(true);
   const loadingSource = pending === "source";
   const acquire = useCallback(
-    async () => {
+    async (fromSource = false) => {
       const ticket = ++version.current;
       setPending("source");
-      setError("");
+      setSourceError("");
       try {
-        const value = await api<Crop>(`${base}/source`, "POST");
+        const value = await api<Crop>(`${base}/source${fromSource ? "?fetch_source=true" : ""}`, "POST");
         if (!active.current || ticket !== version.current) {
-          void api(`${base}/${value.token}`, "DELETE").catch(() => {});
+          if (value.token !== session.current)
+            void api(`${base}/${value.token}`, "DELETE").catch(() => {});
           return;
         }
         const old = session.current;
         session.current = value.token;
+        setError("");
         setCrop(value);
         setSelection(percentCrop(value.box, value.width, value.height));
-        if (old) void api(`${base}/${old}`, "DELETE").catch(() => {});
+        if (old && old !== value.token) void api(`${base}/${old}`, "DELETE").catch(() => {});
       } catch (e) {
         if (active.current && ticket === version.current)
-          setError(e instanceof Error ? e.message : "无法获取原图");
+          setSourceError(e instanceof Error ? e.message : "无法获取原封面");
       } finally {
         if (active.current && ticket === version.current) {
           setPending(null);
@@ -142,6 +145,13 @@ export default function CropEditor({
           <DialogTitle>裁剪封面</DialogTitle>
         </DialogHeader>
         <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            disabled={!!pending || saving || busy}
+            onClick={() => void acquire(true)}
+          >
+            从来源获取封面
+          </Button>
           <Button
             variant="outline"
             disabled={!crop || !!pending || saving || busy}
@@ -234,10 +244,10 @@ export default function CropEditor({
           </div>
         )}
         <div className="flex flex-wrap items-center justify-end gap-3">
-          {error && (
+          {(error || sourceError) && (
             <div className="mr-auto flex flex-wrap items-center gap-2">
               <p role="alert" className="text-sm text-destructive">
-                {error}
+                {error || sourceError}
               </p>
             </div>
           )}

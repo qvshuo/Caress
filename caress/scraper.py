@@ -80,25 +80,25 @@ class Scraper:
 
         async def fetch(source):
             lock = self.source_locks.setdefault(source, asyncio.Lock())
-            while lock.locked():
+            if lock.locked():
                 seconds = (
                     self.client.source_wait_seconds(source)
                     if isinstance(self.client, WebClient)
                     else 0
                 )
                 report_progress(
-                    "wait",
-                    source=source,
+                    "wait", source=source,
                     message=f"Source cooldown: {seconds} seconds" if seconds else "Waiting for source availability",
                 )
-                try:
-                    await asyncio.wait_for(lock.acquire(), timeout=1)
-                except TimeoutError:
-                    continue
-                else:
-                    break
-            else:
-                await lock.acquire()
+            try:
+                await asyncio.wait_for(lock.acquire(), SOURCE_TIMEOUT_SECONDS)
+            except TimeoutError:
+                return SourceResult(
+                    source=source,
+                    requested_code=request.code,
+                    status=Status.TIMEOUT,
+                    message="等待来源可用超时",
+                )
             try:
                 report_progress("source", source=source)
                 started = time.monotonic()

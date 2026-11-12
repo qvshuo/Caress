@@ -56,6 +56,38 @@ export function App() {
     );
   }, []);
   const refresh = useCallback(() => setRevision((v) => v + 1), []);
+  const batchRequest = useRef<Promise<void> | null>(null);
+  const syncBatch = useCallback(() => {
+    if (batchRequest.current) return batchRequest.current;
+    const generation = ++batchGeneration.current;
+    const request = api<Batch | null>("batch").then((value) => {
+      if (generation !== batchGeneration.current) return;
+      const previous = batchRef.current;
+      batchRef.current = value;
+      setBatch(value);
+      if (
+        value?.id !== previous?.id || value?.status !== previous?.status ||
+        value?.items.some((item, index) =>
+          !["pending", "running"].includes(item.status) &&
+          item.status !== previous?.items[index]?.status)
+      ) refresh();
+    }).finally(() => {
+      if (batchRequest.current === request) batchRequest.current = null;
+    });
+    batchRequest.current = request;
+    return request;
+  }, [refresh]);
+  useEffect(() => {
+    const sync = () => {
+      if (!document.hidden) run(syncBatch);
+    };
+    window.addEventListener("focus", sync);
+    document.addEventListener("visibilitychange", sync);
+    return () => {
+      window.removeEventListener("focus", sync);
+      document.removeEventListener("visibilitychange", sync);
+    };
+  }, [run, syncBatch]);
   const navigate = useCallback((next: string) => {
     location.hash = next;
     setRoute(next);
@@ -66,11 +98,11 @@ export function App() {
     run(async () => {
       const value = await api<Preferences>("settings");
       setSettings(value);
-      setBatch(await api<Batch | null>("batch"));
+      await syncBatch();
       if (!value.configured) navigate("settings");
     });
     return () => window.removeEventListener("hashchange", hash);
-  }, [run, navigate]);
+  }, [run, navigate, syncBatch]);
   const busy = batch?.status === "running";
   useEffect(() => {
     batchRef.current = batch;
@@ -84,7 +116,7 @@ export function App() {
       pending = false,
       failures = 0;
     const timer = setInterval(() => {
-      if (pending || document.hidden) return;
+      if (pending || batchRequest.current || document.hidden) return;
       pending = true;
       const generation = batchGeneration.current;
       void api<Batch | null>("batch")
@@ -143,6 +175,7 @@ export function App() {
         source: source || null,
         confirmed: action === "force",
       });
+      batchGeneration.current++;
       setBatch(result);
       if (result.status !== "running") refresh();
       return true;
@@ -164,7 +197,9 @@ export function App() {
             setStopping(true);
             try {
               batchGeneration.current++;
-              setBatch(await api<Batch>("batch/cancel", "POST"));
+              const result = await api<Batch>("batch/cancel", "POST");
+              batchGeneration.current++;
+              setBatch(result);
               refresh();
             } finally {
               stoppingRef.current = false;
@@ -275,7 +310,10 @@ export function App() {
               start={start}
               run={run}
               open={(id) => navigate(`library/work/${id}`)}
-              refresh={refresh}
+              refresh={() => {
+                refresh();
+                run(syncBatch);
+              }}
               progress={progress}
               submitting={submitting}
             />
