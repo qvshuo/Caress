@@ -56,9 +56,14 @@ export function App() {
     );
   }, []);
   const refresh = useCallback(() => setRevision((v) => v + 1), []);
-  const batchRequest = useRef<Promise<void> | null>(null);
+  const batchRequest = useRef<{
+    generation: number;
+    promise: Promise<void>;
+  } | null>(null);
   const syncBatch = useCallback(() => {
-    if (batchRequest.current) return batchRequest.current;
+    const current = batchRequest.current;
+    if (current && current.generation === batchGeneration.current)
+      return current.promise;
     const generation = ++batchGeneration.current;
     const request = api<Batch | null>("batch").then((value) => {
       if (generation !== batchGeneration.current) return;
@@ -72,9 +77,9 @@ export function App() {
           item.status !== previous?.items[index]?.status)
       ) refresh();
     }).finally(() => {
-      if (batchRequest.current === request) batchRequest.current = null;
+      if (batchRequest.current?.promise === request) batchRequest.current = null;
     });
-    batchRequest.current = request;
+    batchRequest.current = { generation, promise: request };
     return request;
   }, [refresh]);
   useEffect(() => {
@@ -116,7 +121,10 @@ export function App() {
       pending = false,
       failures = 0;
     const timer = setInterval(() => {
-      if (pending || batchRequest.current || document.hidden) return;
+      if (
+        pending || document.hidden ||
+        batchRequest.current?.generation === batchGeneration.current
+      ) return;
       pending = true;
       const generation = batchGeneration.current;
       void api<Batch | null>("batch")

@@ -1205,7 +1205,7 @@ test("late batch synchronization cannot replace a newly submitted batch", async 
       });
       return;
     }
-    await route.fulfill({ json: reads === 1 ? null : running });
+    await route.fulfill({ json: reads === 1 ? null : { ...running, status: 'finished', current: [], items: running.items.map(item => ({ ...item, status: 'success' })) } });
   });
   await page.goto('/');
   await expect(page.getByRole('row', { name: '查看 ABC-123' })).toBeVisible();
@@ -1214,6 +1214,69 @@ test("late batch synchronization cannot replace a newly submitted batch", async 
   await page.getByRole('checkbox', { name: '选择 ABC-123', exact: true }).click();
   await page.getByRole('button', { name: '开始执行', exact: true }).click();
   await expect(page.getByRole('button', { name: '取消', exact: true })).toBeVisible();
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect.poll(() => reads).toBe(3);
+  await expect(page.getByLabel('当前批次')).toContainText('1 成功');
   await release!();
-  await expect(page.getByLabel('当前批次')).toContainText('处理中');
+  await expect(page.getByLabel('当前批次')).toContainText('1 成功');
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect.poll(() => reads).toBe(4);
+});
+
+test("resuming crop clears source errors and retains actual preview failures", async ({ page }) => {
+  let sourceReads = 0, previews = 0, uploads = 0;
+  let failPreview = false;
+  const crop = { token: "session", box: [20, 0, 60, 90], width: 120, height: 90, preview: "" };
+  await page.route("**/api/works/1/crop/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/source")) {
+      if (++sourceReads > 1)
+        return route.fulfill({ status: 502, json: { detail: "来源暂不可用" } });
+      return route.fulfill({ json: crop });
+    }
+    if (path.endsWith("/image"))
+      return route.fulfill({ contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="90"/>' });
+    if (path.endsWith("/preview")) {
+      previews++;
+      if (failPreview)
+        return route.fulfill({ status: 400, json: { detail: "预览失败" } });
+      return route.fulfill({ json: { ...crop, box: route.request().postDataJSON().box || crop.box } });
+    }
+    if (path.endsWith("/apply")) uploads++;
+    return route.fulfill({ json: { success: true } });
+  });
+  await page.goto("/#library/work/1");
+  await page.getByRole("button", { name: "裁剪封面", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  const source = dialog.getByRole("button", { name: "从来源获取封面" });
+  const save = dialog.getByRole("button", { name: "保存", exact: true });
+  await expect(dialog.getByRole("img", { name: "裁剪原图" })).toBeVisible();
+  await source.click();
+  await expect(dialog.getByRole("alert")).toHaveText("来源暂不可用");
+  const bounds = await dialog.locator(".ReactCrop__crop-selection").boundingBox();
+  if (!bounds) throw new Error("Crop selection missing");
+  await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(bounds.x + bounds.width / 2 + 10, bounds.y + bounds.height / 2, { steps: 5 });
+  await expect(dialog.getByRole("alert")).toHaveCount(0);
+  await page.mouse.up();
+  await expect.poll(() => previews).toBeGreaterThan(0);
+  await expect(save).toBeEnabled();
+  for (const name of ["自动裁剪", "重置选框"]) {
+    await source.click();
+    await expect(dialog.getByRole("alert")).toHaveText("来源暂不可用");
+    await dialog.getByRole("button", { name, exact: true }).click();
+    await expect(dialog.getByRole("alert")).toHaveCount(0);
+    await expect(save).toBeEnabled();
+  }
+  failPreview = true;
+  await dialog.getByRole("button", { name: "自动裁剪", exact: true }).click();
+  await expect(dialog.getByRole("alert")).toHaveText("预览失败");
+  await expect(save).toBeDisabled();
+  failPreview = false;
+  await dialog.getByRole("button", { name: "重置选框", exact: true }).click();
+  await expect(save).toBeEnabled();
+  await save.click();
+  await expect(dialog).toHaveCount(0);
+  expect(uploads).toBe(1);
 });

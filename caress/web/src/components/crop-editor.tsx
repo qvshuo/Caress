@@ -87,6 +87,7 @@ export default function CropEditor({
     const ticket = ++version.current;
     setPending("preview");
     setError("");
+    setSourceError("");
     try {
       const value = await api<Crop>(`${base}/preview`, "POST", {
         token: crop.token,
@@ -185,6 +186,7 @@ export default function CropEditor({
                 onChange={(_, p) => {
                   version.current++;
                   setPending("preview");
+                  setSourceError("");
                   setSelection(p);
                 }}
                 onComplete={(_, p) =>
