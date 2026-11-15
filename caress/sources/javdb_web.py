@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import re
-from urllib.parse import urlencode, urljoin, urlsplit
+from urllib.parse import urlencode, urljoin
 
-from ..actors import comparison_name
 from ..catalog import normalize_code
 from ..http import FetchError, Page
 from ..models import (
@@ -22,38 +20,6 @@ from .parsing import artwork, first, parse_date, text, texts
 class JavDBWeb(Source):
     id = SourceId.JAVDB
     default_url = "https://javdb.com"
-
-    def actor_id(self, href: str) -> str | None:
-        url = urlsplit(urljoin(self.base + "/", href))
-        if (
-            url.scheme != "https"
-            or url.netloc.lower() != urlsplit(self.base).netloc.lower()
-        ):
-            return None
-        match = re.fullmatch(r"/actors/([A-Za-z0-9]{1,40})/?", url.path)
-        return match.group(1) if match else None
-
-    async def find_actor_ids(self, name: str) -> list[str]:
-        page = await self.client.get(
-            self.id,
-            self.base
-            + "/search?"
-            + urlencode({"q": name, "f": "actor", "locale": "zh"}),
-        )
-        selector = page.selector()
-        found = []
-        if selector.css("span.actor-section-name"):
-            if ident := self.actor_id(page.url):
-                found.append(ident)
-        for node in selector.css("div.actor-box a[href]"):
-            values = [
-                node.css("strong::text").get("") or "",
-                *re.split(r"[,，]", node.attrib.get("title", "")),
-            ]
-            if comparison_name(name) in {comparison_name(value) for value in values}:
-                if ident := self.actor_id(node.attrib["href"]):
-                    found.append(ident)
-        return list(dict.fromkeys(found))
 
     async def _fetch(self, request: ScrapeRequest) -> SourceResult:
         if request.source_url:
@@ -113,7 +79,6 @@ class JavDBWeb(Source):
             return str(nodes[0].get_all_text()).strip() if nodes else None
 
         actors = []
-        actor_ids = {}
         nodes = row("演員")
         if nodes:
             for node in nodes[0].css('a[href*="/actors/"]'):
@@ -121,12 +86,6 @@ class JavDBWeb(Source):
                 if not name:
                     continue
                 actors.append(Actor(name=name))
-                ident = self.actor_id(node.attrib.get("href", ""))
-                if ident:
-                    if name in actor_ids and actor_ids[name] != ident:
-                        actor_ids[name] = None
-                    elif name not in actor_ids:
-                        actor_ids[name] = ident
         canonical = normalize_code(code)
         metadata = SourceMetadata(
             code=canonical,
@@ -148,4 +107,4 @@ class JavDBWeb(Source):
                 ),
             ),
         )
-        return self.found(request, metadata, actor_ids=actor_ids)
+        return self.found(request, metadata)

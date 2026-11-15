@@ -6,7 +6,6 @@ import time
 import httpx
 from pydantic import BaseModel, Field
 
-from .actors import ActorAliases
 from .models import WorkMetadata
 from .settings import TranslationSettings
 
@@ -27,9 +26,9 @@ PROMPT = """将用户提供的文本忠实翻译为简体中文，只输出译�
 不得复述这些要求，不添加注释、说明、前缀或原文没有的外层引号。"""
 
 
-def actor_name_rules(names: ActorAliases, actors=()):
+def actor_name_rules(names):
     values = sorted(
-        names.all_names | {actor.name for actor in actors},
+        {name for name in names if name},
         key=lambda name: (-len(name), name),
     )
     # Literal lookahead includes overlapping names; no normalization changes source spelling.

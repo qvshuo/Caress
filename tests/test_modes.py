@@ -15,6 +15,7 @@ from test_workflow import item
 from caress.emby import EmbyClient, metadata_update, needs_enrichment, pixel_digest
 from caress.library import filter_works, identify
 from caress.models import Actor, SourceMetadata
+from caress.portraits import PortraitMatch
 from caress.processing import Prepared, WorkProcessor
 from caress.service import Service
 from caress.settings import Settings
@@ -540,7 +541,7 @@ async def test_no_backdrop_candidate_is_not_a_failure(flow):
 
 
 @pytest.mark.asyncio
-async def test_portraits_only_fetch_missing_actor_once_per_batch_and_retry_on_next_run(
+async def test_portraits_retry_missing_actor_and_preserve_existing_images(
     flow, monkeypatch
 ):
     people = [
@@ -557,22 +558,22 @@ async def test_portraits_only_fetch_missing_actor_once_per_batch_and_retry_on_ne
         flow.images[name] = {"Primary": [image_bytes("red")]}
     original = deepcopy({name: flow.images[name] for name in ["A", "B"]})
     flow.mappings = [
-        {"name": name, "actor_id": "verified-" + name} for name in ["A", "B", "C"]
+        {"name": name, "portrait": PortraitMatch(name, "https://portrait/" + name)} for name in ["A", "B", "C"]
     ]
     calls = []
 
-    async def save(self, actors, *, kind=None):
-        calls.extend(actor.name for actor in actors)
+    async def save(self, match):
+        calls.append(match.name)
         if len(calls) == 1:
-            return [{"status": "not_found"}]
+            return {"status": "error", "error": "unavailable"}
         folder = self.output / "actors"
         folder.mkdir(exist_ok=True)
         (folder / "C.png").write_bytes(image_bytes("blue"))
-        return [{"status": "saved"}]
+        return {"status": "saved"}
 
     monkeypatch.setattr("caress.portraits.Gfriends.save", save)
     await flow.run(ids=["1", "2"])
-    assert calls == ["C"] and not flow.images.get("C")
+    assert calls == ["C", "C"] and flow.images["C"]["Primary"] == [image_bytes("blue")]
     await flow.run(ids=["1", "2"])
     assert calls == ["C", "C"] and flow.images["C"]["Primary"] == [image_bytes("blue")]
     assert {name: flow.images[name] for name in ["A", "B"]} == original

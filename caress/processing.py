@@ -10,11 +10,10 @@ from pathlib import Path
 import httpx
 from PIL import Image
 
-from .actors import ActorAliases, actor_type, map_actor_names
 from .emby import image_pixels_match, pixel_digest
 from .http import FetchError
 from .images import crop_poster, fetch_artwork, image_plan
-from .models import ScrapeRequest, Status
+from .models import Actor, ScrapeRequest, Status
 from .portraits import Gfriends, actor_image
 from .scraper import Scraper
 from .translation import Translator, actor_name_rules
@@ -28,7 +27,6 @@ class Prepared:
     errors: list[tuple[str, str]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     mappings: list = field(default_factory=list)
-    kind: int | None = None
     digests: dict = field(default_factory=dict)
     poster_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
@@ -39,8 +37,7 @@ class WorkProcessor:
         self.temporary = Path(temporary)
         self.scraper = Scraper(settings, runtime=runtime)
         self.translator = Translator(settings.translation)
-        self.names = ActorAliases.load(settings.database)
-        self.portraits = Gfriends(self.names, Path(temporary))
+        self.portraits = Gfriends(Path(temporary))
         self.prepared = {}
         self.people_lock = asyncio.Lock()
         self.people_done = set()
@@ -99,19 +96,16 @@ class WorkProcessor:
             errors = "；".join(f"{r.source}：{r.message or ('未找到作品' if r.status == Status.NOT_FOUND else '来源不支持此作品' if r.status == Status.UNSUPPORTED else '来源请求失败')}" for r in result.results)
             raise ValueError("未获取到作品元数据：" + errors)
         metadata = result.metadata.model_copy(deep=True)
-        selected = next(r for r in result.results if r.source == result.selected_source)
-        warnings = await self.scraper.resolve_actors(
-            metadata.actors,
-            self.names,
-            result.classification.category,
-            selected.actor_ids,
-        )
         source_actors = metadata.actors
-        metadata.actors, mappings, issues = map_actor_names(
-            metadata.actors,
-            self.names,
-            actor_type(result.classification.category),
-            selected.actor_ids,
+        mappings = {}
+        for actor in source_actors:
+            match = await self.portraits.resolve(actor.name)
+            name = match.name if match else actor.name
+            mappings[name] = mappings.get(name) or match
+        metadata.actors = [Actor(name=name) for name in mappings]
+        warnings = (
+            ["Gfriends 演员索引不可用，已保留来源原名：" + self.portraits.index_error]
+            if self.portraits.index_error else []
         )
         original = metadata.original_title or metadata.title
         metadata.original_title = original
@@ -120,7 +114,7 @@ class WorkProcessor:
             await self.translator.verify()
         report = await self.translator.metadata(
             metadata,
-            names=actor_name_rules(self.names, [*source_actors, *metadata.actors]),
+            names=actor_name_rules(a.name for a in [*source_actors, *metadata.actors]),
         )
         prepared = Prepared(
             metadata,
@@ -129,10 +123,8 @@ class WorkProcessor:
                 *result.warnings,
                 *warnings,
                 *[i["error"] for i in report.errors],
-                *["无法唯一确认演员，已保留原名" for _ in issues],
             ],
-            mappings=mappings,
-            kind=actor_type(result.classification.category),
+            mappings=[{"name": name, "portrait": match} for name, match in mappings.items()],
         )
         folder = (
             self.temporary
@@ -233,10 +225,11 @@ class WorkProcessor:
                     ident, data, signatures, prepared.digests.get(path)
                 )
                 changed = changed or added
-        # Portraits are optional and require a verified mapping, an Emby ID and no existing image.
+        # Portraits require a Gfriends match, an Emby Person ID and no existing image.
         async with self.people_lock:
             for mapping in prepared.mappings:
-                if not mapping["actor_id"]:
+                match = mapping["portrait"]
+                if match is None:
                     continue
                 person = next(
                     (
@@ -263,18 +256,14 @@ class WorkProcessor:
                     ):
                         self.people_done.add(person["Id"])
                         continue
-                    from .models import Actor
-
-                    records = await self.portraits.save(
-                        [Actor(name=person["Name"])], kind=prepared.kind
-                    )
-                    if records and records[0]["status"] in ("saved", "existing"):
+                    record = await self.portraits.save(match)
+                    if record["status"] in ("saved", "existing"):
                         image = actor_image(self.portraits.output, person["Name"])
                         await client.upload(person["Id"], "Primary", image.read_bytes())
                         self.people_done.add(person["Id"])
                         changed = True
-                    elif records and records[0]["status"] == "not_found":
-                        self.people_done.add(person["Id"])
+                    else:
+                        warnings.append("演员头像获取失败：" + record["error"])
                 except (ValueError, OSError, FetchError) as exc:
                     warnings.append(f"演员头像获取失败：{exc}")
                 except Exception as exc:

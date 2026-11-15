@@ -8,12 +8,12 @@ from unittest.mock import AsyncMock, Mock
 import httpx
 import pytest
 
-from caress.actors import ActorAliases, map_actor_names
 from caress.api import create_app
 from caress.emby import EmbyClient
 from caress.identifiers import parse_filename
 from caress.library import identify, project
-from caress.models import Actor, SourceMetadata
+from caress.models import SourceMetadata
+from caress.portraits import PortraitMatch
 from caress.processing import WorkProcessor
 from caress.runtime import Runtime
 from caress.service import Service
@@ -198,19 +198,6 @@ async def test_translation_key_stays_in_header_and_out_of_logs(caplog):
         with pytest.raises(ValueError, match="认证失败"):
             await translator.text("test", retries=0)
     assert "example-key" not in caplog.text
-
-
-def test_actor_alias_ambiguity_and_verified_id():
-    names = ActorAliases(
-        {
-            "a": {"type": 0, "name": "A", "other_name": ["Alias"]},
-            "b": {"type": 0, "name": "B", "other_name": ["Alias"]},
-        }
-    )
-    actors, _, issues = map_actor_names([Actor(name="Alias")], names, 0)
-    assert actors[0].name == "Alias" and issues
-    actors, _, _ = map_actor_names([Actor(name="Alias")], names, 0, {"Alias": "a"})
-    assert actors[0].name == "A"
 
 
 def test_restart_retains_confirmed_success_and_cleans_interruption(tmp_path):
@@ -411,9 +398,7 @@ async def test_item_writes_are_serialized_while_other_items_can_run(tmp_path):
 def test_unknown_actor_names_are_protected_without_a_cached_alias_pattern():
     from caress.translation import actor_name_rules, name_spans, without_names
 
-    names = ActorAliases({})
-    actors = [Actor(name="Original Actor")]
-    pattern = actor_name_rules(names, actors)
+    pattern = actor_name_rules(["Original Actor"])
     assert (
         without_names(
             "Original Actor source title",
@@ -799,7 +784,7 @@ async def test_portrait_retry_is_bounded_and_success_is_shared(
     avatar.parent.mkdir()
     avatar.write_bytes(image_bytes())
     processor.portraits.save = AsyncMock(
-        return_value=[{"status": "saved"}],
+        return_value={"status": "saved"},
         side_effect=ValueError("offline") if failure == "fetch" else None,
     )
     client = SimpleNamespace(
@@ -823,7 +808,7 @@ async def test_portrait_retry_is_bounded_and_success_is_shared(
     prepared = Prepared(
         SourceMetadata(code="ABC-123", title="title"),
         "dmm",
-        mappings=[{"actor_id": "verified", "name": "Name"}],
+        mappings=[{"portrait": PortraitMatch("Name", "https://portrait"), "name": "Name"}],
     )
     try:
         await processor.write(client, "1", prepared, [], replace=False)
@@ -1231,10 +1216,9 @@ async def preparing(tmp_path):
             selected_source=SourceId.DMM,
             warnings=['JavDB API 返回失败：{"success": 0, "message": "請登錄帳號"}'],
             classification=Classification(category=Category.CENSORED),
-            results=[SimpleNamespace(source=SourceId.DMM, actor_ids={})],
+            results=[SimpleNamespace(source=SourceId.DMM)],
         )
     )
-    processor.scraper.resolve_actors = AsyncMock(return_value=[])
     processor.translator.metadata = AsyncMock(return_value=SimpleNamespace(errors=[]))
     try:
         yield processor, folder

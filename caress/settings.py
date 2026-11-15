@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from contextlib import closing
 from pathlib import Path
-from typing import ClassVar
 from urllib.parse import urlparse
 
 from pydantic import (
@@ -15,18 +14,6 @@ from pydantic import (
 )
 
 from .models import SourceId
-
-
-class ApiSettings(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    base_url: str = "https://jdforrepam.com"
-    app_version: str = "1.9.28"
-    app_version_number: str = "10928"
-    signature_prefix: str = Field(
-        default="71cf27bb3c0bcdf207b64abecddc970098c7421ee7203b9cdae54478478a199e7d5a6e1a57691123c1a931c057842fb73ba3b3c83bcd69c17ccf174081e3d8aa",
-        repr=False,
-    )
-    signature_version: str = "lpw6vgqzsp"
 
 
 class TranslationSettings(BaseModel):
@@ -79,7 +66,6 @@ class EmbySettings(BaseModel):
 
 class Settings(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    javdb_api: ClassVar[ApiSettings] = ApiSettings()
     database: Path = Field(default=Path("/data/caress.sqlite3"), exclude=True)
     emby: EmbySettings = Field(default_factory=EmbySettings)
     translation: TranslationSettings = Field(default_factory=TranslationSettings)

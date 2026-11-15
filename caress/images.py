@@ -13,11 +13,9 @@ from .models import SourceId
 def validate_resources() -> None:
     import cv2
 
-    from .actors import ActorAliases
     from .catalog import CatalogRules
 
     CatalogRules.load()
-    ActorAliases.load()
     data = Path(__file__).parent / "data"
     if not (data / "yunet.LICENSE").read_text(encoding="utf-8").strip():
         raise ValueError("YuNet license is missing")

@@ -96,7 +96,6 @@ class Candidate(BaseModel):
 
 
 class SourceResult(BaseModel):
-    actor_ids: dict[str, str | None] = Field(default_factory=dict)
     elapsed_seconds: float | None = None
     source: SourceId
     requested_code: str

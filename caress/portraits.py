@@ -4,16 +4,27 @@ import asyncio
 import json
 import re
 import time
-from pathlib import Path
-from urllib.parse import quote, urlsplit
+import unicodedata
+from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
+from urllib.parse import quote, unquote, urlsplit
 
 import httpx
 
-from .actors import comparison_name
 from .http import NETWORK_RETRIES, REQUEST_TIMEOUT_SECONDS, RETRY_DELAY_SECONDS
 from .images import validate_image
 from .logging import report_progress
 from .storage import atomic_write
+
+
+def normalize_name(name: str) -> str:
+    return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", name).strip()).casefold()
+
+
+@dataclass(frozen=True)
+class PortraitMatch:
+    name: str
+    url: str
 
 
 def actor_image(output: Path, name: str) -> Path | None:
@@ -49,8 +60,8 @@ class Gfriends:
 
     base = "https://raw.githubusercontent.com/gfriends/gfriends/master/"
 
-    def __init__(self, names, output: Path, client=None):
-        self.names, self.output = names, output
+    def __init__(self, output: Path, client=None):
+        self.output = output
         self.client = client or httpx.AsyncClient(
             timeout=REQUEST_TIMEOUT_SECONDS, follow_redirects=True, trust_env=False
         )
@@ -92,101 +103,94 @@ class Gfriends:
                 await asyncio.sleep(RETRY_DELAY_SECONDS)
         raise ValueError("头像来源请求失败")
 
-    def select(self, name: str, kind: int | None = None) -> str | None:
-        if len(self.names.candidates(name, kind)) > 1:
-            raise ValueError("演员名称对应多个候选")
-        primary = self.names.resolve(name, kind) or name
-        candidates = [primary, *self.names.aliases_for(name, kind)]
-        for candidate in dict.fromkeys(candidates):
-            # Content is ordered low-to-high quality; the last bank wins.
-            for bank, files in reversed(list(self.index.items())):
-                if not isinstance(files, dict):
-                    continue
-                value = files.get(candidate + ".jpg")
-                if not isinstance(value, str):
+    def _build_index(self, content):
+        result = {}
+        # Filetree banks are ordered low-to-high priority; the last bank wins.
+        for bank, files in reversed(list(content.items())):
+            if (
+                not isinstance(files, dict)
+                or PurePosixPath(bank).name != bank
+                or bank in {".", ".."}
+            ):
+                continue
+            for alias, value in files.items():
+                if (
+                    not isinstance(alias, str)
+                    or not alias.endswith(".jpg")
+                    or not isinstance(value, str)
+                ):
                     continue
                 parsed = urlsplit(value)
+                path = unquote(parsed.path)
                 if (
                     parsed.scheme
                     or parsed.netloc
-                    or Path(parsed.path).name != parsed.path
-                    or Path(bank).name != bank
-                    or bank in {".", ".."}
+                    or not path
+                    or PurePosixPath(path).name != path
                 ):
                     continue
-                canonical = Path(parsed.path).stem.removeprefix("AI-Fix-")
-                canonical = re.sub(r"-\d+$", "", canonical)
-                if (
-                    comparison_name(canonical) != comparison_name(primary)
-                    and self.names.resolve(canonical, kind) != primary
-                ):
-                    continue
-                return (
-                    self.base
-                    + "Content/"
-                    + quote(bank, safe="")
-                    + "/"
-                    + quote(parsed.path, safe="")
-                    + ("?" + parsed.query if parsed.query else "")
+                canonical = re.sub(
+                    r"-\d+$", "", PurePosixPath(path).stem.removeprefix("AI-Fix-")
                 )
-        return None
-
-    async def save(self, actors, *, kind: int | None = None) -> list[dict]:
-        async with self.save_lock:
-            return await self._save(actors, kind)
-
-    async def _save(self, actors, kind: int | None) -> list[dict]:
-        records = []
-        for actor in actors:
-            name = actor.name
-            if (name, kind) in self.completed:
-                records.append(self.completed[(name, kind)])
-                continue
-            try:
-                existing = actor_image(self.output, name)
-                if existing:
-                    records.append({"name": name, "status": "existing"})
-                    self.completed[(name, kind)] = records[-1]
-                    continue
-                if len(self.names.candidates(name, kind)) > 1:
-                    raise ValueError("演员名称对应多个候选")
-                report_progress("portraits", source="gfriends")
-                if self.index is None and self.index_error is None:
-                    try:
-                        tree = json.loads(
-                            await self.document(
-                                self.base + "Filetree.json", 16 * 1024 * 1024
-                            )
-                        )
-                        if not isinstance(tree, dict):
-                            raise ValueError("头像来源索引无效")
-                        self.index = tree["Content"]
-                        if not isinstance(self.index, dict):
-                            raise ValueError("头像来源索引无效")
-                    except (ValueError, KeyError) as exc:
-                        self.index_error = str(exc)
-                if self.index_error:
-                    raise ValueError(self.index_error)
-                url = self.select(name, kind)
-                if not url:
-                    records.append({"name": name, "status": "not_found"})
-                    self.completed[(name, kind)] = records[-1]
-                    report_progress(
-                        "portraits", "not_found", source="gfriends", message=name
+                key = normalize_name(PurePosixPath(alias).stem)
+                if key and canonical:
+                    result.setdefault(
+                        key,
+                        PortraitMatch(
+                            canonical,
+                            self.base
+                            + "Content/"
+                            + quote(bank, safe="")
+                            + "/"
+                            + quote(path, safe="")
+                            + ("?" + parsed.query if parsed.query else ""),
+                        ),
                     )
-                    continue
-                image = await asyncio.to_thread(
-                    validate_image, await self.document(url, 32 * 1024 * 1024)
+        return result
+
+    async def load_index(self):
+        async with self.save_lock:
+            if self.index is not None or self.index_error is not None:
+                return
+            report_progress("portraits", source="gfriends")
+            try:
+                tree = json.loads(
+                    await self.document(self.base + "Filetree.json", 16 * 1024 * 1024)
                 )
-                extension = ".jpg" if image.format == "jpeg" else "." + image.format
-                target = self.output / "actors" / (name + extension)
-                atomic_write(target, image.content)
-                records.append({"name": name, "status": "saved"})
+                if not isinstance(tree, dict) or not isinstance(
+                    tree.get("Content"), dict
+                ):
+                    raise ValueError("Gfriends 索引无效")
+                self.index = self._build_index(tree["Content"])
+            except (ValueError, KeyError, TypeError) as exc:
+                self.index_error = str(exc)
+
+    async def resolve(self, name: str) -> PortraitMatch | None:
+        await self.load_index()
+        return self.index.get(normalize_name(name)) if self.index is not None else None
+
+    async def save(self, match: PortraitMatch) -> dict:
+        async with self.save_lock:
+            name = match.name
+            if name in self.completed:
+                return self.completed[name]
+            try:
+                if actor_image(self.output, name):
+                    result = {"name": name, "status": "existing"}
+                else:
+                    image = await asyncio.to_thread(
+                        validate_image, await self.document(match.url, 32 * 1024 * 1024)
+                    )
+                    extension = ".jpg" if image.format == "jpeg" else "." + image.format
+                    atomic_write(
+                        self.output / "actors" / (name + extension), image.content
+                    )
+                    result = {"name": name, "status": "saved"}
             except (ValueError, OSError) as exc:
-                records.append({"name": name, "status": "error", "error": str(exc)})
-            if records[-1]["status"] != "error":
-                self.completed[(name, kind)] = records[-1]
+                result = {"name": name, "status": "error", "error": str(exc)}
+            if result["status"] != "error":
+                self.completed[name] = result
             report_progress(
-                "portraits", records[-1]["status"], source="gfriends", message=name
+                "portraits", result["status"], source="gfriends", message=name
             )
-        return records
+            return result

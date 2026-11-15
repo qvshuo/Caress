@@ -6,7 +6,6 @@ import time
 from contextlib import nullcontext
 from typing import Any
 
-from .actors import actor_type
 from .catalog import CatalogRules, catalog_prefix
 from .http import Client, WebClient
 from .identifiers import validate_code
@@ -221,29 +220,3 @@ class Scraper:
         if candidate is None:
             raise ValueError("来源未提供完整封面，无法恢复已裁剪的画面")
         return await fetch_artwork(self.client, candidate)
-
-    async def resolve_actors(self, actors, names, category, ids):
-        if self.settings.database:
-            names.reload(self.settings.database)
-        kind = actor_type(category)
-        if not any(
-            (actor.name not in ids or ids[actor.name] is not None)
-            and names.needs_lookup(actor.name, kind, ids.get(actor.name))
-            for actor in actors
-        ):
-            return []
-        lock = self.source_locks.setdefault(SourceId.JAVDB, asyncio.Lock())
-        async with lock:
-            with (
-                self.client.source_work()
-                if isinstance(self.client, WebClient)
-                else nullcontext()
-            ):
-                try:
-                    async with asyncio.timeout(SOURCE_TIMEOUT_SECONDS):
-                        javdb = self.sources[SourceId.JAVDB]
-                        return await javdb.app.resolve_actors(
-                            actors, names, category, ids, javdb.web.find_actor_ids
-                        )
-                except TimeoutError:
-                    return ["演员查询超时，保留原名"]
