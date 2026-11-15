@@ -7,7 +7,6 @@ from urllib.parse import parse_qs, quote, urljoin, urlparse
 from ..http import FetchError, json_error
 from ..models import (
     Actor,
-    Evidence,
     ScrapeRequest,
     SourceId,
     SourceMetadata,
@@ -134,9 +133,7 @@ class DMM(Source):
             if cid and cid.lower() != from_url:
                 raise FetchError(Status.IDENTITY_MISMATCH, "指定的作品 ID 与地址不一致")
             cid = from_url
-        explicit = bool(cid)
         work = None
-        basis = "validated_cid_candidate"
         if cid:
             cid = cid.lower()
             if not re.fullmatch(r"[a-z0-9_]{3,80}", cid):
@@ -162,20 +159,8 @@ class DMM(Source):
                 if candidates:
                     cid = candidates[0]
                     work = await self.content(cid)
-                    basis = "official_search_cid"
         if work is None:
             return self.missed(request)
-        classification = self.rules.classify(request.code)
-        # Adult PPV identifies the catalog, but this response has no censorship field.
-        # Preserve maintained number hints rather than inventing native censorship.
-        classification.evidence.append(
-            Evidence(basis="official_adult_ppv_content", value=cid, source=self.id)
-        )
-        classification.evidence.append(
-            Evidence(
-                basis=basis if not explicit else "explicit_verified_cid", value=cid, source=self.id
-            )
-        )
         package = work.get("packageImage") or {}
         source_url = f"https://video.dmm.co.jp/av/content/?id={cid}"
 

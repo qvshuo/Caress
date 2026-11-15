@@ -69,7 +69,6 @@ class Gfriends:
         self.index = None
         self.index_error = None
         self.last_request = 0.0
-        self.completed = {}
         self.save_lock = asyncio.Lock()
 
     async def __aenter__(self):
@@ -172,8 +171,6 @@ class Gfriends:
     async def save(self, match: PortraitMatch) -> dict:
         async with self.save_lock:
             name = match.name
-            if name in self.completed:
-                return self.completed[name]
             try:
                 if actor_image(self.output, name):
                     result = {"name": name, "status": "existing"}
@@ -188,8 +185,6 @@ class Gfriends:
                     result = {"name": name, "status": "saved"}
             except (ValueError, OSError) as exc:
                 result = {"name": name, "status": "error", "error": str(exc)}
-            if result["status"] != "error":
-                self.completed[name] = result
             report_progress(
                 "portraits", result["status"], source="gfriends", message=name
             )

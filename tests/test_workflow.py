@@ -178,7 +178,7 @@ async def test_translation_failure_retains_valid_source():
     try:
         report = await translator.metadata(metadata, names=None)
         assert (
-            metadata.title == "original title"
+            metadata.title == "ABC-123 original title"
             and metadata.plot == "original description"
         )
         assert len(report.errors) == 2

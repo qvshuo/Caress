@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import cached_property
 from typing import ClassVar
 from urllib.parse import urlparse
 
@@ -25,9 +26,9 @@ class Source:
         self.settings = settings
         self.base = self.default_url.rstrip("/")
 
-    @property
+    @cached_property
     def rules(self) -> CatalogRules:
-        return CatalogRules.load(self.settings.database)
+        return CatalogRules.load()
 
     def checked_url(self, value: str) -> str:
         parsed = urlparse(value)

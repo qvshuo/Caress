@@ -202,12 +202,8 @@ class Translator:
         for field in fields:
             value = getattr(metadata, field)
             if value:
+                body = title_body(value, metadata.code, names) if field == "title" else value
                 try:
-                    body = (
-                        title_body(value, metadata.code, names)
-                        if field == "title"
-                        else value
-                    )
                     spans = (
                         name_spans(body, names)
                         if self.settings.enabled and field == "plot"
@@ -225,9 +221,9 @@ class Translator:
                             if field == "title"
                             else await self._segmented_text(body, spans)
                         )
-                    if field == "title":
-                        body = compose_title(metadata.code, metadata.actors, body)
-                    setattr(metadata, field, body)
                 except (ValueError, httpx.HTTPError) as exc:
                     report.errors.append({"field": field, "error": str(exc)})
+                if field == "title":
+                    body = compose_title(metadata.code, metadata.actors, body)
+                setattr(metadata, field, body)
         return report

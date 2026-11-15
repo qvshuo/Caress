@@ -2,7 +2,6 @@
 
 import json
 import sqlite3
-from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -126,33 +125,3 @@ class Runtime:
                 "INSERT INTO cooldowns VALUES (?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data",
                 (str(source), json.dumps(value)),
             )
-
-
-def read_rules(database: Path, kind: str, seed: Path):
-    database.parent.mkdir(parents=True, exist_ok=True)
-    with closing(sqlite3.connect(database, timeout=10)) as connection, connection:
-        connection.execute(
-            "CREATE TABLE IF NOT EXISTS rules (kind TEXT PRIMARY KEY, data TEXT NOT NULL)"
-        )
-        connection.execute(
-            "INSERT OR IGNORE INTO rules VALUES (?,?)", (kind, seed.read_text())
-        )
-        return json.loads(
-            connection.execute(
-                "SELECT data FROM rules WHERE kind=?", (kind,)
-            ).fetchone()[0]
-        )
-
-
-def merge_rules(database: Path, kind: str, update):
-    with closing(sqlite3.connect(database, timeout=10)) as connection, connection:
-        connection.execute("BEGIN IMMEDIATE")
-        row = connection.execute(
-            "SELECT data FROM rules WHERE kind=?", (kind,)
-        ).fetchone()
-        value = update(json.loads(row[0]))
-        connection.execute(
-            "UPDATE rules SET data=? WHERE kind=?",
-            (json.dumps(value, ensure_ascii=False), kind),
-        )
-        return value

@@ -102,9 +102,7 @@ def test_source_search_selects_first_exact_match_in_provider_ranking():
 async def test_sources_stop_after_first_priority_hit_without_field_borrowing(tmp_path):
     database = tmp_path / "data.sqlite3"
     settings = Settings(database=database)
-    settings.routes["censored"] = [SourceId.DMM, SourceId.JAVDB]
-    rules = CatalogRules.load(database)
-    rules.remember("TESTABC-123", Category.CENSORED, database)
+    settings.routes["unknown"] = [SourceId.DMM, SourceId.JAVDB]
     scraper = Scraper(settings, client=object())
     completed = []
 
@@ -135,15 +133,18 @@ async def test_sources_stop_after_first_priority_hit_without_field_borrowing(tmp
     assert result.selected_source == SourceId.DMM
     assert result.metadata.title == "dmm"
     assert result.metadata.plot is None
+    assert result.classification.category == Category.UNKNOWN
+    assert not database.exists()
 
 
-def test_direct_numeric_and_fc2_families_are_never_persisted_as_prefixes(tmp_path):
-    path = tmp_path / "data.sqlite3"
-    rules = CatalogRules.load(path)
-    before = rules.model_dump()
-    rules.remember("123456-123", Category.UNCENSORED, path)
-    rules.remember("FC2PPV-123456", Category.FC2, path)
-    assert CatalogRules.load(path).model_dump() == before
+def test_static_classification_and_cid_do_not_need_learned_rules():
+    rules = CatalogRules.load()
+    assert rules.classify("FC2PPV-123456").category == Category.FC2
+    assert rules.classify("123456_123").category == Category.UNCENSORED
+    assert rules.classify("SSIS-001").category == Category.CENSORED
+    assert rules.classify("TESTABC-123").category == Category.UNKNOWN
+    assert rules.dmm_cid("TESTABC-123") == "testabc00123"
+    assert rules.matches("FC2PPV-123456", "FC2-123456")
 
 
 def test_cooldowns_are_keyed_by_source_and_hostname_and_rebuild(store):
@@ -166,8 +167,6 @@ async def test_separate_scrapers_share_whole_source_work_gate(tmp_path):
 
     settings = Settings(database=tmp_path / "data.sqlite3")
     settings.routes["censored"] = [SourceId.DMM]
-    rules = CatalogRules.load(settings.database)
-    rules.remember("TESTABC-123", Category.CENSORED, settings.database)
     active = maximum = 0
 
     class Stub:
@@ -187,7 +186,7 @@ async def test_separate_scrapers_share_whole_source_work_gate(tmp_path):
     scrapers = [Scraper(settings, client=WebClient()) for _ in range(2)]
     for scraper in scrapers:
         scraper.sources = {SourceId.DMM: Stub()}
-    await asyncio.gather(*(scraper.scrape("TESTABC-123") for scraper in scrapers))
+    await asyncio.gather(*(scraper.scrape("ABP-123") for scraper in scrapers))
     assert maximum == 1
 
 
@@ -247,9 +246,6 @@ async def test_images_share_one_second_budget_by_hostname_across_ports(monkeypat
 async def test_identity_mismatch_tries_next_source_and_stops(tmp_path):
     settings = Settings(database=tmp_path / "db.sqlite3")
     settings.routes["censored"] = [SourceId.DMM, SourceId.JAVDB, SourceId.JAVBUS]
-    CatalogRules.load(settings.database).remember(
-        "TESTABC-123", Category.CENSORED, settings.database
-    )
     scraper = Scraper(settings, client=object())
     calls = []
 
@@ -267,10 +263,10 @@ async def test_identity_mismatch_tries_next_source_and_stops(tmp_path):
             )
 
     scraper.sources = {
-        s: Stub(s, "WRONG-999" if s == SourceId.DMM else "TESTABC-123")
+        s: Stub(s, "WRONG-999" if s == SourceId.DMM else "ABP-123")
         for s in settings.routes["censored"]
     }
-    result = await scraper.scrape("TESTABC-123")
+    result = await scraper.scrape("ABP-123")
     assert calls == [SourceId.DMM, SourceId.JAVDB]
     assert result.results[0].status == Status.IDENTITY_MISMATCH
     assert result.selected_source == SourceId.JAVDB

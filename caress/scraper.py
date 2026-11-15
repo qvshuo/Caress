@@ -4,17 +4,16 @@ import asyncio
 import logging
 import time
 from contextlib import nullcontext
+from functools import cached_property
 from typing import Any
 
-from .catalog import CatalogRules, catalog_prefix
+from .catalog import CatalogRules
 from .http import Client, WebClient
 from .identifiers import validate_code
 from .logging import report_progress
 from .models import (
-    Category,
     ScrapeRequest,
     ScrapeResult,
-    SourceId,
     SourceResult,
     Status,
 )
@@ -38,7 +37,6 @@ class Scraper:
         self.client = client or WebClient(runtime=runtime)
         self._owns_client = client is None
         self._source_locks = {}
-        self.prefix_locks = {}
         self.sources = {
             source: factory(self.client, self.settings)
             for source, factory in SOURCES.items()
@@ -51,9 +49,9 @@ class Scraper:
             return self.client.source_work_locks
         return self._source_locks
 
-    @property
+    @cached_property
     def rules(self) -> CatalogRules:
-        return CatalogRules.load(self.settings.database)
+        return CatalogRules.load()
 
     async def __aenter__(self) -> Scraper:
         if self._owns_client:
@@ -136,14 +134,6 @@ class Scraper:
             report_progress("source", result.status.value, source)
             return result
 
-        fetched = {}
-        if classification.category == Category.UNKNOWN and request.source is None:
-            prefix = catalog_prefix(request.code)
-            async with self.prefix_locks.setdefault(prefix, asyncio.Lock()):
-                classification = self.rules.classify(request.code)
-                if classification.category == Category.UNKNOWN:
-                    fetched[SourceId.JAVDB] = await fetch(SourceId.JAVDB)
-                    classification = self.rules.classify(request.code)
         route = (
             [request.source]
             if request.source
@@ -152,7 +142,7 @@ class Scraper:
         results = []
         selected = None
         for source in route:
-            result = fetched.get(source) or await fetch(source)
+            result = await fetch(source)
             if result.metadata and not self.rules.matches(
                 request.code, result.metadata.code
             ):
@@ -162,20 +152,14 @@ class Scraper:
                     status=Status.IDENTITY_MISMATCH,
                     message="来源番号不匹配",
                 )
-            fetched[source] = result
             results.append(result)
             if result.status == Status.FOUND and result.metadata is not None:
                 selected = result
                 break
-        classification = self.rules.classify(request.code)
-        executed = [
-            *results,
-            *(value for source, value in fetched.items() if source not in route),
-        ]
-        warnings = [warning for result in executed for warning in result.warnings]
+        warnings = [warning for result in results for warning in result.warnings]
         warnings.extend(
             f"{result.source}：{result.message or '来源请求失败'}"
-            for result in executed
+            for result in results
             if result.status not in (Status.FOUND, Status.NOT_FOUND, Status.UNSUPPORTED)
         )
         metadata = (
@@ -204,7 +188,7 @@ class Scraper:
             classification=classification,
             metadata=metadata,
             selected_source=selected.source if selected else None,
-            results=executed,
+            results=results,
             warnings=warnings,
         )
 

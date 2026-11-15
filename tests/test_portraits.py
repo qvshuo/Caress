@@ -204,3 +204,17 @@ async def test_alias_supplies_portrait_when_standard_name_appears_first(processo
     prepared = await processor._prepare("ABC-123", None)
     assert [a.name for a in prepared.metadata.actors] == ["黒川さりな", "Unknown"]
     assert prepared.mappings[0]["portrait"].name == "黒川さりな"
+
+
+@pytest.mark.asyncio
+async def test_translation_outage_still_composes_standard_actor_title(processor):
+    processor.translator.settings.model = "test"
+    processor.translator.settings.api_key = "test"
+    processor.translator.available = False
+    processor.translator.validation_error = "offline"
+    processor.translator.verify = AsyncMock(return_value=False)
+    prepared = await processor._prepare("ABC-123", None)
+    assert prepared.metadata.title == "ABC-123 黒川さりな Unknown title"
+    assert prepared.metadata.plot == "Kurokawa Sarina and 黒川さりな"
+    assert [a.name for a in prepared.metadata.actors] == ["黒川さりな", "Unknown"]
+    assert "offline" in prepared.warnings

@@ -1280,3 +1280,15 @@ test("resuming crop clears source errors and retains actual preview failures", a
   await expect(dialog).toHaveCount(0);
   expect(uploads).toBe(1);
 });
+
+test("finished batch does not override live work status", async ({ page }) => {
+  await page.route("**/api/batch", route => route.fulfill({ json: {
+    id: "old-server", status: "finished", current: [],
+    items: [{ id: "1", status: "failed", action: "scrape", source: null }],
+  } }));
+  await page.goto("/");
+  const row = page.getByRole("row", { name: "查看 ABC-123" });
+  await expect(row.locator("[data-slot=badge]")).toHaveText("已处理");
+  await page.getByRole("button", { name: "刷新作品列表" }).click();
+  await expect(row.locator("[data-slot=badge]")).toHaveText("已处理");
+});

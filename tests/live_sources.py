@@ -4,7 +4,7 @@ import asyncio
 import json
 
 from caress.models import ScrapeRequest, SourceId
-from caress.scraper import Scraper
+from caress.scraper import SOURCE_TIMEOUT_SECONDS, Scraper
 from caress.settings import Settings
 
 CODES = {
@@ -27,7 +27,7 @@ async def main():
 
         async def probe(source, code):
             try:
-                async with asyncio.timeout(45):
+                async with asyncio.timeout(SOURCE_TIMEOUT_SECONDS * 2):
                     result = await scraper.scrape(
                         ScrapeRequest(code=code, source=source)
                     )

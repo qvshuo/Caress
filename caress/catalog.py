@@ -46,10 +46,10 @@ class CatalogRules(BaseModel):
         return self
 
     @classmethod
-    def load(cls, path: Path | None = None) -> CatalogRules:
-        from .runtime import read_rules
-        seed = Path(__file__).parent / "data/catalog_rules.json"
-        return cls.model_validate(read_rules(path, "catalog", seed)) if path else cls.model_validate_json(seed.read_bytes())
+    def load(cls) -> CatalogRules:
+        return cls.model_validate_json(
+            (Path(__file__).parent / "data/catalog_rules.json").read_bytes()
+        )
 
     def classify(self, code: str) -> Classification:
         if code.startswith("FC2PPV-"):
@@ -65,20 +65,6 @@ class CatalogRules(BaseModel):
             category=category,
             evidence=[Evidence(basis=f"rules_v{self.version}:{basis}", value=prefix)],
         )
-
-    def remember(self, code: str, category: Category, path: Path | None) -> None:
-        if category == Category.UNKNOWN or self.classify(code).category != Category.UNKNOWN:
-            return
-        from .runtime import merge_rules
-        def update(data):
-            current = CatalogRules.model_validate(data)
-            if current.classify(code).category == Category.UNKNOWN:
-                getattr(current, f"{category.value}_prefixes").append(catalog_prefix(self.query_code(code)))
-            return current.model_dump()
-        data = merge_rules(path, "catalog", update) if path else update(self.model_dump())
-        current = CatalogRules.model_validate(data)
-        self.__dict__.update(current.__dict__)
-        self._categories = current._categories
 
     def query_code(self, code: str) -> str:
         if NUMERIC.fullmatch(code):

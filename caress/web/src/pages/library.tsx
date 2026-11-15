@@ -115,7 +115,9 @@ export function Library({
     return <Empty>请先连接 Emby 并选择媒体库</Empty>;
   }
   const pages = Math.max(1, Math.ceil(total / pageSize));
-  const results = new Map(batch?.items.map((item) => [item.id, item]));
+  const results = new Map(
+    batch?.status === "running" ? batch.items.map((item) => [item.id, item]) : [],
+  );
   function select(ids: string[], checked: boolean) {
     setSelected((old) => {
       const next = new Set(old);
