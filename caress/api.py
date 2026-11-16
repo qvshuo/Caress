@@ -177,7 +177,7 @@ def create_app(settings: Settings | None = None):
         ):
             raise ValueError("请先连接 Emby 并选择媒体库")
         if body.action == "force" and not body.confirmed:
-            raise ValueError("请确认替换元数据")
+            raise ValueError("请确认重建元数据")
         ids = list(dict.fromkeys(body.ids))
         if any(not i.isalnum() for i in ids):
             raise ValueError("Emby 项目 ID 无效")

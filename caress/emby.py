@@ -149,13 +149,13 @@ def needs_enrichment(item, images, media):
 
 
 def metadata_update(original, metadata, media, *, replace):
-    """Fill missing fields or replace supported fields; absent source values never clear data."""
+    """Fill missing fields or rebuild managed fields, clearing missing source values."""
     changes = {}
 
-    def put(key, value):
-        if has_content(key, value) and (
-            replace or not has_content(key, original.get(key))
-        ):
+    def put(key, value, empty=None):
+        if replace:
+            changes[key] = value if has_content(key, value) else empty
+        elif has_content(key, value) and not has_content(key, original.get(key)):
             changes[key] = value
 
     if has_content("Name", metadata.title) and (replace or missing_title(original, media)):
@@ -164,15 +164,19 @@ def metadata_update(original, metadata, media, *, replace):
         ("OriginalTitle", metadata.original_title),
         ("Overview", metadata.plot),
     ]:
-        put(key, value)
+        put(key, value, empty="")
     put(
         "ProductionYear",
         metadata.year
         or (metadata.release_date.year if metadata.release_date else None),
     )
-    if metadata.release_date and metadata.release_date.year > 1:
-        put("PremiereDate", metadata.release_date.isoformat() + "T00:00:00Z")
-    put("Studios", [{"Name": metadata.studio}] if metadata.studio else [])
+    put(
+        "PremiereDate",
+        metadata.release_date.isoformat() + "T00:00:00Z"
+        if metadata.release_date and metadata.release_date.year > 1
+        else None,
+    )
+    put("Studios", [{"Name": metadata.studio}] if metadata.studio else [], empty=[])
     put(
         "GenreItems",
         [
@@ -180,6 +184,7 @@ def metadata_update(original, metadata, media, *, replace):
             for name in dict.fromkeys(metadata.genres)
             if has_content("Name", name)
         ],
+        empty=[],
     )
     people = deepcopy(original.get("People") or [])
     for kind, names in [
@@ -197,21 +202,30 @@ def metadata_update(original, metadata, media, *, replace):
             for p in people
             if p.get("Type") == kind and has_content("Name", p.get("Name"))
         ]
-        if names and (replace or not old) and names != current_names:
+        if (replace or (names and not old)) and names != current_names:
             people = [p for p in people if p.get("Type") != kind]
             people += [old.get(name, {"Name": name, "Type": kind}) for name in names]
     if people != (original.get("People") or []):
         changes["People"] = people
-    tags = deepcopy(original.get("TagItems") or [])
-    existing = {t["Name"] for t in tags}
-    names = metadata.tags if replace or not has_content("TagItems", tags) else []
-    tags += [
-        {"Name": name}
-        for name in dict.fromkeys([*names, *filename_tags(media)])
-        if has_content("Name", name) and name not in existing
-    ]
-    if tags != (original.get("TagItems") or []):
-        changes["TagItems"] = tags
+    if replace:
+        tags = [
+            {"Name": name}
+            for name in dict.fromkeys([*metadata.tags, *filename_tags(media)])
+            if has_content("Name", name)
+        ]
+        if field_value("TagItems", tags) != field_value("TagItems", original.get("TagItems")):
+            changes["TagItems"] = tags
+    else:
+        tags = deepcopy(original.get("TagItems") or [])
+        existing = {t["Name"] for t in tags}
+        names = metadata.tags if not has_content("TagItems", tags) else []
+        tags += [
+            {"Name": name}
+            for name in dict.fromkeys([*names, *filename_tags(media)])
+            if has_content("Name", name) and name not in existing
+        ]
+        if tags != (original.get("TagItems") or []):
+            changes["TagItems"] = tags
     provider_ids = dict(original.get("ProviderIds") or {})
     if replace or not has_content("Name", provider_ids.get("caress")):
         provider_ids["caress"] = metadata.code

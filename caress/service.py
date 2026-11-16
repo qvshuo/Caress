@@ -131,7 +131,7 @@ class Service:
                     )
                 else:
                     result.setdefault("related_errors", []).append(
-                        "关联项目不属于已选择的媒体库或无法确认归属"
+                        "无法确认关联作品属于所选媒体库"
                     )
             result["related"] = related
             result["needs_enrichment"] = result[

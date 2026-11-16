@@ -44,17 +44,6 @@ class Status(StrEnum):
     UNSUPPORTED = "unsupported"
 
 
-class Evidence(BaseModel):
-    basis: str
-    value: str
-    source: SourceId | None = None
-
-
-class Classification(BaseModel):
-    category: Category = Category.UNKNOWN
-    evidence: list[Evidence] = Field(default_factory=list)
-
-
 class Actor(BaseModel):
     name: str
 
@@ -117,7 +106,7 @@ class ScrapeRequest(BaseModel):
 class ScrapeResult(BaseModel):
     code: str
     status: Status
-    classification: Classification
+    classification: Category = Category.UNKNOWN
     metadata: SourceMetadata | None = None
     selected_source: SourceId | None = None
     results: list[SourceResult] = Field(default_factory=list)

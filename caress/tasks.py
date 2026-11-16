@@ -136,7 +136,7 @@ class BatchRunner:
                             "id": ident,
                             "status": "skipped",
                             "code": None,
-                            "error": "关联作品不属于所选媒体库，或无法确认归属",
+                            "error": "无法确认关联作品属于所选媒体库",
                         }
                     )
                     return

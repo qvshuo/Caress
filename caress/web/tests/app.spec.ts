@@ -425,13 +425,13 @@ test("start button is stable when mode changes and grid is absent", async ({
   await page.getByRole("row", { name: "查看 ABC-123" }).waitFor();
   await page.getByRole("combobox", { name: "刮削方式" }).click();
   await page
-    .getByRole("option", { name: "替换所有的元数据", exact: true })
+    .getByRole("option", { name: "重建元数据", exact: true })
     .click();
   await expect(
     page.getByRole("button", { name: "开始执行", exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "替换所有的元数据", exact: true }),
+    page.getByRole("button", { name: "重建元数据", exact: true }),
   ).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "大图", exact: true }),
@@ -609,10 +609,10 @@ for (const status of [
       await expect(mode).toHaveText("刮削缺少的元数据");
       await mode.click();
       await page
-        .getByRole("option", { name: "替换所有的元数据", exact: true })
+        .getByRole("option", { name: "重建元数据", exact: true })
         .click();
       await primary.click();
-      await expect(page.getByRole("dialog")).toContainText("可能覆盖");
+      await expect(page.getByRole("dialog")).toContainText("缺失字段也会清空");
       await page.getByRole("button", { name: "取消", exact: true }).click();
     }
     await expect(page.getByRole("list", { name: "媒体文件" })).toContainText(
@@ -724,7 +724,7 @@ test("stopping waits for active writes and identifies mixed queued work", async 
   });
   await page.goto("/");
   const progress = page.getByRole("region", { name: "当前批次" });
-  await expect(progress).toContainText("等待：DEF-456 · 替换 · JavDB");
+  await expect(progress).toContainText("等待：DEF-456 · 重建元数据 · JavDB");
   await progress.getByRole("button", { name: "取消", exact: true }).click();
   await expect(progress.getByRole("button", { name: "正在停止…" })).toBeDisabled();
   await expect(progress).toContainText("当前写入完成后停止");
@@ -977,7 +977,7 @@ for (const [status, missing, expected] of [
     if (expected === "force") {
       await page.getByRole("combobox", { name: "刮削方式" }).click();
       await page
-        .getByRole("option", { name: "替换所有的元数据", exact: true })
+        .getByRole("option", { name: "重建元数据", exact: true })
         .click();
     }
     await page.getByRole("button", { name: "开始执行", exact: true }).click();
@@ -1348,4 +1348,49 @@ test("retry clears old failure tooltip while running and after success before li
   await expect(badge).toHaveText("已处理");
   await expect(badge).not.toHaveAttribute("title");
   expect(workReads).toBe(initialReads);
+});
+
+test("detail consistently shows empty metadata without duplicate rows", async ({ page }) => {
+  await page.route("**/api/works/1", route => route.fulfill({ json: {
+    ...work, original_title: null, plot: null,
+  } }));
+  await page.goto("/#library/work/1");
+  await expect(page.locator("dl dt")).toHaveText(["发行日期", "制作商", "类型", "标签"]);
+  await expect(page.locator("dl dd")).toHaveText(["—", "—", "—", "—"]);
+  await expect(page.getByText("原始标题：—", { exact: true })).toBeVisible();
+  for (const title of ["简介", "人物"]) {
+    const section = page.locator("section").filter({ has: page.getByRole("heading", { name: title, exact: true }) });
+    await expect(section).toContainText("—");
+    await expect(section.getByRole("heading")).toHaveCount(1);
+  }
+});
+
+test("detail shows identical original title and populated fields with existing person cards", async ({ page }) => {
+  await page.route("**/api/works/1", route => route.fulfill({ json: {
+    ...work, original_title: work.title, year: 2024, studios: ["制作商一"], genres: ["类型一"], tags: ["标签一"],
+    people: [{ id: "p", name: "演员一", type: "Actor", image: null }],
+  } }));
+  await page.goto("/#library/work/1");
+  await expect(page.getByText(`原始标题：${work.title}`, { exact: true })).toBeVisible();
+  await expect(page.locator("dl dd")).toHaveText(["2024", "制作商一", "类型一", "标签一"]);
+  await expect(page.getByText(work.plot, { exact: true })).toBeVisible();
+  await expect(page.getByText("演员一", { exact: true })).toHaveCount(1);
+  await expect(page.getByRole("img", { name: "暂无头像" })).toBeVisible();
+});
+
+test("rebuild confirmation explains clearing and cancellation submits nothing", async ({ page }) => {
+  let submissions = 0;
+  await page.route("**/api/batch", route => {
+    if (route.request().method() === "POST") submissions++;
+    return route.fulfill({ json: null });
+  });
+  await page.goto("/#library/work/1");
+  await page.getByRole("combobox", { name: "刮削方式" }).click();
+  await page.getByRole("option", { name: "重建元数据", exact: true }).click();
+  await page.getByRole("button", { name: "开始执行", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("将使用重新获取的作品信息替换现有元数据，缺失字段也会清空。已有背景图和演员头像会保留。确定继续吗？");
+  await dialog.getByRole("button", { name: "取消", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(submissions).toBe(0);
 });

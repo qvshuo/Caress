@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from functools import cached_property
 from typing import ClassVar
 from urllib.parse import urlparse
 
-from ..catalog import CatalogRules
+from ..catalog import matches
 from ..http import Client, FetchError
 from ..models import (
     Candidate,
@@ -26,10 +25,6 @@ class Source:
         self.settings = settings
         self.base = self.default_url.rstrip("/")
 
-    @cached_property
-    def rules(self) -> CatalogRules:
-        return CatalogRules.load()
-
     def checked_url(self, value: str) -> str:
         parsed = urlparse(value)
         if (
@@ -47,7 +42,7 @@ class Source:
     async def fetch(self, request: ScrapeRequest) -> SourceResult:
         try:
             result = await self._fetch(request)
-            if result.metadata and not self.rules.matches(request.code, result.metadata.code):
+            if result.metadata and not matches(request.code, result.metadata.code):
                 raise FetchError(
                     Status.IDENTITY_MISMATCH, "来源作品番号不匹配"
                 )
@@ -81,8 +76,7 @@ class Source:
 
     def select(self, request: ScrapeRequest, candidates: list[Candidate]) -> Candidate | None:
         # All accepted matches identify the same catalog; retain provider ranking on ties.
-        rules = self.rules
-        return next((candidate for candidate in candidates if rules.matches(request.code, candidate.code)), None)
+        return next((candidate for candidate in candidates if matches(request.code, candidate.code)), None)
 
     async def _fetch(self, request: ScrapeRequest) -> SourceResult:
         raise NotImplementedError

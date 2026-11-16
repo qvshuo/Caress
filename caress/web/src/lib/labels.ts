@@ -17,7 +17,7 @@ export const statusFilters = {
 };
 export const actions = {
   scrape: "刮削缺少的元数据",
-  force: "替换所有的元数据",
+  force: "重建元数据",
 };
 export const sourceLabels: Record<Source, string> = {
   dmm: "DMM",

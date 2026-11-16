@@ -29,7 +29,7 @@ export function BatchProgress({
       item.id;
     return [
       code,
-      mixed && item.action === "force" ? "替换" : "",
+      mixed && item.action === "force" ? "重建元数据" : "",
       mixed && item.source ? sourceLabels[item.source] : "",
     ]
       .filter(Boolean)

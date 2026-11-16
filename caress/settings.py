@@ -90,16 +90,16 @@ class Settings(BaseModel):
             ],
             "fc2": [SourceId.FC2, SourceId.JAVDB, SourceId.AVSOX, SourceId.AIRAV],
             "unknown": [
-                SourceId.ONEPONDO,
-                SourceId.CARIBBEANCOM,
-                SourceId.HEYZO,
-                SourceId.FC2,
                 SourceId.DMM,
                 SourceId.JAVDB,
                 SourceId.JAVBUS,
                 SourceId.AVBASE,
                 SourceId.AVSOX,
                 SourceId.AIRAV,
+                SourceId.ONEPONDO,
+                SourceId.CARIBBEANCOM,
+                SourceId.HEYZO,
+                SourceId.FC2,
             ],
         }
     )

@@ -4,6 +4,7 @@ import json
 import re
 from urllib.parse import parse_qs, quote, urljoin, urlparse
 
+from ..catalog import dmm_cid
 from ..http import FetchError, json_error
 from ..models import (
     Actor,
@@ -33,23 +34,15 @@ def cid_from_url(url: str) -> str | None:
     return cid.lower() if cid and re.fullmatch(r"[a-z0-9_]{3,80}", cid, re.IGNORECASE) else None
 
 
-def cid_matches_number(cid: str, code: str, catalog_prefixes=()) -> bool:
+def cid_matches_number(cid: str, code: str) -> bool:
     prefix, _, digits = code.rpartition("-")
-    if not digits.isdigit():
+    if not prefix or not digits.isdigit():
         return False
-    # A known numeric catalog prefix is not a manufacturer namespace.
-    for known in catalog_prefixes:
-        if re.fullmatch(r"\d+" + re.escape(prefix), known) and cid_matches_number(
-            cid, known + "-" + digits
-        ):
-            return False
-    # Namespace prefixes and digital edition suffixes occur in official IDs.
-    # Match the full catalog prefix; never shorten 300MIUM to MIUM.
-    match = re.fullmatch(
-        r"(?:[a-z]_\d+|\d+)?" + re.escape(prefix.lower()) + r"(\d+)(?:so|sp|tk|hd|hhb|hib)?",
+    # Numeric catalog prefixes are part of the identity, never guessed namespaces.
+    return re.fullmatch(
+        re.escape(prefix.lower()) + r"0*" + str(int(digits)) + r"(?:so|sp|tk|hd|hhb|hib)?",
         cid.lower(),
-    )
-    return bool(match and int(match[1]) == int(digits))
+    ) is not None
 
 
 class DMM(Source):
@@ -105,11 +98,7 @@ class DMM(Source):
             url = urljoin(page.url, value)
             parsed = urlparse(url)
             if parsed.hostname == "video.dmm.co.jp" or "/digital/" in parsed.path:
-                if (cid := cid_from_url(url)) and cid_matches_number(
-                    cid,
-                    request.code,
-                    [*self.rules.censored_prefixes, *self.rules.uncensored_prefixes],
-                ):
+                if (cid := cid_from_url(url)) and cid_matches_number(cid, request.code):
                     if cid not in candidates:
                         candidates.append(cid)
         if not candidates and not selector.css(
@@ -138,16 +127,14 @@ class DMM(Source):
             cid = cid.lower()
             if not re.fullmatch(r"[a-z0-9_]{3,80}", cid):
                 raise FetchError(Status.UNSUPPORTED, "DMM 作品 ID 无效")
-            if not cid_matches_number(
-                cid, request.code, [*self.rules.censored_prefixes, *self.rules.uncensored_prefixes]
-            ):
+            if not cid_matches_number(cid, request.code):
                 raise FetchError(
                     Status.IDENTITY_MISMATCH,
                     "DMM 作品 ID 与请求番号不匹配",
                 )
             work = await self.content(cid)
         else:
-            cid = self.rules.dmm_cid(request.code)
+            cid = dmm_cid(request.code)
             if not cid:
                 raise FetchError(
                     Status.UNSUPPORTED, "DMM 需要字母数字番号或指定作品 ID"

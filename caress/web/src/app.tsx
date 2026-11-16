@@ -167,8 +167,8 @@ export function App() {
       if (action === "force") {
         const accepted = await new Promise<boolean>((resolve) => {
           const value = {
-            title: "替换所有的元数据",
-            description: "可能覆盖 Emby 中手动修改的相关元数据和封面。继续？",
+            title: "重建元数据",
+            description: "将使用重新获取的作品信息替换现有元数据，缺失字段也会清空。已有背景图和演员头像会保留。确定继续吗？",
             resolve,
           };
           confirmationRef.current = value;

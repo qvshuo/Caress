@@ -80,6 +80,7 @@ export default function Work({
         })),
       ]
     : [];
+  const empty = <span className="text-muted-foreground">—</span>;
   const avatarPlaceholder = (
     <UserRound className="size-8" strokeWidth={1.5} aria-hidden="true" />
   );
@@ -171,11 +172,9 @@ export default function Work({
               <h2 className="wrap-anywhere text-xl font-medium">
                 {work.title}
               </h2>
-              {work.original_title && work.original_title !== work.title && (
-                <p className="wrap-anywhere text-sm text-muted-foreground">
-                  {work.original_title}
-                </p>
-              )}
+              <p className="wrap-anywhere text-sm text-muted-foreground">
+                原始标题：{work.original_title || empty}
+              </p>
               {work.error && <Alert role="alert">{work.error}</Alert>}
               <div className="flex flex-wrap items-center gap-2">
                 {work.status !== "unsupported" && (
@@ -218,44 +217,26 @@ export default function Work({
                 <ExternalLink className="size-3.5" />
               </a>
               <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm [&>dd]:wrap-anywhere">
-                {(work.release_date || work.year) && (
-                  <>
-                    <dt className="text-muted-foreground">发行日期</dt>
-                    <dd>{work.release_date?.slice(0, 10) || work.year}</dd>
-                  </>
-                )}
-                {!!work.studios.length && (
-                  <>
-                    <dt className="text-muted-foreground">制作商</dt>
-                    <dd>{work.studios.join("、")}</dd>
-                  </>
-                )}
-                {!!work.genres.length && (
-                  <>
-                    <dt className="text-muted-foreground">类型</dt>
-                    <dd>{work.genres.join("、")}</dd>
-                  </>
-                )}
-                {!!work.tags.length && (
-                  <>
-                    <dt className="text-muted-foreground">标签</dt>
-                    <dd>{work.tags.join("、")}</dd>
-                  </>
-                )}
+                <dt className="text-muted-foreground">发行日期</dt>
+                <dd>{work.release_date?.slice(0, 10) || work.year || empty}</dd>
+                <dt className="text-muted-foreground">制作商</dt>
+                <dd>{work.studios.join("、") || empty}</dd>
+                <dt className="text-muted-foreground">类型</dt>
+                <dd>{work.genres.join("、") || empty}</dd>
+                <dt className="text-muted-foreground">标签</dt>
+                <dd>{work.tags.join("、") || empty}</dd>
               </dl>
             </div>
           </div>
-          {work.plot && (
-            <section>
-              <h2 className="mb-3 font-medium">简介</h2>
-              <p className="whitespace-pre-wrap text-sm leading-6">
-                {work.plot}
-              </p>
-            </section>
-          )}
-          {!!work.people.length && (
-            <section>
-              <h2 className="mb-3 font-medium">人物</h2>
+          <section>
+            <h2 className="mb-3 font-medium">简介</h2>
+            <p className="whitespace-pre-wrap text-sm leading-6">
+              {work.plot || empty}
+            </p>
+          </section>
+          <section>
+            <h2 className="mb-3 font-medium">人物</h2>
+            {work.people.length ? (
               <div className="flex flex-wrap gap-4">
                 {work.people.map((person, index) => (
                   <div
@@ -289,8 +270,10 @@ export default function Work({
                   </div>
                 ))}
               </div>
-            </section>
-          )}
+            ) : (
+              empty
+            )}
+          </section>
           {!!work.backdrops.length && (
             <section>
               <h2 className="mb-3 font-medium">图片</h2>

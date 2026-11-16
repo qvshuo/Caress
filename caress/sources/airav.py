@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from urllib.parse import quote, urljoin
 
+from ..catalog import matches
 from ..http import FetchError
 from ..models import (
     Actor,
@@ -59,7 +60,7 @@ class AirAV(Source):
         if not code or not heading:
             raise FetchError(Status.PARSE_ERROR, "AirAV 详情页缺少必要的作品信息")
         title = (
-            re.sub(r"^\S+\s+", "", heading) if self.rules.matches(code, heading.split()[0]) else heading
+            re.sub(r"^\S+\s+", "", heading) if matches(code, heading.split()[0]) else heading
         )
         return self.found(
             request,

@@ -216,7 +216,7 @@ async def test_final_dto_fill_or_replace_protects_user_data(flow, replace):
         }
         assert final[key] == (expected[key] if replace else original[key])
     assert final["TagItems"] == (
-        [{"Name": "user tag"}, {"Name": "source tag"}]
+        [{"Name": "source tag"}]
         if replace
         else original["TagItems"]
     )
@@ -291,19 +291,9 @@ async def test_complete_item_skips_source_and_history_does_not_block_missing_cov
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "action,previous",
-    [
-        ("scrape", None),
-        ("scrape", "success"),
-        ("scrape", "failed"),
-        ("scrape", "cancelled"),
-        ("force", None),
-    ],
-)
-async def test_no_source_values_skip_without_inventing_success(flow, action, previous):
-    if action == "scrape":
-        flow.items["1"]["Overview"] = ""
+@pytest.mark.parametrize("previous", [None, "success", "failed", "cancelled"])
+async def test_no_source_values_skip_without_inventing_success(flow, previous):
+    flow.items["1"]["Overview"] = ""
     original = deepcopy(flow.items["1"])
     code, identity, _ = identify(flow.items["1"])
     runtime = flow.service.runtime
@@ -312,7 +302,7 @@ async def test_no_source_values_skip_without_inventing_success(flow, action, pre
     old = runtime.record("s", "1", identity, code)
     flow.metadata = SourceMetadata(code="ABC-123", title=" \t")
     flow.artwork = []
-    assert (await flow.run(action))[0]["status"] == "skipped"
+    assert (await flow.run())[0]["status"] == "skipped"
     assert flow.items["1"] == original
     assert not flow.posts and runtime.record("s", "1", identity, code) == old
 
@@ -436,7 +426,7 @@ async def test_same_code_items_with_different_missing_fields_and_posters(flow, f
         ]
 
 
-def test_semantic_missing_fields_and_year_does_not_replace_date():
+def test_semantic_missing_fields_and_year_only_preserves_date_in_scrape():
     original = complete_item()
     original.update(
         Overview=" \n",
@@ -452,7 +442,8 @@ def test_semantic_missing_fields_and_year_does_not_replace_date():
         and "Name" not in update
     )
     original["PremiereDate"] = "2020-01-02T00:00:00Z"
-    assert "PremiereDate" not in metadata_update(original, metadata, [], replace=True)
+    assert metadata_update(original, metadata, [], replace=True)["PremiereDate"] is None
+    assert "PremiereDate" not in metadata_update(original, metadata, [], replace=False)
     assert needs_enrichment(
         original, [{"ImageType": "Primary"}, {"ImageType": "Backdrop"}], []
     )
@@ -624,3 +615,38 @@ async def test_failed_scrape_without_changes_preserves_failure(flow):
     assert flow.prepared == 1
     record = flow.service.runtime.record('s', '1', identity, code)
     assert record['status'] == 'failed' and record['error'] == 'previous failure'
+
+
+@pytest.mark.asyncio
+async def test_force_clears_missing_fields_preserving_unmanaged_data_and_images(flow):
+    original = deepcopy(flow.items["1"])
+    pictures = deepcopy(flow.images["1"])
+    flow.metadata = SourceMetadata(code="ABC-123", title="new title")
+    flow.artwork = []
+    assert (await flow.run("force"))[0]["status"] == "success"
+    final = flow.items["1"]
+    assert final["Name"] == "new title"
+    assert final["OriginalTitle"] == final["Overview"] == ""
+    assert final["ProductionYear"] is None and final["PremiereDate"] is None
+    assert final["Studios"] == final["GenreItems"] == final["TagItems"] == []
+    assert final["People"] == [original["People"][2]]
+    assert final["ProviderIds"] == original["ProviderIds"]
+    for key in ["UserData", "LockData", "LockedFields", "Path", "Id"]:
+        assert final[key] == original[key]
+    assert flow.images["1"] == pictures
+    flow.posts.clear()
+    assert (await flow.run("force"))[0]["status"] == "skipped"
+    assert not flow.posts
+
+
+@pytest.mark.asyncio
+async def test_force_source_failure_does_not_clear_existing_metadata(flow, monkeypatch):
+    original = deepcopy(flow.items["1"])
+
+    async def failed(*args):
+        raise ValueError("source unavailable")
+
+    monkeypatch.setattr(WorkProcessor, "_prepare", failed)
+    row = (await flow.run("force"))[0]
+    assert row["status"] == "failed" and "source unavailable" in row["error"]
+    assert flow.items["1"] == original and not flow.posts

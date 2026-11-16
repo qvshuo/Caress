@@ -705,7 +705,7 @@ async def test_related_scope_deduplicates_without_blocking_valid_items(
     rows = fake_batch.runtime.batch()["items"]
     assert len(rows) == 3
     excluded = next(r for r in rows if r["id"] == "outside")
-    assert excluded["status"] == "skipped" and "归属" in excluded["error"]
+    assert excluded["status"] == "skipped" and excluded["error"] == "无法确认关联作品属于所选媒体库"
 
 
 @pytest.mark.asyncio
@@ -867,6 +867,10 @@ async def test_targeted_membership_query_and_redirect_does_not_forward_key():
 
 @pytest.mark.asyncio
 async def test_backdrop_dedup_compares_content_and_preserves_unknown_images():
+    from io import BytesIO
+
+    from PIL import Image
+
     from caress.emby import pixel_digest
     from caress.images import validate_image
     from test_images import image_bytes
@@ -876,7 +880,11 @@ async def test_backdrop_dedup_compares_content_and_preserves_unknown_images():
     client.image_info = AsyncMock(
         return_value=[{"ImageType": "Backdrop", "ImageIndex": 0}]
     )
-    client.image = AsyncMock(return_value=validate_image(red))
+    encoded = BytesIO()
+    with Image.open(BytesIO(red)) as image:
+        image.save(encoded, format="PNG", compress_level=0)
+    assert encoded.getvalue() != red
+    client.image = AsyncMock(return_value=validate_image(encoded.getvalue()))
     client.upload = AsyncMock()
     try:
         signatures = await client.backdrop_signatures("1")
@@ -1183,7 +1191,6 @@ async def preparing(tmp_path):
     from caress.models import (
         ArtworkCandidate,
         Category,
-        Classification,
         SourceId,
         Status,
     )
@@ -1215,7 +1222,7 @@ async def preparing(tmp_path):
             metadata=metadata,
             selected_source=SourceId.DMM,
             warnings=['JavDB API 返回失败：{"success": 0, "message": "請登錄帳號"}'],
-            classification=Classification(category=Category.CENSORED),
+            classification=Category.UNKNOWN,
             results=[SimpleNamespace(source=SourceId.DMM)],
         )
     )
@@ -1635,3 +1642,26 @@ async def test_crop_accepts_normal_sixty_second_source_pacing(crop_service, monk
     assert delays == [60]
     assert 45 not in timeouts
     assert result['token'] != first['token']
+
+
+@pytest.mark.asyncio
+async def test_preparation_uses_source_title_as_original_before_translating(preparing):
+    from caress.emby import metadata_update
+
+    processor, _ = preparing
+    source = processor.scraper.scrape.return_value.metadata
+    source.artwork = []
+    source.title = "source title"
+    source.original_title = None
+
+    async def translate(metadata, **kwargs):
+        assert metadata.title == metadata.original_title == "source title"
+        metadata.title = "translated title"
+        return SimpleNamespace(errors=[])
+
+    processor.translator.metadata.side_effect = translate
+    result = await processor.prepare("ABC-123")
+    changes = metadata_update({}, result.metadata, [], replace=True)
+    assert changes["OriginalTitle"] == "source title"
+    assert changes["Name"] == "translated title"
+    assert source.title == "source title" and source.original_title is None

@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from caress.catalog import CatalogRules
+from caress.catalog import classify, dmm_cid, matches
 from caress.models import (
     Category,
     ScrapeRequest,
@@ -59,7 +59,7 @@ async def test_solver_error_preserves_original_json():
 
 @pytest.mark.asyncio
 async def test_failed_scrape_exposes_source_error_in_final_message():
-    from caress.models import Classification, ScrapeResult
+    from caress.models import ScrapeResult
     from caress.processing import WorkProcessor
 
     class ScraperStub:
@@ -67,7 +67,7 @@ async def test_failed_scrape_exposes_source_error_in_final_message():
             return ScrapeResult(
                 code=request.code,
                 status=Status.BLOCKED,
-                classification=Classification(),
+                classification=Category.UNKNOWN,
                 results=[SourceResult(source=SourceId.JAVDB, requested_code=request.code,
                                       status=Status.BLOCKED, message='{"error":"denied"}')],
             )
@@ -84,10 +84,6 @@ def test_source_search_selects_first_exact_match_in_provider_ranking():
     class Stub(Source):
         id = SourceId.JAVBUS
         default_url = "https://example.invalid"
-
-        @property
-        def rules(self):
-            return CatalogRules()
 
     source = Stub(None, Settings())
     candidates = [
@@ -133,18 +129,19 @@ async def test_sources_stop_after_first_priority_hit_without_field_borrowing(tmp
     assert result.selected_source == SourceId.DMM
     assert result.metadata.title == "dmm"
     assert result.metadata.plot is None
-    assert result.classification.category == Category.UNKNOWN
+    assert result.classification == Category.UNKNOWN
     assert not database.exists()
 
 
-def test_static_classification_and_cid_do_not_need_learned_rules():
-    rules = CatalogRules.load()
-    assert rules.classify("FC2PPV-123456").category == Category.FC2
-    assert rules.classify("123456_123").category == Category.UNCENSORED
-    assert rules.classify("SSIS-001").category == Category.CENSORED
-    assert rules.classify("TESTABC-123").category == Category.UNKNOWN
-    assert rules.dmm_cid("TESTABC-123") == "testabc00123"
-    assert rules.matches("FC2PPV-123456", "FC2-123456")
+def test_number_families_and_conservative_unknown_classification():
+    assert classify("FC2PPV-123456") == Category.FC2
+    assert classify("123456_123") == Category.UNCENSORED
+    assert classify("012318-589") == Category.UNCENSORED
+    assert classify("HEYZO-0780") == Category.UNCENSORED
+    for code in ["SSIS-001", "ABP-123", "MIDA-123", "N12345", "TESTABC-123"]:
+        assert classify(code) == Category.UNKNOWN
+    assert dmm_cid("TESTABC-123") == "testabc00123"
+    assert matches("FC2PPV-123456", "FC2-123456")
 
 
 def test_cooldowns_are_keyed_by_source_and_hostname_and_rebuild(store):
@@ -166,7 +163,7 @@ async def test_separate_scrapers_share_whole_source_work_gate(tmp_path):
     from caress.http import WebClient
 
     settings = Settings(database=tmp_path / "data.sqlite3")
-    settings.routes["censored"] = [SourceId.DMM]
+    settings.routes["unknown"] = [SourceId.DMM]
     active = maximum = 0
 
     class Stub:
@@ -245,7 +242,7 @@ async def test_images_share_one_second_budget_by_hostname_across_ports(monkeypat
 @pytest.mark.asyncio
 async def test_identity_mismatch_tries_next_source_and_stops(tmp_path):
     settings = Settings(database=tmp_path / "db.sqlite3")
-    settings.routes["censored"] = [SourceId.DMM, SourceId.JAVDB, SourceId.JAVBUS]
+    settings.routes["unknown"] = [SourceId.DMM, SourceId.JAVDB, SourceId.JAVBUS]
     scraper = Scraper(settings, client=object())
     calls = []
 
@@ -264,7 +261,7 @@ async def test_identity_mismatch_tries_next_source_and_stops(tmp_path):
 
     scraper.sources = {
         s: Stub(s, "WRONG-999" if s == SourceId.DMM else "ABP-123")
-        for s in settings.routes["censored"]
+        for s in settings.routes["unknown"]
     }
     result = await scraper.scrape("ABP-123")
     assert calls == [SourceId.DMM, SourceId.JAVDB]
@@ -378,3 +375,52 @@ def test_javdb_movie_actor_links_provide_names():
         Page("https://javdb.com/v/7YkA1", 200, html.encode()),
     )
     assert result.metadata.actors[0].name == "大橋未久"
+
+
+def test_dmm_cid_preserves_numeric_namespaces_and_exact_work_number():
+    from caress.sources.dmm import cid_matches_number
+
+    assert cid_matches_number("ssis00001", "SSIS-001")
+    assert cid_matches_number("ssis00001hhb", "SSIS-001")
+    assert cid_matches_number("300mium00123", "300MIUM-123")
+    assert not cid_matches_number("300mium00123", "MIUM-123")
+    assert not cid_matches_number("mium00123", "300MIUM-123")
+    assert not cid_matches_number("ssis00002", "SSIS-001")
+    assert not cid_matches_number("118abp00123", "ABP-123")
+
+
+@pytest.mark.asyncio
+async def test_dmm_constructed_cid_then_exact_official_search_fallback():
+    from caress.http import Page
+    from caress.sources.dmm import DMM
+
+    calls = []
+
+    class Client:
+        async def post_json(self, source, url, payload, **kwargs):
+            cid = payload["variables"]["id"]
+            calls.append(cid)
+            work = {"id": cid, "title": "official title"} if cid.endswith("so") else None
+            return Page(url, 200, json.dumps({"data": {"ppvContent": work}}).encode())
+
+        async def get(self, source, url, **kwargs):
+            calls.append("search")
+            return Page(url, 200, b'<input name="searchstr"><a href="https://video.dmm.co.jp/av/content/?id=300mium00123">wrong namespace</a><a href="https://video.dmm.co.jp/av/content/?id=mium00124">wrong work</a><a href="https://video.dmm.co.jp/av/content/?id=mium00123so">exact</a>')
+
+    source = DMM(Client(), Settings())
+    result = await source.fetch(ScrapeRequest(code="MIUM-123"))
+    assert result.status == Status.FOUND and result.metadata.code == "MIUM-123"
+    assert calls == ["mium00123", "search", "mium00123so"]
+    calls.clear()
+    result = await source.fetch(ScrapeRequest(code="MIUM-123", external_id="300mium00123"))
+    assert result.status == Status.IDENTITY_MISMATCH and not calls
+
+
+def test_filename_version_attributes_do_not_classify_the_release():
+    from pathlib import Path
+
+    from caress.identifiers import parse_filename
+
+    code, media = parse_filename(Path("SSIS-123-UC-cd2.mp4"))
+    assert code == "SSIS-123" and media.subtitles and media.uncensored and media.part == 2
+    assert classify(code) == Category.UNKNOWN

@@ -4,6 +4,7 @@ import json
 from datetime import datetime
 from urllib.parse import quote
 
+from ..catalog import query_code
 from ..http import FetchError, Page
 from ..models import (
     Actor,
@@ -41,7 +42,7 @@ class AVbase(Source):
             url = self.base + "/works/" + quote(request.external_id, safe=":")
         else:
             page = await self.client.get(
-                self.id, self.base + "/works?q=" + quote(self.rules.query_code(request.code))
+                self.id, self.base + "/works?q=" + quote(query_code(request.code))
             )
             works = self.props(page).get("works")
             if not isinstance(works, list):

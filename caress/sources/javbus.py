@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from urllib.parse import quote, urljoin
 
-from ..catalog import normalize_code
+from ..catalog import normalize_code, query_code
 from ..http import FetchError, Page, response_issue
 from ..models import (
     Actor,
@@ -26,7 +26,7 @@ class JavBus(Source):
         url = (
             self.checked_url(request.source_url)
             if request.source_url
-            else self.base + "/" + quote(self.rules.query_code(request.code))
+            else self.base + "/" + quote(query_code(request.code))
         )
         try:
             page = await self.client.get(self.id, url, cookies={"dv": "1"})
@@ -35,7 +35,7 @@ class JavBus(Source):
                 raise
             search = await self.client.get(
                 self.id,
-                self.base + "/search/" + quote(self.rules.query_code(request.code)),
+                self.base + "/search/" + quote(query_code(request.code)),
                 cookies={"dv": "1"},
             )
             selector = search.selector()

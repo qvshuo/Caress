@@ -4,10 +4,9 @@ import asyncio
 import logging
 import time
 from contextlib import nullcontext
-from functools import cached_property
 from typing import Any
 
-from .catalog import CatalogRules
+from .catalog import classify, matches
 from .http import Client, WebClient
 from .identifiers import validate_code
 from .logging import report_progress
@@ -49,10 +48,6 @@ class Scraper:
             return self.client.source_work_locks
         return self._source_locks
 
-    @cached_property
-    def rules(self) -> CatalogRules:
-        return CatalogRules.load()
-
     async def __aenter__(self) -> Scraper:
         if self._owns_client:
             await self.client.__aenter__()
@@ -73,7 +68,7 @@ class Scraper:
         validate_code(request.code)
         if (request.external_id or request.source_url) and not request.source:
             raise ValueError("指定作品 ID 或地址时必须选择来源")
-        classification = self.rules.classify(request.code)
+        classification = classify(request.code)
 
         async def fetch(source):
             lock = self.source_locks.setdefault(source, asyncio.Lock())
@@ -137,13 +132,13 @@ class Scraper:
         route = (
             [request.source]
             if request.source
-            else self.settings.routes[classification.category.value]
+            else self.settings.routes[classification.value]
         )
         results = []
         selected = None
         for source in route:
             result = await fetch(source)
-            if result.metadata and not self.rules.matches(
+            if result.metadata and not matches(
                 request.code, result.metadata.code
             ):
                 result = SourceResult(

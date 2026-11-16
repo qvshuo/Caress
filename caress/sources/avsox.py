@@ -3,12 +3,11 @@ from __future__ import annotations
 import re
 from urllib.parse import quote, urljoin
 
-from ..catalog import normalize_code
+from ..catalog import normalize_code, query_code
 from ..http import FetchError, Page
 from ..models import (
     Actor,
     Candidate,
-    Category,
     ScrapeRequest,
     SourceId,
     SourceMetadata,
@@ -24,8 +23,6 @@ class AVSOX(Source):
     default_url = "https://avsox.click"
 
     async def _fetch(self, request: ScrapeRequest) -> SourceResult:
-        if self.rules.classify(request.code).category == Category.CENSORED:
-            raise FetchError(Status.UNSUPPORTED, "AVSOX 只支持无码作品")
         if request.source_url:
             url = self.checked_url(request.source_url)
         elif request.external_id:
@@ -34,7 +31,7 @@ class AVSOX(Source):
             url = self.base + "/cn/movies/" + request.external_id
         else:
             search = await self.document(
-                self.base + "/cn/search/" + quote(self.rules.query_code(request.code)),
+                self.base + "/cn/search/" + quote(query_code(request.code)),
                 "search",
             )
             candidates = []

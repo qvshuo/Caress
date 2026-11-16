@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from urllib.parse import urlencode, urljoin
 
-from ..catalog import normalize_code
+from ..catalog import normalize_code, query_code
 from ..http import FetchError, Page
 from ..models import (
     Actor,
@@ -33,7 +33,7 @@ class JavDBWeb(Source):
                 self.id,
                 self.base
                 + "/search?"
-                + urlencode({"q": self.rules.query_code(request.code), "f": "all", "locale": "zh"}),
+                + urlencode({"q": query_code(request.code), "f": "all", "locale": "zh"}),
             )
             selector = search.selector()
             empty = selector.css(".empty-message")
