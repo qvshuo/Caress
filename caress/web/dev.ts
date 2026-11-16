@@ -1,6 +1,6 @@
 import page from "./index.html";
 
-const backend = process.env.CARESS_BACKEND ?? "http://caress:9307";
+const backend = process.env.CARESS_BACKEND ?? "http://caress:8098";
 Bun.serve({
   hostname: "0.0.0.0",
   port: Number(process.env.PORT ?? 3000),

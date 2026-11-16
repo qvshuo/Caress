@@ -10,7 +10,7 @@ def main():
     from .logging import configure
 
     configure()
-    uvicorn.run(create_app(Settings.load()), host="0.0.0.0", port=9307)
+    uvicorn.run(create_app(Settings.load()), host="0.0.0.0", port=8098)
 
 
 if __name__ == "__main__":

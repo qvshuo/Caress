@@ -4,7 +4,7 @@ services:
     build: .
     restart: unless-stopped
     ports:
-      - "0.0.0.0:9307:9307"
+      - "0.0.0.0:8098:8098"
     volumes:
       - caress-data:/data
     environment:
