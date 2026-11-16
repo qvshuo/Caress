@@ -252,7 +252,11 @@ export function Library({
                     : current?.status === "failed"
                       ? "failed"
                       : w.status;
-                const error = current?.status === "failed" ? current.error : w.error;
+                const error = status === "failed"
+                  ? current?.error ?? w.error
+                  : status === "rescrape_failed" || status === "unsupported" || status === "cancelled"
+                    ? w.error
+                    : undefined;
                 const actors = w.people
                   .filter((p) => p.type === "Actor")
                   .map((p) => p.name)

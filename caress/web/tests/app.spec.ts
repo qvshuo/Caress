@@ -1314,3 +1314,38 @@ test("running batch pairs failure status with current error and prioritizes acti
   await expect(failed).toHaveAttribute("title", "本次 Emby 连接中断");
   await expect(page.getByRole("row", { name: "查看 ABC-124" }).locator("[data-slot=badge]")).toHaveText("处理中");
 });
+
+test("retry clears old failure tooltip while running and after success before list refresh", async ({ page }) => {
+  let started = false, workReads = 0;
+  let batch = {
+    id: "retry", status: "running", current: ["1"], items: [
+      { id: "1", code: "ABC-123", status: "running", action: "scrape", source: null },
+      { id: "2", code: "ABC-124", status: "pending", action: "scrape", source: null },
+    ],
+  };
+  await page.route("**/api/works?**", route => {
+    workReads++;
+    return route.fulfill({ json: {
+      items: [{ ...work, status: "failed", error: "上次来源失败" }], total: 1,
+    } });
+  });
+  await page.route("**/api/batch", route => {
+    if (route.request().method() === "POST") started = true;
+    return route.fulfill({ json: started ? batch : null });
+  });
+  await page.goto("/");
+  const badge = page.getByRole("row", { name: "查看 ABC-123" }).locator("[data-slot=badge]");
+  await expect(badge).toHaveText("失败");
+  await expect(badge).toHaveAttribute("title", "上次来源失败");
+  const initialReads = workReads;
+  await page.getByRole("checkbox", { name: "选择 ABC-123", exact: true }).click();
+  await page.getByRole("button", { name: "开始执行", exact: true }).click();
+  await expect(badge).toHaveText("处理中");
+  await expect(badge).not.toHaveAttribute("title");
+  batch = { ...batch, current: ["2"], items: batch.items.map(item => ({
+    ...item, status: item.id === "1" ? "success" : "running",
+  })) };
+  await expect(badge).toHaveText("已处理");
+  await expect(badge).not.toHaveAttribute("title");
+  expect(workReads).toBe(initialReads);
+});
