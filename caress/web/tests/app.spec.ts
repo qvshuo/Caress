@@ -1284,11 +1284,33 @@ test("resuming crop clears source errors and retains actual preview failures", a
 test("finished batch does not override live work status", async ({ page }) => {
   await page.route("**/api/batch", route => route.fulfill({ json: {
     id: "old-server", status: "finished", current: [],
-    items: [{ id: "1", status: "failed", action: "scrape", source: null }],
+    items: [{ id: "1", status: "failed", error: "旧批次错误", action: "scrape", source: null }],
   } }));
   await page.goto("/");
   const row = page.getByRole("row", { name: "查看 ABC-123" });
   await expect(row.locator("[data-slot=badge]")).toHaveText("已处理");
+  await expect(row.locator("[data-slot=badge]")).not.toHaveAttribute("title");
   await page.getByRole("button", { name: "刷新作品列表" }).click();
   await expect(row.locator("[data-slot=badge]")).toHaveText("已处理");
+  await expect(row.locator("[data-slot=badge]")).not.toHaveAttribute("title");
+});
+
+test("running batch pairs failure status with current error and prioritizes active items", async ({ page }) => {
+  await page.route("**/api/works?**", route => route.fulfill({ json: {
+    items: [
+      { ...work, status: "failed", error: "上次来源失败" },
+      { ...work, id: "2", code: "ABC-124", status: "pending" },
+    ], total: 2,
+  } }));
+  await page.route("**/api/batch", route => route.fulfill({ json: {
+    id: "current", status: "running", current: ["2"], items: [
+      { id: "1", status: "failed", error: "本次 Emby 连接中断", action: "scrape", source: null },
+      { id: "2", status: "running", action: "scrape", source: null },
+    ],
+  } }));
+  await page.goto("/");
+  const failed = page.getByRole("row", { name: "查看 ABC-123" }).locator("[data-slot=badge]");
+  await expect(failed).toHaveText("失败");
+  await expect(failed).toHaveAttribute("title", "本次 Emby 连接中断");
+  await expect(page.getByRole("row", { name: "查看 ABC-124" }).locator("[data-slot=badge]")).toHaveText("处理中");
 });

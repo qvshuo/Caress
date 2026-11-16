@@ -244,6 +244,15 @@ export function Library({
             </TableHeader>
             <TableBody>
               {rows.map((w) => {
+                const current = results.get(w.id);
+                const status = batch?.status === "running" && batch.current.includes(w.id)
+                  ? "running"
+                  : current?.status === "success"
+                    ? "success"
+                    : current?.status === "failed"
+                      ? "failed"
+                      : w.status;
+                const error = current?.status === "failed" ? current.error : w.error;
                 const actors = w.people
                   .filter((p) => p.type === "Actor")
                   .map((p) => p.name)
@@ -277,18 +286,7 @@ export function Library({
                       {mediaLabel(w)}
                     </TableCell>
                     <TableCell>
-                      <Status
-                        status={
-                          batch?.current.includes(w.id)
-                            ? "running"
-                            : results.get(w.id)?.status === "success"
-                              ? "success"
-                              : results.get(w.id)?.status === "failed"
-                                ? "failed"
-                                : w.status
-                        }
-                        title={w.error || undefined}
-                      />
+                      <Status status={status} title={error || undefined} />
                     </TableCell>
                   </TableRow>
                 );
