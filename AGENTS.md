@@ -13,7 +13,7 @@
 
 ## 结构
 - `emby.py` 为 REST/回读，`library.py` 为只读投影，`identifiers.py` 为文件名；`scraper.py` 顺序调度，`sources/` 独立适配来源。
-- 番号分类先识别 FC2、纯数字和 HEYZO 等明确家族，其余精确查询 `data/catalog_rules.json` 静态前缀白名单；未命中或分类冲突保持 UNKNOWN，四类来源顺序分别生效。不默认推断有码，不动态学习或在线更新；前缀表不参与来源身份或 DMM CID 验证。
+- 番号分类先识别 FC2、纯数字和 HEYZO 等明确家族，其余精确查询 `data/catalog_rules.json` 静态前缀白名单；未命中或分类冲突保持 UNKNOWN，四类来源顺序分别生效。建表仅使用 JavDB 有码及 AVSOX 无码记录，手动运行 `scripts/catalog.py`，保留冲突双方证据。不默认推断有码，不动态学习或在线更新；前缀表不参与来源身份或 DMM CID 验证。
 - Gfriends Filetree 是演员别名、标准名称与头像地址的唯一数据源；标准名称用于 Emby 演员显示，未命中保留来源原名。
 - `processing.py` 编排加工，`translation.py` 翻译，`portraits.py` 临时头像，`images.py` 验证/YuNet/裁剪；`runtime.py` 管 SQLite，`tasks.py` 管批次，`service.py` 管生命周期与裁剪会话，`api.py` 管 HTTP。
 - Web `pages/` 为作品/设置，`components/` 为共享控件，`hooks/` 为共享状态，`lib/` 为类型与传输。只有表格，保留分页、列表导航、系统主题、键盘访问和现有 Base UI 交互。作品列表使用刷新图标；详情实时读取，裁剪优先使用 Emby 背景并在需要时自动获取原图。

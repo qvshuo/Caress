@@ -488,8 +488,48 @@ async def test_all_four_routes_use_the_users_category_specific_priority():
 def test_verified_catalog_samples_and_ambiguous_prefixes():
     from pathlib import Path
 
+    from scripts.catalog import build
+
     samples = json.loads((Path(__file__).parent / "fixtures/catalog_samples.json").read_text())
+    rules, rebuilt, conflicts = build(samples)
+    assert rebuilt == samples
+    assert rules == json.loads((Path(__file__).parents[1] / "caress/data/catalog_rules.json").read_text())
+    assert conflicts == ["DSAM", "HAME", "HHF"]
     for sample in samples:
-        assert classify(sample["code"]) == sample["category"], sample
-    for code in ["DSAM-020", "EMP-007", "HAME-028", "HHF-121"]:
-        assert classify(code) == Category.UNKNOWN
+        expected = "unknown" if sample["code"].split("-")[0] in conflicts else sample["category"]
+        assert classify(sample["code"]) == expected, sample
+    assert classify("EMP-007") == Category.UNCENSORED
+
+
+def test_catalog_builder_rejects_other_sources_and_preserves_full_prefixes():
+    from scripts.catalog import build
+
+    rows = [
+        {"code": "300MIUM-123", "category": "censored", "url": "https://javdb.com/v/a"},
+        {"code": "MIUM-123", "category": "uncensored", "url": "https://avsox.click/cn/movies/b"},
+        {"code": "MKBD-S123", "category": "uncensored", "url": "https://avsox.click/cn/movies/c"},
+    ]
+    rules, _, conflicts = build(rows)
+    assert rules == {"censored": ["300MIUM"], "uncensored": ["MIUM", "MKBD-S"]}
+    assert not conflicts
+    with pytest.raises(ValueError, match="Evidence must come from"):
+        build([{**rows[0], "url": "https://example.com/v/a"}])
+
+
+@pytest.mark.asyncio
+async def test_catalog_collection_stops_at_login_or_wrong_category(monkeypatch):
+    import httpx
+
+    from scripts.catalog import collect
+
+    original = httpx.AsyncClient
+    response = httpx.Response(302, headers={"Location": "/login"})
+    monkeypatch.setattr(
+        "scripts.catalog.httpx.AsyncClient",
+        lambda **kwargs: original(transport=httpx.MockTransport(lambda request: response), **kwargs),
+    )
+    with pytest.raises(ValueError, match="HTTP 302"):
+        await collect("javdb", [1])
+    response = httpx.Response(200, text='<div class="main-tabs"><li class="is-active"><a href="/uncensored">wrong</a></li></div><div class="movie-list"></div>')
+    with pytest.raises(ValueError, match="censored listing unavailable"):
+        await collect("javdb", [1])
