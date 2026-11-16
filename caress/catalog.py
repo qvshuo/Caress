@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
+from pathlib import Path
 
 from .models import Category
 
@@ -10,13 +12,22 @@ STANDARD = re.compile(r"^([A-Z0-9]*[A-Z][A-Z0-9]*(?:-[A-Z]+)?)[-_](\d{2,8})$")
 CONCATENATED = re.compile(r"^([0-9]*[A-Z]{2,12})(\d{2,8})$")
 NUMERIC = re.compile(r"^[0-9]+[-_][0-9]+$")
 
+PREFIXES = {
+    prefix: Category(category)
+    for category, prefixes in json.loads(
+        (Path(__file__).parent / "data/catalog_rules.json").read_text()
+    ).items()
+    for prefix in prefixes
+}
+
 
 def classify(code: str) -> Category:
     if code.startswith("FC2PPV-"):
         return Category.FC2
     if NUMERIC.fullmatch(code) or re.fullmatch(r"HEYZO-\d{4}", code):
         return Category.UNCENSORED
-    return Category.UNKNOWN
+    prefix = re.sub(r"-?\d+$", "", code)
+    return PREFIXES.get(prefix, Category.UNKNOWN)
 
 
 def query_code(code: str) -> str:

@@ -133,13 +133,16 @@ async def test_sources_stop_after_first_priority_hit_without_field_borrowing(tmp
     assert not database.exists()
 
 
-def test_number_families_and_conservative_unknown_classification():
+def test_number_families_and_exact_static_prefix_classification():
     assert classify("FC2PPV-123456") == Category.FC2
     assert classify("123456_123") == Category.UNCENSORED
     assert classify("012318-589") == Category.UNCENSORED
     assert classify("HEYZO-0780") == Category.UNCENSORED
-    for code in ["SSIS-001", "ABP-123", "MIDA-123", "N12345", "TESTABC-123"]:
-        assert classify(code) == Category.UNKNOWN
+    assert classify("SSIS-001") == Category.CENSORED
+    assert classify("ABP-123") == Category.CENSORED
+    assert classify("MKBD-S123") == Category.UNCENSORED
+    assert classify("N1234") == Category.UNCENSORED
+    assert classify("TESTABC-123") == Category.UNKNOWN
     assert dmm_cid("TESTABC-123") == "testabc00123"
     assert matches("FC2PPV-123456", "FC2-123456")
 
@@ -163,7 +166,7 @@ async def test_separate_scrapers_share_whole_source_work_gate(tmp_path):
     from caress.http import WebClient
 
     settings = Settings(database=tmp_path / "data.sqlite3")
-    settings.routes["unknown"] = [SourceId.DMM]
+    settings.routes["censored"] = [SourceId.DMM]
     active = maximum = 0
 
     class Stub:
@@ -242,7 +245,7 @@ async def test_images_share_one_second_budget_by_hostname_across_ports(monkeypat
 @pytest.mark.asyncio
 async def test_identity_mismatch_tries_next_source_and_stops(tmp_path):
     settings = Settings(database=tmp_path / "db.sqlite3")
-    settings.routes["unknown"] = [SourceId.DMM, SourceId.JAVDB, SourceId.JAVBUS]
+    settings.routes["censored"] = [SourceId.DMM, SourceId.JAVDB, SourceId.JAVBUS]
     scraper = Scraper(settings, client=object())
     calls = []
 
@@ -261,7 +264,7 @@ async def test_identity_mismatch_tries_next_source_and_stops(tmp_path):
 
     scraper.sources = {
         s: Stub(s, "WRONG-999" if s == SourceId.DMM else "ABP-123")
-        for s in settings.routes["unknown"]
+        for s in settings.routes["censored"]
     }
     result = await scraper.scrape("ABP-123")
     assert calls == [SourceId.DMM, SourceId.JAVDB]
@@ -423,4 +426,70 @@ def test_filename_version_attributes_do_not_classify_the_release():
 
     code, media = parse_filename(Path("SSIS-123-UC-cd2.mp4"))
     assert code == "SSIS-123" and media.subtitles and media.uncensored and media.part == 2
-    assert classify(code) == Category.UNKNOWN
+    assert classify(code) == Category.CENSORED
+
+
+def test_static_catalog_has_unique_exact_prefixes_without_category_conflicts():
+    import re
+    from pathlib import Path
+
+    rules = json.loads((Path(__file__).parents[1] / "caress/data/catalog_rules.json").read_text())
+    assert set(rules) == {"censored", "uncensored"}
+    assert not set(rules["censored"]) & set(rules["uncensored"])
+    for prefixes in rules.values():
+        assert prefixes == sorted(set(prefixes))
+        assert all(re.fullmatch(r"[A-Z0-9]+(?:-[A-Z]+)?", prefix) for prefix in prefixes)
+    assert classify("3DSVR-2040") == Category.CENSORED
+    assert classify("MAAN-1196") == Category.CENSORED
+    assert classify("MKBD-S123") == classify("MKBD-S-123") == Category.UNCENSORED
+    for code in ["XSSIS-001", "SSISX-001", "13DSVR-2040", "300MAAN-1196", "MKBD-UNKNOWN-123"]:
+        assert classify(code) == Category.UNKNOWN
+    assert not matches("MIUM-123", "300MIUM-123")
+
+
+@pytest.mark.asyncio
+async def test_all_four_routes_use_the_users_category_specific_priority():
+    settings = Settings()
+    settings.routes.update(
+        censored=[SourceId.JAVBUS],
+        uncensored=[SourceId.AVSOX],
+        fc2=[SourceId.FC2],
+        unknown=[SourceId.JAVDB],
+    )
+    calls = []
+
+    class Stub:
+        def __init__(self, source):
+            self.source = source
+
+        async def fetch(self, request):
+            calls.append((self.source, request.code))
+            return SourceResult(
+                source=self.source,
+                requested_code=request.code,
+                status=Status.FOUND,
+                metadata=SourceMetadata(code=request.code, title="title"),
+            )
+
+    scraper = Scraper(settings, client=object())
+    scraper.sources = {source: Stub(source) for source in SourceId}
+    for code, category, source in [
+        ("SSIS-001", Category.CENSORED, SourceId.JAVBUS),
+        ("CWP-123", Category.UNCENSORED, SourceId.AVSOX),
+        ("FC2PPV-123456", Category.FC2, SourceId.FC2),
+        ("UNLISTEDPREFIX-123", Category.UNKNOWN, SourceId.JAVDB),
+    ]:
+        result = await scraper.scrape(code)
+        assert result.classification == category and result.selected_source == source
+        assert calls[-1] == (source, code)
+    assert len(calls) == 4
+
+
+def test_verified_catalog_samples_and_ambiguous_prefixes():
+    from pathlib import Path
+
+    samples = json.loads((Path(__file__).parent / "fixtures/catalog_samples.json").read_text())
+    for sample in samples:
+        assert classify(sample["code"]) == sample["category"], sample
+    for code in ["DSAM-020", "EMP-007", "HAME-028", "HHF-121"]:
+        assert classify(code) == Category.UNKNOWN
