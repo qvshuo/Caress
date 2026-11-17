@@ -616,8 +616,11 @@ async def test_avsox_restores_explicit_identity_and_checks_detail_and_page():
     identity = {"movieId": "a", "movieFanHao": "4037-428", "from": "heydouga"}
     search_identity = dict(identity)
 
+    calls = []
+
     class Client:
         async def post_json(self, source, url, payload):
+            calls.append(url.rsplit("/", 1)[-1])
             if url.endswith("/search"):
                 assert payload[0]["search"] == "4037-428"
                 data = [search_identity]
@@ -633,10 +636,21 @@ async def test_avsox_restores_explicit_identity_and_checks_detail_and_page():
     result = await source.fetch(request)
     assert result.status == Status.FOUND and result.metadata.code == request.code
     assert result.metadata.artwork[0].url == "https://image.invalid/a.jpg"
+    assert calls == ["search"]
+    for target in [{"external_id": "a"}, {"source_url": "https://avsox.click/cn/movies/a"}]:
+        calls.clear()
+        assert (await source.fetch(ScrapeRequest(code=request.code, **target))).status == Status.FOUND
+        assert calls == ["getMovie"]
+    identity["movieId"] = "wrong"
+    assert (await source.fetch(ScrapeRequest(code=request.code, external_id="a"))).status == Status.IDENTITY_MISMATCH
+    identity["movieId"] = "a"
+    calls.clear()
+    assert (await source.fetch(ScrapeRequest(code=request.code, external_id="b", source_url="https://avsox.click/cn/movies/a"))).status == Status.IDENTITY_MISMATCH
+    assert not calls
     source.document.return_value = Page("https://avsox.click/cn/movies/a", 200, html.replace("4037-428", "HEYDOUGA-4037-428").encode())
     assert (await source.fetch(request)).status == Status.FOUND
     identity.pop("from")
-    assert (await source.fetch(request)).status == Status.IDENTITY_MISMATCH
+    assert (await source.fetch(ScrapeRequest(code=request.code, external_id="a"))).status == Status.IDENTITY_MISMATCH
     search_identity.pop("from")
     assert (await source.fetch(request)).status == Status.NOT_FOUND
     search_identity["from"] = identity["from"] = "heydouga"

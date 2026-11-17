@@ -6,7 +6,6 @@ from ..catalog import matches, query_code
 from ..http import FetchError, Page, json_error
 from ..models import (
     Actor,
-    Candidate,
     ScrapeRequest,
     SourceId,
     SourceMetadata,
@@ -22,6 +21,7 @@ class AVSOX(Source):
     default_url = "https://avsox.click"
 
     async def _fetch(self, request: ScrapeRequest) -> SourceResult:
+        work = None
         if request.source_url:
             url = self.checked_url(request.source_url)
         elif request.external_id:
@@ -38,28 +38,30 @@ class AVSOX(Source):
                 raise FetchError(Status.PARSE_ERROR, json_error(data))
             if not isinstance(data.get("data"), list):
                 raise FetchError(Status.PARSE_ERROR, "AVSOX 搜索数据无效")
-            candidates = [
-                Candidate(code=source_code(work["movieFanHao"], work.get("from")),
-                          url=self.base + "/cn/movies/" + work["movieId"])
-                for work in data["data"]
-            ]
-            selected = self.select(request, candidates)
-            if not selected:
+            work = next(
+                (work for work in data["data"]
+                 if matches(request.code, source_code(work["movieFanHao"], work.get("from")))),
+                None,
+            )
+            if work is None:
                 return self.missed(request)
-            url = self.checked_url(selected.url)
-        ident = url.rstrip("/").rsplit("/", 1)[-1]
-        identity_page = await self.client.post_json(
-            self.id, self.base + "/javu/data/api/getMovie", [ident, "cn"]
-        )
-        data = identity_page.json()
-        if data.get("code") != 200:
-            raise FetchError(Status.PARSE_ERROR, json_error(data))
-        work = data.get("data")
-        if not isinstance(work, dict) or work.get("movieId") != ident:
-            raise FetchError(Status.IDENTITY_MISMATCH, "AVSOX 作品身份无法确认")
-        code = source_code(work["movieFanHao"], work.get("from"))
-        if not matches(request.code, code):
-            raise FetchError(Status.IDENTITY_MISMATCH, "AVSOX 作品番号不匹配")
+            url = self.base + "/cn/movies/" + work["movieId"]
+        if work is None:
+            ident = url.rstrip("/").rsplit("/", 1)[-1]
+            if request.external_id and request.external_id != ident:
+                raise FetchError(Status.IDENTITY_MISMATCH, "AVSOX 指定的作品 ID 与地址不一致")
+            identity_page = await self.client.post_json(
+                self.id, self.base + "/javu/data/api/getMovie", [ident, "cn"]
+            )
+            data = identity_page.json()
+            if data.get("code") != 200:
+                raise FetchError(Status.PARSE_ERROR, json_error(data))
+            work = data.get("data")
+            if not isinstance(work, dict) or work.get("movieId") != ident:
+                raise FetchError(Status.IDENTITY_MISMATCH, "AVSOX 作品身份无法确认")
+            code = source_code(work["movieFanHao"], work.get("from"))
+            if not matches(request.code, code):
+                raise FetchError(Status.IDENTITY_MISMATCH, "AVSOX 作品番号不匹配")
         page = await self.document(url)
         return self.parse(request, page, work)
 
