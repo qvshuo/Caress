@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 
 from ..catalog import matches, query_code
-from ..http import FetchError, Page
+from ..http import FetchError, Page, json_error
 from ..models import (
     Actor,
     Candidate,
@@ -34,7 +34,9 @@ class AVSOX(Source):
                 [{"search": query_code(request.code), "lang": "cn"}, 60, 1],
             )
             data = page.json()
-            if data.get("code") != 200 or not isinstance(data.get("data"), list):
+            if data.get("code") != 200:
+                raise FetchError(Status.PARSE_ERROR, json_error(data))
+            if not isinstance(data.get("data"), list):
                 raise FetchError(Status.PARSE_ERROR, "AVSOX 搜索数据无效")
             candidates = [
                 Candidate(code=source_code(work["movieFanHao"], work.get("from")),
@@ -50,8 +52,10 @@ class AVSOX(Source):
             self.id, self.base + "/javu/data/api/getMovie", [ident, "cn"]
         )
         data = identity_page.json()
+        if data.get("code") != 200:
+            raise FetchError(Status.PARSE_ERROR, json_error(data))
         work = data.get("data")
-        if data.get("code") != 200 or not isinstance(work, dict) or work.get("movieId") != ident:
+        if not isinstance(work, dict) or work.get("movieId") != ident:
             raise FetchError(Status.IDENTITY_MISMATCH, "AVSOX 作品身份无法确认")
         code = source_code(work["movieFanHao"], work.get("from"))
         if not matches(request.code, code):

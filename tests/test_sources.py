@@ -642,3 +642,7 @@ async def test_avsox_restores_explicit_identity_and_checks_detail_and_page():
     search_identity["from"] = identity["from"] = "heydouga"
     source.document.return_value = Page("https://avsox.click/cn/movies/a", 200, html.replace("4037-428", "4037-429").encode())
     assert (await source.fetch(request)).status == Status.IDENTITY_MISMATCH
+    error = {"code": 403, "message": "source access denied", "data": None}
+    source.client.post_json = AsyncMock(return_value=Page("https://avsox.click/javu/data/api/search", 200, json.dumps(error).encode()))
+    result = await source.fetch(request)
+    assert result.status == Status.PARSE_ERROR and json.loads(result.message) == error
