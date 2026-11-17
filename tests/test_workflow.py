@@ -1665,3 +1665,13 @@ async def test_preparation_uses_source_title_as_original_before_translating(prep
     assert changes["OriginalTitle"] == "source title"
     assert changes["Name"] == "translated title"
     assert source.title == "source title" and source.original_title is None
+
+
+@pytest.mark.asyncio
+async def test_blank_source_title_stops_preparation_before_processing(preparing):
+    processor, folder = preparing
+    processor.scraper.scrape.return_value.metadata.title = " \t\n"
+    with pytest.raises(ValueError, match="来源作品标题为空"):
+        await processor.prepare("ABC-123")
+    processor.translator.metadata.assert_not_awaited()
+    assert not list(folder.iterdir())

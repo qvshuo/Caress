@@ -17,16 +17,21 @@ PREFIXES = {
     for category, prefixes in json.loads(
         (Path(__file__).parent / "data/catalog_rules.json").read_text()
     ).items()
+    if category in ("censored", "uncensored")
     for prefix in prefixes
 }
+
+
+def catalog_prefix(code: str) -> str:
+    return re.sub(r"(?:-\d+)+$|(?<=[A-Z])\d+$", "", code)
 
 
 def classify(code: str) -> Category:
     if code.startswith("FC2PPV-"):
         return Category.FC2
-    if NUMERIC.fullmatch(code) or re.fullmatch(r"HEYZO-\d{4}", code):
+    if NUMERIC.fullmatch(code):
         return Category.UNCENSORED
-    prefix = re.sub(r"-?\d+$", "", code)
+    prefix = catalog_prefix(code)
     return PREFIXES.get(prefix, Category.UNKNOWN)
 
 

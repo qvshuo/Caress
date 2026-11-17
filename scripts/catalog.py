@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 import httpx
 from lxml import html
 
-from caress.catalog import normalize_code
+from caress.catalog import NUMERIC, catalog_prefix, normalize_code
 
 
 def build(rows):
@@ -28,9 +28,9 @@ def build(rows):
             code = normalize_code(row["code"])
         except ValueError:
             continue
-        if code.startswith("FC2PPV-") or re.fullmatch(r"[0-9]+[-_][0-9]+|HEYZO-\d{4}", code):
+        if code.startswith("FC2PPV-") or NUMERIC.fullmatch(code):
             continue
-        prefix = re.sub(r"-?\d+$", "", code)
+        prefix = catalog_prefix(code)
         if not re.fullmatch(r"[A-Z0-9]+(?:-[A-Z]+)?", prefix):
             continue
         labels[prefix].add(category)
@@ -45,6 +45,10 @@ def build(rows):
 
 async def collect(source, pages):
     rows = []
+    seen = set()
+    prefixes = set()
+    page_sets = set()
+    totals = {"valid_pages": 0, "empty_pages": 0, "duplicate_pages": 0}
     async with httpx.AsyncClient(timeout=30, follow_redirects=False, trust_env=False) as client:
         for index, page in enumerate(pages):
             if index:
@@ -72,14 +76,39 @@ async def collect(source, pages):
                 data = response.json()
                 if data.get("code") != 200 or not isinstance(data.get("data"), list):
                     raise ValueError("AVSOX listing unavailable; no output written")
-                current = [
-                    {"code": work["movieFanHao"], "category": "uncensored", "url": "https://avsox.click/cn/movies/" + work["movieId"]}
-                    for work in data["data"]
-                ]
-            print(f"{source} page {page}: {len(current)} records", flush=True)
-            rows.extend(current)
-            if not current:
-                break
+                current = []
+                for work in data["data"]:
+                    code = work["movieFanHao"]
+                    if work.get("from") == "heydouga" and NUMERIC.fullmatch(code):
+                        code = "HEYDOUGA-" + code
+                    current.append({"code": code, "category": "uncensored", "url": "https://avsox.click/cn/movies/" + work["movieId"]})
+            unique = {}
+            for row in current:
+                try:
+                    code = normalize_code(row["code"])
+                except ValueError:
+                    continue
+                unique.setdefault(code, {**row, "code": code})
+            codes = frozenset(unique)
+            duplicate = bool(codes) and codes in page_sets
+            new_codes = codes - seen
+            page_prefixes = {
+                catalog_prefix(code) for code in new_codes
+                if not code.startswith("FC2PPV-") and not NUMERIC.fullmatch(code)
+            }
+            new_prefixes = page_prefixes - prefixes
+            totals["valid_pages"] += bool(codes)
+            totals["empty_pages"] += not codes
+            totals["duplicate_pages"] += duplicate
+            print(json.dumps({"source": source, "page": page, "valid": len(codes),
+                              "new_codes": len(new_codes), "new_prefixes": len(new_prefixes),
+                              "duplicate": duplicate}), flush=True)
+            rows.extend(unique[code] for code in sorted(new_codes))
+            seen.update(codes)
+            prefixes.update(page_prefixes)
+            page_sets.add(codes)
+    print(json.dumps({"source": source, **totals, "unique_codes": len(seen),
+                      "new_prefixes": len(prefixes), "conflict_prefixes": len(build(rows)[2])}), flush=True)
     return rows
 
 
@@ -106,9 +135,13 @@ def main():
     else:
         rows = [row for path in args.inputs for row in json.loads(path.read_text())]
         rules, samples, conflicts = build(rows)
+        if args.rules.exists():
+            previous = json.loads(args.rules.read_text())
+            if "updated_at" in previous:
+                rules = {"updated_at": previous["updated_at"], **rules}
         write(args.rules, rules)
         write(args.samples, samples)
-        print(json.dumps({"counts": {k: len(v) for k, v in rules.items()}, "conflicts": conflicts}))
+        print(json.dumps({"counts": {k: len(rules[k]) for k in ("censored", "uncensored")}, "conflicts": conflicts}))
 
 
 if __name__ == "__main__":

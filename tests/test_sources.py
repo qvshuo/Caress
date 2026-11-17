@@ -434,9 +434,12 @@ def test_static_catalog_has_unique_exact_prefixes_without_category_conflicts():
     from pathlib import Path
 
     rules = json.loads((Path(__file__).parents[1] / "caress/data/catalog_rules.json").read_text())
-    assert set(rules) == {"censored", "uncensored"}
+    assert set(rules) == {"updated_at", "censored", "uncensored"}
+    from datetime import date
+
+    assert date.fromisoformat(rules["updated_at"]).isoformat() == rules["updated_at"]
     assert not set(rules["censored"]) & set(rules["uncensored"])
-    for prefixes in rules.values():
+    for prefixes in (rules["censored"], rules["uncensored"]):
         assert prefixes == sorted(set(prefixes))
         assert all(re.fullmatch(r"[A-Z0-9]+(?:-[A-Z]+)?", prefix) for prefix in prefixes)
     assert classify("3DSVR-2040") == Category.CENSORED
@@ -493,7 +496,7 @@ def test_verified_catalog_samples_and_ambiguous_prefixes():
     samples = json.loads((Path(__file__).parent / "fixtures/catalog_samples.json").read_text())
     rules, rebuilt, conflicts = build(samples)
     assert rebuilt == samples
-    assert rules == json.loads((Path(__file__).parents[1] / "caress/data/catalog_rules.json").read_text())
+    assert rules == {k: v for k, v in json.loads((Path(__file__).parents[1] / "caress/data/catalog_rules.json").read_text()).items() if k != "updated_at"}
     assert conflicts == ["DSAM", "HAME", "HHF"]
     for sample in samples:
         expected = "unknown" if sample["code"].split("-")[0] in conflicts else sample["category"]
@@ -533,3 +536,56 @@ async def test_catalog_collection_stops_at_login_or_wrong_category(monkeypatch):
     response = httpx.Response(200, text='<div class="main-tabs"><li class="is-active"><a href="/uncensored">wrong</a></li></div><div class="movie-list"></div>')
     with pytest.raises(ValueError, match="censored listing unavailable"):
         await collect("javdb", [1])
+
+
+def test_prefix_extraction_keeps_namespaces_and_removes_numeric_segments():
+    from caress.catalog import catalog_prefix
+
+    for code, expected in {
+        "SSIS-123": "SSIS", "MKBD-S123": "MKBD-S",
+        "300MIUM-123": "300MIUM", "HEYDOUGA-4037-1002": "HEYDOUGA",
+        "T38-075": "T38", "3DSVR-2040": "3DSVR",
+    }.items():
+        assert catalog_prefix(code) == expected
+    assert classify("HEYZO-0780") == classify("HEYDOUGA-4037-1002") == Category.UNCENSORED
+
+
+@pytest.mark.asyncio
+async def test_catalog_collection_deduplicates_pages_and_reports_empty_pages(monkeypatch, capsys):
+    from unittest.mock import AsyncMock
+
+    import httpx
+
+    from scripts.catalog import collect
+
+    original = httpx.AsyncClient
+    responses = iter([
+        {"code": 200, "data": [{"movieFanHao": "CWP-001", "movieId": "a"}]},
+        {"code": 200, "data": [{"movieFanHao": "CWP-001", "movieId": "b"}]},
+        {"code": 200, "data": []},
+    ])
+    monkeypatch.setattr("scripts.catalog.httpx.AsyncClient", lambda **kwargs: original(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=next(responses))), **kwargs))
+    monkeypatch.setattr("scripts.catalog.asyncio.sleep", AsyncMock())
+    rows = await collect("avsox", [1, 2, 3])
+    assert len(rows) == 1 and rows[0]["code"] == "CWP-001"
+    report = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert report == {"source": "avsox", "valid_pages": 2, "empty_pages": 1,
+                      "duplicate_pages": 1, "unique_codes": 1, "new_prefixes": 1, "conflict_prefixes": 0}
+
+
+def test_manual_build_does_not_advance_update_date(tmp_path, monkeypatch):
+    from scripts.catalog import main
+
+    source = tmp_path / "input.json"
+    source.write_text(json.dumps([{"code": "CWP-001", "category": "uncensored", "url": "https://avsox.click/cn/movies/a"}]))
+    rules = tmp_path / "rules.json"
+    samples = tmp_path / "samples.json"
+    previous = {"updated_at": "2026-01-01", "censored": [], "uncensored": ["CWP"]}
+    rules.write_text(json.dumps(previous))
+    monkeypatch.setattr("sys.argv", ["catalog", "build", str(source), "--rules", str(rules), "--samples", str(samples)])
+    main()
+    assert json.loads(rules.read_text()) == previous
+    rules.unlink()
+    main()
+    assert "updated_at" not in json.loads(rules.read_text())

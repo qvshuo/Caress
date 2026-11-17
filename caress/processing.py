@@ -95,6 +95,8 @@ class WorkProcessor:
         if result.status != Status.FOUND or result.metadata is None:
             errors = "；".join(f"{r.source}：{r.message or ('未找到作品' if r.status == Status.NOT_FOUND else '来源不支持此作品' if r.status == Status.UNSUPPORTED else '来源请求失败')}" for r in result.results)
             raise ValueError("未获取到作品元数据：" + errors)
+        if not result.metadata.title.strip():
+            raise ValueError("来源作品标题为空，未写入元数据")
         metadata = result.metadata.model_copy(deep=True)
         source_actors = metadata.actors
         mappings = {}

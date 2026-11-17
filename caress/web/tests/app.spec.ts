@@ -594,6 +594,11 @@ for (const status of [
     await page.route("**/api/works/1", (route) =>
       route.fulfill({ json: { ...work, status } }),
     );
+    let submissions = 0;
+    await page.route("**/api/batch", route => {
+      if (route.request().method() === "POST") submissions++;
+      return route.fulfill({ json: null });
+    });
     await page.goto("/#library/work/1");
     await expect(
       page.getByRole("heading", { name: work.title, exact: true }),
@@ -611,9 +616,14 @@ for (const status of [
       await page
         .getByRole("option", { name: "重建元数据", exact: true })
         .click();
-      await primary.click();
-      await expect(page.getByRole("dialog")).toContainText("缺失字段也会清空");
-      await page.getByRole("button", { name: "取消", exact: true }).click();
+      if (status === "pending") {
+        await primary.click();
+        const dialog = page.getByRole("dialog");
+        await expect(dialog).toContainText("将使用重新获取的作品信息替换现有元数据，缺失字段也会清空。已有背景图和演员头像会保留。确定继续吗？");
+        await dialog.getByRole("button", { name: "取消", exact: true }).click();
+        await expect(dialog).toHaveCount(0);
+        expect(submissions).toBe(0);
+      }
     }
     await expect(page.getByRole("list", { name: "媒体文件" })).toContainText(
       "/strm/ABC-123.strm",
@@ -1376,21 +1386,4 @@ test("detail shows identical original title and populated fields with existing p
   await expect(page.getByText(work.plot, { exact: true })).toBeVisible();
   await expect(page.getByText("演员一", { exact: true })).toHaveCount(1);
   await expect(page.getByRole("img", { name: "暂无头像" })).toBeVisible();
-});
-
-test("rebuild confirmation explains clearing and cancellation submits nothing", async ({ page }) => {
-  let submissions = 0;
-  await page.route("**/api/batch", route => {
-    if (route.request().method() === "POST") submissions++;
-    return route.fulfill({ json: null });
-  });
-  await page.goto("/#library/work/1");
-  await page.getByRole("combobox", { name: "刮削方式" }).click();
-  await page.getByRole("option", { name: "重建元数据", exact: true }).click();
-  await page.getByRole("button", { name: "开始执行", exact: true }).click();
-  const dialog = page.getByRole("dialog");
-  await expect(dialog).toContainText("将使用重新获取的作品信息替换现有元数据，缺失字段也会清空。已有背景图和演员头像会保留。确定继续吗？");
-  await dialog.getByRole("button", { name: "取消", exact: true }).click();
-  await expect(dialog).toHaveCount(0);
-  expect(submissions).toBe(0);
 });
