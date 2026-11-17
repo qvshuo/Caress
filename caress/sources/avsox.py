@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from urllib.parse import urlparse
 
 from ..catalog import matches, query_code
 from ..http import FetchError, Page, json_error
@@ -47,7 +48,7 @@ class AVSOX(Source):
                 return self.missed(request)
             url = self.base + "/cn/movies/" + work["movieId"]
         if work is None:
-            ident = url.rstrip("/").rsplit("/", 1)[-1]
+            ident = urlparse(url).path.rstrip("/").rsplit("/", 1)[-1]
             if request.external_id and request.external_id != ident:
                 raise FetchError(Status.IDENTITY_MISMATCH, "AVSOX 指定的作品 ID 与地址不一致")
             identity_page = await self.client.post_json(

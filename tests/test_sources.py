@@ -637,7 +637,11 @@ async def test_avsox_restores_explicit_identity_and_checks_detail_and_page():
     assert result.status == Status.FOUND and result.metadata.code == request.code
     assert result.metadata.artwork[0].url == "https://image.invalid/a.jpg"
     assert calls == ["search"]
-    for target in [{"external_id": "a"}, {"source_url": "https://avsox.click/cn/movies/a"}]:
+    for target in [
+        {"external_id": "a"},
+        {"source_url": "https://avsox.click/cn/movies/a"},
+        {"source_url": "https://avsox.click/cn/movies/a?lang=cn"},
+    ]:
         calls.clear()
         assert (await source.fetch(ScrapeRequest(code=request.code, **target))).status == Status.FOUND
         assert calls == ["getMovie"]
