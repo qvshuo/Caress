@@ -274,6 +274,9 @@ class FakeProcessor:
             await self.block.wait()
         return SimpleNamespace(source="dmm")
 
+    async def prepare_write(self, *args, **kwargs):
+        return []
+
     async def write(self, client, ident, *args, replace):
         self.writes.append(ident)
         if ident in self.fail:
@@ -782,10 +785,12 @@ async def test_portrait_retry_is_bounded_and_success_is_shared(
     processor = WorkProcessor(Settings(database=tmp_path / "db"), None, tmp_path)
     avatar = tmp_path / "actors" / "Name.png"
     avatar.parent.mkdir()
-    avatar.write_bytes(image_bytes())
+    if failure != "fetch":
+        avatar.write_bytes(image_bytes())
     processor.portraits.save = AsyncMock(
-        return_value={"status": "saved"},
-        side_effect=ValueError("offline") if failure == "fetch" else None,
+        return_value={"status": "error", "error": "offline"}
+        if failure == "fetch"
+        else {"status": "saved"},
     )
     client = SimpleNamespace(
         write_metadata=AsyncMock(
@@ -808,19 +813,22 @@ async def test_portrait_retry_is_bounded_and_success_is_shared(
     prepared = Prepared(
         SourceMetadata(code="ABC-123", title="title"),
         "dmm",
-        mappings=[{"portrait": PortraitMatch("Name", "https://portrait"), "name": "Name"}],
+        mappings=[
+            {"portrait": PortraitMatch("Name", "https://portrait"), "name": "Name"}
+        ],
     )
     try:
+        await processor.prepare_write(client, {}, prepared, [], replace=False)
         await processor.write(client, "1", prepared, [], replace=False)
         assert not processor.people_done
-        await asyncio.gather(
-            *(
-                processor.write(client, str(i), prepared, [], replace=False)
-                for i in range(2, 8)
-            )
-        )
+
+        async def write(ident):
+            await processor.prepare_write(client, {}, prepared, [], replace=False)
+            return await processor.write(client, ident, prepared, [], replace=False)
+
+        await asyncio.gather(*(write(str(i)) for i in range(2, 8)))
         assert client.upload.await_count == (0 if failure == "fetch" else 2)
-        assert processor.portraits.save.await_count == 2
+        assert processor.portraits.save.await_count == (2 if failure == "fetch" else 0)
         assert ("person" in processor.people_done) == recovers
     finally:
         await processor.__aexit__(None, None, None)
@@ -1223,7 +1231,7 @@ async def preparing(tmp_path):
             selected_source=SourceId.DMM,
             warnings=['JavDB API 返回失败：{"success": 0, "message": "請登錄帳號"}'],
             classification=Category.UNKNOWN,
-            results=[SimpleNamespace(source=SourceId.DMM)],
+            results=[SimpleNamespace(source=SourceId.DMM, backdrop_errors=[])],
         )
     )
     processor.translator.metadata = AsyncMock(return_value=SimpleNamespace(errors=[]))
@@ -1290,14 +1298,19 @@ async def test_shared_original_is_downloaded_once_and_primary_is_cropped_only_on
         append_backdrop=AsyncMock(return_value=False),
         upload=AsyncMock(),
     )
+    await processor.prepare_write(
+        client, {}, prepared, await client.image_info("A"), replace=False
+    )
     await processor.write(client, "A", prepared, [], replace=False)
     crop.assert_not_called()
-    await asyncio.gather(
-        *(
-            processor.write(client, ident, prepared, [], replace=False)
-            for ident in ["B", "C"]
+
+    async def write(ident):
+        await processor.prepare_write(
+            client, {}, prepared, await client.image_info(ident), replace=False
         )
-    )
+        return await processor.write(client, ident, prepared, [], replace=False)
+
+    await asyncio.gather(*(write(ident) for ident in ["B", "C"]))
     assert crop.call_count == 1
     assert {call.args[0] for call in client.upload.await_args_list} == {"B", "C"}
     await processor.release("ABC-123", None)
@@ -1327,15 +1340,23 @@ async def test_only_landscape_artwork_is_uploaded_as_backdrop(
     processor, _ = preparing
     metadata = processor.scraper.scrape.return_value.metadata
     metadata.artwork = [
-        ArtworkCandidate(url=f"https://source/{i}", source=SourceId.DMM,
-                         role=role, referer="https://source")
+        ArtworkCandidate(
+            url=f"https://source/{i}",
+            source=SourceId.DMM,
+            role=role,
+            referer="https://source",
+        )
         for i, (role, _) in enumerate(candidates)
     ]
+
     async def fetch(client, candidate):
         return image_bytes(size=candidates[int(candidate.url.rsplit("/", 1)[1])][1])
 
     monkeypatch.setattr("caress.processing.fetch_artwork", fetch)
-    monkeypatch.setattr("caress.processing.crop_poster", lambda data: {"content": image_bytes(size=(60, 90))})
+    monkeypatch.setattr(
+        "caress.processing.crop_poster",
+        lambda data: {"content": image_bytes(size=(60, 90))},
+    )
     prepared = await processor.prepare("ABC-123")
     client = SimpleNamespace(
         write_metadata=AsyncMock(return_value=({"People": []}, False)),
@@ -1344,9 +1365,13 @@ async def test_only_landscape_artwork_is_uploaded_as_backdrop(
         append_backdrop=AsyncMock(return_value=True),
         upload=AsyncMock(),
     )
+    await processor.prepare_write(client, {}, prepared, [], replace=False)
     await processor.write(client, "1", prepared, [], replace=False)
     assert bool(client.upload.await_count) == expected_primary
-    assert [Image.open(BytesIO(call.args[1])).size for call in client.append_backdrop.await_args_list] == expected_backdrops
+    assert [
+        Image.open(BytesIO(call.args[1])).size
+        for call in client.append_backdrop.await_args_list
+    ] == expected_backdrops
 
 
 @pytest.mark.asyncio
@@ -1675,3 +1700,108 @@ async def test_blank_source_title_stops_preparation_before_processing(preparing)
         await processor.prepare("ABC-123")
     processor.translator.metadata.assert_not_awaited()
     assert not list(folder.iterdir())
+
+
+@pytest.mark.asyncio
+async def test_appended_jobs_keep_batch_connection_and_translation_snapshot(
+    fake_batch, monkeypatch
+):
+    entered = asyncio.Event()
+    FakeProcessor.block = asyncio.Event()
+    connections, processors = [], []
+    original_client = FakeClient.__init__
+    original_prepare = FakeProcessor.prepare
+
+    def client(self, settings):
+        connections.append(settings.model_copy(deep=True))
+        original_client(self, settings)
+
+    def processor(self, settings, *args):
+        processors.append(settings.model_copy(deep=True))
+
+    async def prepare(self, *args):
+        entered.set()
+        return await original_prepare(self, *args)
+
+    monkeypatch.setattr(FakeClient, "__init__", client)
+    monkeypatch.setattr(FakeProcessor, "__init__", processor)
+    monkeypatch.setattr(FakeProcessor, "prepare", prepare)
+    initial = fake_batch.settings.model_copy(deep=True)
+    fake_batch.batches.start(["1"], "scrape", None)
+    await asyncio.wait_for(entered.wait(), 2)
+    changed = initial.model_copy(deep=True)
+    changed.emby.url = "http://other"
+    changed.emby.api_key = "new-key"
+    changed.translation.model = "new-model"
+    await fake_batch.configure(changed)
+    fake_batch.batches.start(["2"], "force", "javdb")
+    FakeProcessor.block.set()
+    await fake_batch.batches.task
+    assert all(settings == initial.emby for settings in connections)
+    assert len(processors) == 2 and all(settings == initial for settings in processors)
+    fake_batch.batches.start(["1"], "force", None)
+    await fake_batch.batches.task
+    assert connections[-1] == changed.emby and processors[-1] == changed
+    await fake_batch.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["network", "parse"])
+async def test_source_gallery_failure_preserves_backdrops_during_rebuild(
+    preparing, monkeypatch, failure
+):
+    from caress.http import FetchError, Page
+    from caress.models import ScrapeRequest, ScrapeResult, SourceId, Status
+    from caress.sources.uncensored import OnePondo
+    from test_images import image_bytes
+
+    processor, _ = preparing
+    source = OnePondo(
+        SimpleNamespace(
+            get=AsyncMock(
+                side_effect=[
+                    Page(
+                        "https://www.1pondo.tv/dyn/phpauto/movie_details/movie_id/010115_001.json",
+                        200,
+                        json.dumps(
+                            {
+                                "MovieID": "010115_001",
+                                "Title": "Title",
+                                "Gallery": True,
+                                "ThumbHigh": "https://www.1pondo.tv/cover.jpg",
+                            }
+                        ).encode(),
+                    ),
+                    FetchError(Status.NETWORK_ERROR, "gallery unavailable")
+                    if failure == "network"
+                    else Page("https://www.1pondo.tv/gallery.json", 200, b"{}"),
+                ]
+            )
+        ),
+        Settings(),
+    )
+    result = await source.fetch(ScrapeRequest(code="010115_001"))
+    assert result.status == Status.FOUND and result.backdrop_errors
+    processor.scraper.scrape.return_value = ScrapeResult(
+        code="010115_001",
+        status=Status.FOUND,
+        metadata=result.metadata,
+        selected_source=SourceId.ONEPONDO,
+        results=[result],
+    )
+    monkeypatch.setattr(
+        "caress.processing.fetch_artwork", AsyncMock(return_value=image_bytes())
+    )
+    prepared = await processor.prepare("010115_001")
+    client = SimpleNamespace(
+        write_metadata=AsyncMock(return_value=({}, True)),
+        image_info=AsyncMock(return_value=[]),
+        replace_backdrops=AsyncMock(),
+        upload=AsyncMock(),
+    )
+    await processor.prepare_write(client, {}, prepared, [], replace=True)
+    warnings, changed = await processor.write(client, "1", prepared, [], replace=True)
+    assert changed and "剧照" in str(warnings)
+    client.replace_backdrops.assert_not_awaited()
+    client.upload.assert_awaited_once()
+    assert client.upload.await_args.args[1] == "Primary"

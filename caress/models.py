@@ -92,6 +92,7 @@ class SourceResult(BaseModel):
     metadata: SourceMetadata | None = None
     message: str | None = None
     warnings: list[str] = Field(default_factory=list)
+    backdrop_errors: list[str] = Field(default_factory=list)
     fetched_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 

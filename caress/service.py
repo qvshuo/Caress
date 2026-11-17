@@ -58,10 +58,11 @@ class Service:
         self.runtime.close()
 
     @asynccontextmanager
-    async def emby(self):
-        if not self.settings.emby.url or not self.settings.emby.api_key:
+    async def emby(self, settings=None):
+        emby = (settings or self.settings).emby
+        if not emby.url or not emby.api_key:
             raise ValueError("请先配置 Emby 地址和 API Key")
-        snapshot = self.settings.emby.model_copy(deep=True)
+        snapshot = emby.model_copy(deep=True)
         key = (snapshot.url, snapshot.api_key, tuple(snapshot.library_ids))
         async with self.emby_lock:
             if key not in self.clients:

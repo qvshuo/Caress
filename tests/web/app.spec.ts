@@ -619,7 +619,7 @@ for (const status of [
       if (status === "pending") {
         await primary.click();
         const dialog = page.getByRole("dialog");
-        await expect(dialog).toContainText("将使用重新获取的作品信息替换现有元数据，缺失字段也会清空。已有背景图和演员头像会保留。确定继续吗？");
+        await expect(dialog).toContainText("将使用重新获取的作品信息替换现有元数据，缺失字段也会清空。封面、整个背景图集合和演员头像也会重新获取并替换，没有背景图候选时将清空背景图。确定继续吗？");
         await dialog.getByRole("button", { name: "取消", exact: true }).click();
         await expect(dialog).toHaveCount(0);
         expect(submissions).toBe(0);
@@ -1175,7 +1175,11 @@ test("source cover replaces crop only on success and failed acquisition remains 
 });
 
 test("idle page discovers external batch on focus and refresh without idle polling", async ({ page }) => {
-  let requests = 0;
+  let requests = 0, listings = 0;
+  await page.route("**/api/works?**", route => {
+    listings++;
+    return route.fulfill({ json: { items: [work], total: 1 } });
+  });
   let external: object | null = null;
   await page.route('**/api/batch', route => {
     requests++;
@@ -1195,8 +1199,14 @@ test("idle page discovers external batch on focus and refresh without idle polli
   expect(requests).toBe(initial + 1);
   external = { id: 'external', status: 'finished', current: [], items: [{ id: '1', action: 'scrape', source: null, status: 'success' }] };
   await expect(page.getByLabel('当前批次')).toContainText('1 成功');
+  await expect(page.getByRole('row', { name: '查看 ABC-123' })).toBeVisible();
+  const before = listings;
+  external = { id: 'another', status: 'finished', current: [], items: [] };
   await page.getByRole('button', { name: '刷新作品列表' }).click();
   await expect.poll(() => requests).toBeGreaterThan(initial + 2);
+  await expect.poll(() => listings).toBe(before + 1);
+  await expect(page.getByRole('row', { name: '查看 ABC-123' })).toBeVisible();
+  expect(listings).toBe(before + 1);
 });
 
 test("late batch synchronization cannot replace a newly submitted batch", async ({ page }) => {
@@ -1386,4 +1396,27 @@ test("detail shows identical original title and populated fields with existing p
   await expect(page.getByText(work.plot, { exact: true })).toBeVisible();
   await expect(page.getByText("演员一", { exact: true })).toHaveCount(1);
   await expect(page.getByRole("img", { name: "暂无头像" })).toBeVisible();
+});
+
+test("version column only shows filename attributes regardless of media source count", async ({ page }) => {
+  const versions = [
+    {},
+    { subtitles: true },
+    { uncensored: true },
+    { subtitles: true, uncensored: true },
+    { part: 1 },
+    { subtitles: true, part: 1 },
+  ];
+  const labels = ["", "字幕", "无码破解", "字幕 · 无码破解", "分集", "字幕 · 分集"];
+  await page.route("**/api/works?**", (route) => route.fulfill({ json: {
+    items: versions.map((attributes, index) => ({
+      ...work, id: String(index + 1), code: `ABC-${index + 1}`,
+      media: [work.media[0], { ...work.media[0], ...attributes }],
+    })), total: versions.length,
+  }}));
+  await page.goto("/");
+  for (const [index, label] of labels.entries()) {
+    await expect(page.getByRole("row", { name: `查看 ABC-${index + 1}`, exact: true }).getByRole("cell").nth(4)).toHaveText(label);
+  }
+  await expect(page.getByText(/\d+ 个版本/)).toHaveCount(0);
 });

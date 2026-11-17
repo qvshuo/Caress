@@ -107,7 +107,7 @@ class BatchRunner:
     async def _run(self, batch, job, settings, allowed):
         service, runtime = self.service, self.service.runtime
         task_token = task_id.set(batch["id"])
-        lease = service.emby()
+        lease = service.emby(settings)
         client = None
         processor = None
 
@@ -214,18 +214,15 @@ class BatchRunner:
                                 item = await client.item(row["id"])
                                 code, identity, media = identify(item)
                                 if code != row["code"]:
-                                    raise ValueError(
-                                        "Emby 作品番号已变化，请刷新列表"
-                                    )
+                                    raise ValueError("Emby 作品番号已变化，请刷新列表")
                                 old = runtime.record(server, row["id"], identity, code)
                                 replace = job["action"] == "force"
                                 retry_failed = bool(old and old["status"] == "failed")
+                                images = await client.image_info(row["id"])
                                 if (
                                     not replace
                                     and not retry_failed
-                                    and not needs_enrichment(
-                                        item, await client.image_info(row["id"]), media
-                                    )
+                                    and not needs_enrichment(item, images, media)
                                 ):
                                     row.update(
                                         status="skipped", note="没有需要补齐的元数据"
@@ -237,6 +234,12 @@ class BatchRunner:
                                 )
                                 save()
                                 prepared = await processor.prepare(code, job["source"])
+                                row["warnings"] = [
+                                    *row.get("warnings", []),
+                                    *await processor.prepare_write(
+                                        client, item, prepared, images, replace=replace
+                                    ),
+                                ]
                                 # Revalidate identity immediately before the write, after potentially slow scraping.
                                 if not await client.contains(row["id"]):
                                     raise ValueError("作品已移出所选媒体库，未写入")

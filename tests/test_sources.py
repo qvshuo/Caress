@@ -29,17 +29,20 @@ def test_http_json_error_keeps_source_details(caplog):
 
 
 @pytest.mark.asyncio
-async def test_dmm_graphql_error_retains_original_response():
+@pytest.mark.parametrize("data", [None, {"ppvContent": {"id": "abc123", "title": "partial"}}])
+async def test_dmm_graphql_error_retains_original_response(data):
     from caress.http import FetchError, Page
     from caress.sources.dmm import DMM
 
+    payload = {"errors": [{"message": "denied"}], "data": data}
+
     class Client:
         async def post_json(self, *args, **kwargs):
-            return Page("https://example.invalid", 200, b'{"errors":[{"message":"denied"}],"data":null}')
+            return Page("https://example.invalid", 200, json.dumps(payload).encode())
 
     with pytest.raises(FetchError) as error:
         await DMM(Client(), Settings()).content("abc123")
-    assert json.loads(str(error.value)) == {"errors": [{"message": "denied"}], "data": None}
+    assert json.loads(str(error.value)) == payload
 
 
 @pytest.mark.asyncio
@@ -266,7 +269,9 @@ async def test_identity_mismatch_tries_next_source_and_stops(tmp_path):
         s: Stub(s, "WRONG-999" if s == SourceId.DMM else "ABP-123")
         for s in settings.routes["censored"]
     }
-    result = await scraper.scrape("ABP-123")
+    observed = []
+    result = await scraper.scrape("ABP-123", on_result=lambda result: observed.append(result.status))
+    assert observed == [Status.IDENTITY_MISMATCH, Status.FOUND]
     assert calls == [SourceId.DMM, SourceId.JAVDB]
     assert result.results[0].status == Status.IDENTITY_MISMATCH
     assert result.selected_source == SourceId.JAVDB
@@ -488,22 +493,6 @@ async def test_all_four_routes_use_the_users_category_specific_priority():
     assert len(calls) == 4
 
 
-def test_verified_catalog_samples_and_ambiguous_prefixes():
-    from pathlib import Path
-
-    from scripts.catalog import build
-
-    samples = json.loads((Path(__file__).parent / "fixtures/catalog_samples.json").read_text())
-    rules, rebuilt, conflicts = build(samples)
-    assert rebuilt == samples
-    assert rules == {k: v for k, v in json.loads((Path(__file__).parents[1] / "caress/data/catalog_rules.json").read_text()).items() if k != "updated_at"}
-    assert conflicts == ["DSAM", "HAME", "HHF"]
-    for sample in samples:
-        expected = "unknown" if sample["code"].split("-")[0] in conflicts else sample["category"]
-        assert classify(sample["code"]) == expected, sample
-    assert classify("EMP-007") == Category.UNCENSORED
-
-
 def test_catalog_builder_rejects_other_sources_and_preserves_full_prefixes():
     from scripts.catalog import build
 
@@ -512,9 +501,11 @@ def test_catalog_builder_rejects_other_sources_and_preserves_full_prefixes():
         {"code": "MIUM-123", "category": "uncensored", "url": "https://avsox.click/cn/movies/b"},
         {"code": "MKBD-S123", "category": "uncensored", "url": "https://avsox.click/cn/movies/c"},
     ]
-    rules, _, conflicts = build(rows)
+    rules, conflicts = build(rows)
     assert rules == {"censored": ["300MIUM"], "uncensored": ["MIUM", "MKBD-S"]}
     assert not conflicts
+    rules, conflicts = build([*rows, {**rows[0], "category": "uncensored", "url": "https://avsox.click/cn/movies/d"}])
+    assert conflicts == ["300MIUM"] and "300MIUM" not in rules["censored"] + rules["uncensored"]
     with pytest.raises(ValueError, match="Evidence must come from"):
         build([{**rows[0], "url": "https://example.com/v/a"}])
 
@@ -580,10 +571,9 @@ def test_manual_build_does_not_advance_update_date(tmp_path, monkeypatch):
     source = tmp_path / "input.json"
     source.write_text(json.dumps([{"code": "CWP-001", "category": "uncensored", "url": "https://avsox.click/cn/movies/a"}]))
     rules = tmp_path / "rules.json"
-    samples = tmp_path / "samples.json"
     previous = {"updated_at": "2026-01-01", "censored": [], "uncensored": ["CWP"]}
     rules.write_text(json.dumps(previous))
-    monkeypatch.setattr("sys.argv", ["catalog", "build", str(source), "--rules", str(rules), "--samples", str(samples)])
+    monkeypatch.setattr("sys.argv", ["catalog", "build", str(source), "--rules", str(rules)])
     main()
     assert json.loads(rules.read_text()) == previous
     rules.unlink()

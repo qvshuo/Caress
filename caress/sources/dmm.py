@@ -64,16 +64,14 @@ class DMM(Source):
         except FetchError as exc:
             raise FetchError(exc.status, "DMM 元数据接口：" + str(exc), exc.page) from exc
         document = page.json()
+        if isinstance(document, dict) and document.get("errors"):
+            raise FetchError(Status.PARSE_ERROR, json_error(document))
         if not isinstance(document, dict) or not isinstance(document.get("data"), dict):
-            if isinstance(document, dict) and document.get("errors"):
-                raise FetchError(Status.PARSE_ERROR, json_error(document))
             raise FetchError(Status.PARSE_ERROR, "DMM 未返回作品数据")
         work = document["data"].get("ppvContent")
-        if work is None and not document.get("errors"):
+        if work is None:
             return None
         if not isinstance(work, dict) or not work.get("title"):
-            if document.get("errors"):
-                raise FetchError(Status.PARSE_ERROR, json_error(document))
             raise FetchError(Status.PARSE_ERROR, "DMM 返回的作品信息不完整")
         if work.get("id") != cid:
             raise FetchError(Status.IDENTITY_MISMATCH, "DMM 返回的作品 ID 不匹配")

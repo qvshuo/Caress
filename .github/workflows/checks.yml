@@ -38,15 +38,18 @@ jobs:
         with:
           bun-version: '1.4.4'
       - name: Prepare isolated frontend workspace
-        run: cp -a caress/web "${RUNNER_TEMP}/caress-web"
+        run: |
+          mkdir -p "${RUNNER_TEMP}/caress/caress" "${RUNNER_TEMP}/caress/tests"
+          cp -a caress/web "${RUNNER_TEMP}/caress/caress/web"
+          cp -a tests/web "${RUNNER_TEMP}/caress/tests/web"
       - name: Install, typecheck and build
-        working-directory: ${{ runner.temp }}/caress-web
+        working-directory: ${{ runner.temp }}/caress/caress/web
         run: |
           bun install --frozen-lockfile
           bun run build
       - name: Install browser
-        working-directory: ${{ runner.temp }}/caress-web
+        working-directory: ${{ runner.temp }}/caress/caress/web
         run: bun x playwright install --with-deps chromium
       - name: Browser regression
-        working-directory: ${{ runner.temp }}/caress-web
+        working-directory: ${{ runner.temp }}/caress/caress/web
         run: bun run test

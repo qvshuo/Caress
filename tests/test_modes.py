@@ -115,6 +115,10 @@ async def flow(tmp_path, monkeypatch):
                 ],
             )
         kind = parts[3]
+        if request.method == "DELETE":
+            state.posts.append(path)
+            images[kind].pop(int(parts[4]))
+            return httpx.Response(204)
         if request.method == "POST":
             if state.block_image:
                 await state.block_image.wait()
@@ -324,7 +328,7 @@ async def test_manual_edit_during_fetch_is_preserved_and_operation_skips(flow):
 
 
 @pytest.mark.asyncio
-async def test_identical_force_is_noop_and_new_images_append_once(flow):
+async def test_identical_force_is_noop_and_rebuild_deduplicates_new_images(flow):
     original = flow.items["1"]
     flow.metadata = SourceMetadata(
         code="ABC-123",
@@ -346,9 +350,7 @@ async def test_identical_force_is_noop_and_new_images_append_once(flow):
         ("Backdrop", image_bytes("yellow")),
     ]
     assert (await flow.run("force"))[0]["status"] == "success"
-    assert len(flow.images["1"]["Backdrop"]) == 2 and flow.images["1"]["Backdrop"][
-        0
-    ] == image_bytes("blue")
+    assert flow.images["1"]["Backdrop"] == [image_bytes("yellow")]
     assert flow.images["1"]["Primary"] == [image_bytes("green", size=(60, 90))]
 
 
@@ -472,7 +474,7 @@ async def test_failed_poster_is_only_fatal_when_that_poster_is_requested(flow, r
     flow.errors = [("Primary", "poster: crop failed")]
     rows = await flow.run("force" if replace else "scrape")
     assert rows[0]["status"] == ("failed" if replace else "success")
-    assert flow.items["1"]["Overview"] == "source plot"
+    assert flow.items["1"]["Overview"] == ("" if replace else "source plot")
     assert flow.images["1"]["Primary"] == [image_bytes("red", size=(60, 90))]
     if not replace:
         assert "poster: crop failed" in rows[0]["warnings"]
@@ -499,9 +501,7 @@ def test_fill_merges_only_filename_tags_into_nonempty_user_tags():
 @pytest.mark.parametrize(
     "existing,valid", [(True, False), (False, False), (False, True)]
 )
-async def test_optional_backdrop_failure_is_nonfatal(
-    flow, replace, existing, valid
-):
+async def test_optional_backdrop_failure_is_nonfatal(flow, replace, existing, valid):
     flow.items["1"]["Overview"] = ""
     if not existing:
         flow.images["1"].pop("Backdrop")
@@ -509,8 +509,10 @@ async def test_optional_backdrop_failure_is_nonfatal(
     flow.errors = [("Backdrop", "sample unavailable")]
     rows = await flow.run("force" if replace else "scrape")
     assert flow.items["1"]["Overview"] == "source plot"
-    assert rows[0]["status"] == "success" and "sample unavailable" in rows[0]["warnings"]
-    if existing or valid:
+    assert (
+        rows[0]["status"] == "success" and "sample unavailable" in rows[0]["warnings"]
+    )
+    if existing or (valid and not replace):
         assert flow.images["1"]["Backdrop"]
     else:
         assert "Backdrop" not in flow.images["1"]
@@ -571,39 +573,45 @@ async def test_portraits_retry_missing_actor_and_preserve_existing_images(
 
 
 @pytest.mark.asyncio
-async def test_uncroppable_required_primary_preserves_old_poster_and_reports_partial_write(
+async def test_uncroppable_required_primary_preserves_all_existing_data(
     flow,
 ):
     flow.items["1"]["Overview"] = ""
     flow.artwork = [("Primary", image_bytes(size=(1, 1)))]
     rows = await flow.run("force")
     assert rows[0]["status"] == "failed" and "Primary" in rows[0]["error"]
-    assert flow.items["1"]["Overview"] == "source plot"
+    assert flow.items["1"]["Overview"] == "" and not flow.posts
     assert flow.images["1"]["Primary"] == [image_bytes("red", size=(60, 90))]
 
 
 @pytest.mark.asyncio
-async def test_failed_scrape_retries_missing_backdrop_without_overwriting(flow, monkeypatch):
-    flow.items['1']['Overview'] = ''
-    flow.artwork = [('Backdrop', image_bytes('yellow')), ('Backdrop', image_bytes('green'))]
-    original_primary = flow.images['1']['Primary'][:]
+async def test_background_warning_can_be_rebuilt_without_overwriting_primary(
+    flow, monkeypatch
+):
+    flow.items["1"]["Overview"] = ""
+    flow.artwork = [
+        ("Backdrop", image_bytes("yellow")),
+        ("Backdrop", image_bytes("green")),
+    ]
+    original_primary = flow.images["1"]["Primary"][:]
     append = EmbyClient.append_backdrop
 
     async def fail_second(client, ident, data, signatures, digest=None):
-        if len(flow.images[ident]['Backdrop']) >= 2:
-            raise ValueError('upload failed')
+        if len(flow.images[ident]["Backdrop"]) >= 2:
+            raise ValueError("upload failed")
         return await append(client, ident, data, signatures, digest)
 
     with monkeypatch.context() as patch:
-        patch.setattr(EmbyClient, 'append_backdrop', fail_second)
-        assert (await flow.run())[0]['status'] == 'failed'
-    assert len(flow.images['1']['Backdrop']) == 2
-    assert (await flow.run())[0]['status'] == 'success'
-    assert len(flow.images['1']['Backdrop']) == 3
-    assert flow.images['1']['Primary'] == original_primary
-    assert flow.items['1']['Overview'] == 'source plot'
+        patch.setattr(EmbyClient, "append_backdrop", fail_second)
+        first = (await flow.run())[0]
+        assert first["status"] == "success" and first["warnings"]
+    assert len(flow.images["1"]["Backdrop"]) == 2
+    assert (await flow.run("force"))[0]["status"] == "success"
+    assert len(flow.images["1"]["Backdrop"]) == 2
+    assert flow.images["1"]["Primary"] == original_primary
+    assert flow.items["1"]["Overview"] == "source plot"
     assert flow.prepared == 2
-    assert (await flow.run())[0]['status'] == 'skipped'
+    assert (await flow.run())[0]["status"] == "skipped"
     assert flow.prepared == 2
 
 
@@ -633,7 +641,8 @@ async def test_force_clears_missing_fields_preserving_unmanaged_data_and_images(
     assert final["ProviderIds"] == original["ProviderIds"]
     for key in ["UserData", "LockData", "LockedFields", "Path", "Id"]:
         assert final[key] == original[key]
-    assert flow.images["1"] == pictures
+    assert flow.images["1"]["Primary"] == pictures["Primary"]
+    assert flow.images["1"]["Backdrop"] == []
     flow.posts.clear()
     assert (await flow.run("force"))[0]["status"] == "skipped"
     assert not flow.posts
@@ -650,3 +659,96 @@ async def test_force_source_failure_does_not_clear_existing_metadata(flow, monke
     row = (await flow.run("force"))[0]
     assert row["status"] == "failed" and "source unavailable" in row["error"]
     assert flow.items["1"] == original and not flow.posts
+
+
+@pytest.mark.asyncio
+async def test_rebuild_upload_failure_keeps_old_backdrops_until_retry(
+    flow, monkeypatch
+):
+    old = flow.images["1"]["Backdrop"][:]
+    flow.images["1"]["Thumb"] = [image_bytes("purple")]
+    flow.artwork = [
+        ("Backdrop", image_bytes("yellow")),
+        ("Backdrop", image_bytes("green")),
+    ]
+    upload = EmbyClient.upload
+
+    async def fail_second(client, ident, kind, data, index=None):
+        if kind == "Backdrop" and data == image_bytes("green"):
+            raise ValueError("upload unavailable")
+        return await upload(client, ident, kind, data, index)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(EmbyClient, "upload", fail_second)
+        row = (await flow.run("force"))[0]
+        assert row["status"] == "success" and "upload unavailable" in str(
+            row["warnings"]
+        )
+        assert flow.images["1"]["Backdrop"] == [*old, image_bytes("yellow")]
+        assert not any("/Backdrop/" in path for path in flow.posts)
+    assert (await flow.run("force"))[0]["status"] == "success"
+    assert set(flow.images["1"]["Backdrop"]) == {
+        image_bytes("yellow"),
+        image_bytes("green"),
+    }
+    assert flow.images["1"]["Thumb"] == [image_bytes("purple")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [None, "download", "upload"])
+async def test_rebuild_portrait_replaces_existing_once_or_preserves_on_failure(
+    flow, monkeypatch, failure
+):
+    person = {"Name": "Actor", "Type": "Actor", "Id": "p", "PrimaryImageTag": "old"}
+    flow.items["1"]["People"] = [person]
+    flow.items["2"] = {**deepcopy(flow.items["1"]), "Id": "2"}
+    flow.images["2"] = deepcopy(flow.images["1"])
+    flow.images["p"] = {"Primary": [image_bytes("red")]}
+    flow.metadata.actors = [Actor(name="Actor")]
+    flow.mappings = [
+        {"name": "Actor", "portrait": PortraitMatch("Actor", "https://portrait")}
+    ]
+    calls = []
+
+    async def save(self, match):
+        calls.append(match.name)
+        if failure == "download":
+            return {"status": "error", "error": "download unavailable"}
+        folder = self.output / "actors"
+        folder.mkdir(exist_ok=True)
+        (folder / "Actor.png").write_bytes(image_bytes("blue"))
+        return {"status": "saved"}
+
+    upload = EmbyClient.upload
+
+    async def uploading(client, ident, kind, data, index=None):
+        if ident == "p" and failure == "upload":
+            raise ValueError("upload unavailable")
+        return await upload(client, ident, kind, data, index)
+
+    monkeypatch.setattr("caress.portraits.Gfriends.save", save)
+    monkeypatch.setattr(EmbyClient, "upload", uploading)
+    rows = await flow.run("force", ids=["1", "2"])
+    assert all(row["status"] == "success" for row in rows)
+    assert flow.images["p"]["Primary"] == [image_bytes("red" if failure else "blue")]
+    assert len(calls) == (2 if failure == "download" else 1)
+    assert flow.posts.count("Items/p/Images/Primary") == (0 if failure else 1)
+    if failure:
+        assert any(failure + " unavailable" in str(row["warnings"]) for row in rows)
+
+
+@pytest.mark.asyncio
+async def test_unreadable_existing_backdrop_is_nonfatal_and_not_duplicated(
+    flow, monkeypatch
+):
+    flow.items["1"]["Overview"] = ""
+    original = deepcopy(flow.images["1"])
+
+    async def unreadable(*args):
+        raise ValueError("invalid image")
+
+    monkeypatch.setattr(EmbyClient, "backdrop_signatures", unreadable)
+    row = (await flow.run())[0]
+    assert row["status"] == "success" and "invalid image" in str(row["warnings"])
+    assert flow.items["1"]["Overview"] == "source plot"
+    assert flow.images["1"] == original

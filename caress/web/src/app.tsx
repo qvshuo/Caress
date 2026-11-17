@@ -58,7 +58,7 @@ export function App() {
   const refresh = useCallback(() => setRevision((v) => v + 1), []);
   const batchRequest = useRef<{
     generation: number;
-    promise: Promise<void>;
+    promise: Promise<boolean>;
   } | null>(null);
   const syncBatch = useCallback(() => {
     const current = batchRequest.current;
@@ -66,16 +66,21 @@ export function App() {
       return current.promise;
     const generation = ++batchGeneration.current;
     const request = api<Batch | null>("batch").then((value) => {
-      if (generation !== batchGeneration.current) return;
+      if (generation !== batchGeneration.current) return false;
       const previous = batchRef.current;
       batchRef.current = value;
       setBatch(value);
-      if (
+      const detail = location.hash.startsWith("#library/work/")
+        ? location.hash.split("/")[2]
+        : undefined;
+      const result = (b: Batch | null) =>
+        b?.items.filter((item) => item.id === detail).at(-1)?.status;
+      const changed =
         value?.id !== previous?.id || value?.status !== previous?.status ||
-        value?.items.some((item, index) =>
-          !["pending", "running"].includes(item.status) &&
-          item.status !== previous?.items[index]?.status)
-      ) refresh();
+        (!!detail && result(value) !== result(previous) &&
+          !["pending", "running"].includes(result(value) || ""));
+      if (changed) refresh();
+      return changed;
     }).finally(() => {
       if (batchRequest.current?.promise === request) batchRequest.current = null;
     });
@@ -110,9 +115,6 @@ export function App() {
   }, [run, navigate, syncBatch]);
   const busy = batch?.status === "running";
   useEffect(() => {
-    batchRef.current = batch;
-  }, [batch]);
-  useEffect(() => {
     if (!busy) {
       setProgressOffline(false);
       return;
@@ -126,25 +128,13 @@ export function App() {
         batchRequest.current?.generation === batchGeneration.current
       ) return;
       pending = true;
+      const request = syncBatch();
       const generation = batchGeneration.current;
-      void api<Batch | null>("batch")
-        .then((value) => {
+      void request
+        .then(() => {
           if (active && generation === batchGeneration.current) {
             failures = 0;
             setProgressOffline(false);
-            const detail = route.startsWith("library/work/")
-              ? route.split("/")[2]
-              : undefined;
-            const result = (b: Batch | null) =>
-              b?.items.filter((i) => i.id === detail).at(-1)?.status;
-            if (
-              (detail &&
-                result(value) !== result(batchRef.current) &&
-                !["pending", "running"].includes(result(value) || "")) ||
-              value?.status !== "running"
-            )
-              refresh();
-            setBatch(value);
           }
         })
         .catch(() => {
@@ -159,7 +149,7 @@ export function App() {
       active = false;
       clearInterval(timer);
     };
-  }, [busy, refresh, route]);
+  }, [busy, syncBatch]);
   const start = async (ids: string[], action: Action, source?: Source) => {
     if (submitting) return false;
     setSubmitting(true);
@@ -168,7 +158,7 @@ export function App() {
         const accepted = await new Promise<boolean>((resolve) => {
           const value = {
             title: "重建元数据",
-            description: "将使用重新获取的作品信息替换现有元数据，缺失字段也会清空。已有背景图和演员头像会保留。确定继续吗？",
+            description: "将使用重新获取的作品信息替换现有元数据，缺失字段也会清空。封面、整个背景图集合和演员头像也会重新获取并替换，没有背景图候选时将清空背景图。确定继续吗？",
             resolve,
           };
           confirmationRef.current = value;
@@ -184,6 +174,7 @@ export function App() {
         confirmed: action === "force",
       });
       batchGeneration.current++;
+      batchRef.current = result;
       setBatch(result);
       if (result.status !== "running") refresh();
       return true;
@@ -207,6 +198,7 @@ export function App() {
               batchGeneration.current++;
               const result = await api<Batch>("batch/cancel", "POST");
               batchGeneration.current++;
+              batchRef.current = result;
               setBatch(result);
               refresh();
             } finally {
@@ -318,10 +310,14 @@ export function App() {
               start={start}
               run={run}
               open={(id) => navigate(`library/work/${id}`)}
-              refresh={() => {
-                refresh();
-                run(syncBatch);
-              }}
+              refresh={() => run(async () => {
+                let refreshed = false;
+                try {
+                  refreshed = await syncBatch();
+                } finally {
+                  if (!refreshed) refresh();
+                }
+              })}
               progress={progress}
               submitting={submitting}
             />

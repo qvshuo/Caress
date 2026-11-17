@@ -41,12 +41,7 @@ class Source:
 
     async def fetch(self, request: ScrapeRequest) -> SourceResult:
         try:
-            result = await self._fetch(request)
-            if result.metadata and not matches(request.code, result.metadata.code):
-                raise FetchError(
-                    Status.IDENTITY_MISMATCH, "来源作品番号不匹配"
-                )
-            return result
+            return await self._fetch(request)
         except FetchError as exc:
             return SourceResult(
                 source=self.id,

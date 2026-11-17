@@ -14,4 +14,3 @@ caress/web/dist/
 **/test-results/
 **/playwright-report/
 **/.venv/
-caress/web/tests/

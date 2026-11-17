@@ -445,3 +445,42 @@ class EmbyClient:
             signatures.add(digest)
             return True
         return False
+
+    async def replace_backdrops(self, ident, images):
+        unique = {digest: path for path, digest in images}
+        previous = [
+            row
+            for row in await self.image_info(ident)
+            if row["ImageType"] == "Backdrop"
+        ]
+        if unique:
+            current = {
+                await asyncio.to_thread(
+                    pixel_digest,
+                    (
+                        await self.image(ident, "Backdrop", row.get("ImageIndex", 0))
+                    ).content,
+                )
+                for row in previous
+            }
+            if len(previous) == len(unique) and current == set(unique):
+                return False
+            # Keep every old image until all new uploads have passed readback.
+            for path in unique.values():
+                await self.upload(
+                    ident, "Backdrop", await asyncio.to_thread(path.read_bytes)
+                )
+        for row in sorted(
+            previous, key=lambda row: row.get("ImageIndex", 0), reverse=True
+        ):
+            await self.request(
+                "DELETE", f"Items/{ident}/Images/Backdrop/{row.get('ImageIndex', 0)}"
+            )
+        saved = [
+            row
+            for row in await self.image_info(ident)
+            if row["ImageType"] == "Backdrop"
+        ]
+        if len(saved) != len(unique):
+            raise ValueError("Emby 背景图集合保存验证失败，部分内容可能已写入")
+        return bool(previous or unique)

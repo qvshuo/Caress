@@ -152,7 +152,6 @@ export function Library({
       w.media.some((m) => m.subtitles) ? "字幕" : "",
       w.media.some((m) => m.uncensored) ? "无码破解" : "",
       w.media.some((m) => m.part) ? "分集" : "",
-      w.media.length > 1 ? `${w.media.length} 个版本` : "",
     ]
       .filter(Boolean)
       .join(" · ");

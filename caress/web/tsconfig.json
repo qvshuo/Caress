@@ -17,6 +17,9 @@
     "paths": {
       "@/*": [
         "./src/*"
+      ],
+      "@playwright/test": [
+        "./node_modules/@playwright/test"
       ]
     }
   },
@@ -24,7 +27,7 @@
     "src",
     "dev.ts",
     "build.ts",
-    "tests",
+    "../../tests/web",
     "playwright.config.ts"
   ]
 }

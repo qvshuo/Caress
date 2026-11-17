@@ -10,7 +10,7 @@ from pathlib import Path
 import httpx
 from PIL import Image
 
-from .emby import image_pixels_match, pixel_digest
+from .emby import image_pixels_match, pixel_digest, sync_error
 from .http import FetchError
 from .images import crop_poster, fetch_artwork, image_plan
 from .models import Actor, ScrapeRequest, Status
@@ -93,7 +93,10 @@ class WorkProcessor:
     async def _prepare(self, code, source):
         result = await self.scraper.scrape(ScrapeRequest(code=code, source=source))
         if result.status != Status.FOUND or result.metadata is None:
-            errors = "；".join(f"{r.source}：{r.message or ('未找到作品' if r.status == Status.NOT_FOUND else '来源不支持此作品' if r.status == Status.UNSUPPORTED else '来源请求失败')}" for r in result.results)
+            errors = "；".join(
+                f"{r.source}：{r.message or ('未找到作品' if r.status == Status.NOT_FOUND else '来源不支持此作品' if r.status == Status.UNSUPPORTED else '来源请求失败')}"
+                for r in result.results
+            )
             raise ValueError("未获取到作品元数据：" + errors)
         if not result.metadata.title.strip():
             raise ValueError("来源作品标题为空，未写入元数据")
@@ -107,7 +110,8 @@ class WorkProcessor:
         metadata.actors = [Actor(name=name) for name in mappings]
         warnings = (
             ["Gfriends 演员索引不可用，已保留来源原名：" + self.portraits.index_error]
-            if self.portraits.index_error else []
+            if self.portraits.index_error
+            else []
         )
         original = metadata.original_title or metadata.title
         metadata.original_title = original
@@ -121,12 +125,20 @@ class WorkProcessor:
         prepared = Prepared(
             metadata,
             result.selected_source.value,
+            errors=[
+                ("Backdrop", error)
+                for source_result in result.results
+                if source_result.source == result.selected_source
+                for error in source_result.backdrop_errors
+            ],
             warnings=[
                 *result.warnings,
                 *warnings,
                 *[i["error"] for i in report.errors],
             ],
-            mappings=[{"name": name, "portrait": match} for name, match in mappings.items()],
+            mappings=[
+                {"name": name, "portrait": match} for name, match in mappings.items()
+            ],
         )
         folder = (
             self.temporary
@@ -172,6 +184,64 @@ class WorkProcessor:
             await asyncio.to_thread(shutil.rmtree, folder)
             raise
 
+    async def prepare_write(self, client, item, prepared, images, *, replace):
+        warnings = []
+        needs_poster = replace or not any(
+            row["ImageType"] == "Primary" for row in images
+        )
+        if needs_poster:
+            errors = [message for kind, message in prepared.errors if kind == "Primary"]
+            if errors:
+                raise ValueError("封面准备失败：" + "; ".join(errors))
+            for kind, path in prepared.images:
+                if kind != "Primary":
+                    continue
+                async with prepared.poster_lock:
+                    poster = path.parent / "poster.png"
+                    if not poster.exists():
+                        try:
+                            result = await asyncio.to_thread(
+                                crop_poster, await asyncio.to_thread(path.read_bytes)
+                            )
+                            await asyncio.to_thread(
+                                poster.write_bytes, result["content"]
+                            )
+                        except (ValueError, OSError) as exc:
+                            raise ValueError(f"Primary: {exc}") from exc
+        async with self.people_lock:
+            actors = [p for p in item.get("People", []) if p.get("Type") == "Actor"]
+            for mapping in prepared.mappings:
+                match = mapping["portrait"]
+                if match is None:
+                    if replace:
+                        warnings.append("演员头像未匹配：" + mapping["name"])
+                    continue
+                try:
+                    if not replace and actors:
+                        person = next(
+                            (p for p in actors if p["Name"] == mapping["name"]), None
+                        )
+                        if not person:
+                            continue
+                        if person.get("Id") and any(
+                            row["ImageType"] == "Primary"
+                            for row in await client.image_info(person["Id"])
+                        ):
+                            continue
+                    if actor_image(self.portraits.output, mapping["name"]):
+                        continue
+                    key = ("download", mapping["name"])
+                    if self.people_attempts.get(key, 0) >= 2:
+                        warnings.append("演员头像获取失败：本批次重试次数已用尽")
+                        continue
+                    self.people_attempts[key] = self.people_attempts.get(key, 0) + 1
+                    result = await self.portraits.save(match)
+                    if result["status"] == "error":
+                        warnings.append("演员头像获取失败：" + result["error"])
+                except (ValueError, OSError, httpx.HTTPError) as exc:
+                    warnings.append("演员头像准备失败：" + sync_error(exc))
+        return warnings
+
     async def write(self, client, ident, prepared, media, *, replace):
         current, changed = await client.write_metadata(
             ident, prepared.metadata, media, replace=replace
@@ -184,28 +254,28 @@ class WorkProcessor:
                 fatal.append(message)
             else:
                 warnings.append(message)
-        signatures = (
-            await client.backdrop_signatures(ident)
-            if any(kind == "Backdrop" for kind, _ in prepared.images)
-            else set()
-        )
+        if replace and not any(kind == "Backdrop" for kind, _ in prepared.errors):
+            try:
+                backdrops = [
+                    (path, prepared.digests[path])
+                    for kind, path in prepared.images
+                    if kind == "Backdrop"
+                ]
+                changed = await client.replace_backdrops(ident, backdrops) or changed
+            except (ValueError, OSError, httpx.HTTPError) as exc:
+                warnings.append(f"背景图重建未完成，部分图片可能已写入：{exc}")
+        signatures = set()
+        if not replace and any(kind == "Backdrop" for kind, _ in prepared.images):
+            try:
+                signatures = await client.backdrop_signatures(ident)
+            except (ValueError, OSError, httpx.HTTPError) as exc:
+                warnings.append(f"背景图读取失败，未追加图片：{exc}")
+                signatures = None
         for kind, path in prepared.images:
             if kind == "Primary" and has_primary and not replace:
                 continue
             if kind == "Primary":
-                try:
-                    async with prepared.poster_lock:
-                        poster = path.parent / "poster.png"
-                        if not poster.exists():
-                            original = await asyncio.to_thread(path.read_bytes)
-                            result = await asyncio.to_thread(crop_poster, original)
-                            await asyncio.to_thread(
-                                poster.write_bytes, result["content"]
-                            )
-                    data = await asyncio.to_thread(poster.read_bytes)
-                except (ValueError, OSError) as exc:
-                    fatal.append(f"Primary: {exc}")
-                    continue
+                data = await asyncio.to_thread((path.parent / "poster.png").read_bytes)
                 if has_primary:
                     try:
                         current_image = await client.image(ident, "Primary")
@@ -221,13 +291,18 @@ class WorkProcessor:
                 await client.upload(ident, kind, data)
                 has_primary = True
                 changed = True
-            else:
-                data = await asyncio.to_thread(path.read_bytes)
-                added = await client.append_backdrop(
-                    ident, data, signatures, prepared.digests.get(path)
-                )
-                changed = changed or added
-        # Portraits require a Gfriends match, an Emby Person ID and no existing image.
+            elif not replace and signatures is not None:
+                try:
+                    data = await asyncio.to_thread(path.read_bytes)
+                    changed = (
+                        await client.append_backdrop(
+                            ident, data, signatures, prepared.digests.get(path)
+                        )
+                        or changed
+                    )
+                except (ValueError, OSError, httpx.HTTPError) as exc:
+                    warnings.append(f"背景图补齐失败：{exc}")
+        # Portraits are linked through the Person IDs returned by Emby.
         async with self.people_lock:
             for mapping in prepared.mappings:
                 match = mapping["portrait"]
@@ -248,32 +323,29 @@ class WorkProcessor:
                     or self.people_attempts.get(person["Id"], 0) >= 2
                 ):
                     continue
-                self.people_attempts[person["Id"]] = (
-                    self.people_attempts.get(person["Id"], 0) + 1
-                )
                 try:
-                    if any(
+                    if not replace and any(
                         i["ImageType"] == "Primary"
                         for i in await client.image_info(person["Id"])
                     ):
                         self.people_done.add(person["Id"])
                         continue
-                    record = await self.portraits.save(match)
-                    if record["status"] in ("saved", "existing"):
-                        image = actor_image(self.portraits.output, person["Name"])
-                        await client.upload(person["Id"], "Primary", image.read_bytes())
+                    image = actor_image(self.portraits.output, person["Name"])
+                    if image:
+                        data = image.read_bytes()
+                        self.people_attempts[person["Id"]] = (
+                            self.people_attempts.get(person["Id"], 0) + 1
+                        )
+                        await client.upload(person["Id"], "Primary", data)
                         self.people_done.add(person["Id"])
                         changed = True
-                    else:
-                        warnings.append("演员头像获取失败：" + record["error"])
                 except (ValueError, OSError, FetchError) as exc:
                     warnings.append(f"演员头像获取失败：{exc}")
                 except Exception as exc:
-                    from .emby import sync_error
-
                     warnings.append(sync_error(exc))
         if fatal:
             raise ValueError(
-                "部分元数据可能已写入，但图片处理未完成：" + "; ".join([*fatal, *warnings])
+                "部分元数据可能已写入，但图片处理未完成："
+                + "; ".join([*fatal, *warnings])
             )
         return warnings, changed

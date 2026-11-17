@@ -111,6 +111,15 @@ class Scraper:
                     )
             finally:
                 lock.release()
+            if result.metadata and not matches(
+                request.code, result.metadata.code
+            ):
+                result = SourceResult(
+                    source=source,
+                    requested_code=request.code,
+                    status=Status.IDENTITY_MISMATCH,
+                    message="来源番号不匹配",
+                )
             result.elapsed_seconds = time.monotonic() - started
             failed = result.status not in (Status.FOUND, Status.NOT_FOUND, Status.UNSUPPORTED)
             logger.log(
@@ -138,15 +147,6 @@ class Scraper:
         selected = None
         for source in route:
             result = await fetch(source)
-            if result.metadata and not matches(
-                request.code, result.metadata.code
-            ):
-                result = SourceResult(
-                    source=source,
-                    requested_code=request.code,
-                    status=Status.IDENTITY_MISMATCH,
-                    message="来源番号不匹配",
-                )
             results.append(result)
             if result.status == Status.FOUND and result.metadata is not None:
                 selected = result

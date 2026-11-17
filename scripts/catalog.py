@@ -16,7 +16,6 @@ from caress.sources.parsing import source_code
 
 
 def build(rows):
-    evidence = {}
     labels = defaultdict(set)
     for row in rows:
         category = row["category"]
@@ -35,13 +34,12 @@ def build(rows):
         if not re.fullmatch(r"[A-Z0-9]+(?:-[A-Z]+)?", prefix):
             continue
         labels[prefix].add(category)
-        evidence.setdefault((prefix, category), {"code": code, "category": category, "url": row["url"]})
     conflicts = sorted(p for p, categories in labels.items() if len(categories) > 1)
     rules = {
         category: sorted(p for p, categories in labels.items() if categories == {category})
         for category in ("censored", "uncensored")
     }
-    return rules, [evidence[key] for key in sorted(evidence)], conflicts
+    return rules, conflicts
 
 
 async def collect(source, pages):
@@ -125,7 +123,6 @@ def main():
     generate = commands.add_parser("build")
     generate.add_argument("inputs", type=Path, nargs="+")
     generate.add_argument("--rules", type=Path, required=True)
-    generate.add_argument("--samples", type=Path, required=True)
     args = parser.parse_args()
     if args.command == "collect":
         if any(page < 1 for page in args.pages):
@@ -133,13 +130,12 @@ def main():
         write(args.output, asyncio.run(collect(args.source, args.pages)))
     else:
         rows = [row for path in args.inputs for row in json.loads(path.read_text())]
-        rules, samples, conflicts = build(rows)
+        rules, conflicts = build(rows)
         if args.rules.exists():
             previous = json.loads(args.rules.read_text())
             if "updated_at" in previous:
                 rules = {"updated_at": previous["updated_at"], **rules}
         write(args.rules, rules)
-        write(args.samples, samples)
         print(json.dumps({"counts": {k: len(rules[k]) for k in ("censored", "uncensored")}, "conflicts": conflicts}))
 
 

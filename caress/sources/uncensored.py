@@ -67,7 +67,7 @@ class OnePondo(Uncensored):
             (data[k] for k in ("ThumbUltra", "ThumbHigh", "ThumbMed", "ThumbLow") if data.get(k)), None
         )
         images = artwork(self.id, url, [cover] if cover else [], [])
-        warnings = []
+        backdrop_errors = []
         if data.get("Gallery") or data.get("HasGallery"):
             gallery_url = (
                 self.base + "/dyn/dla/json/movie_gallery/" + identity + ".json"
@@ -80,9 +80,11 @@ class OnePondo(Uncensored):
                 if isinstance(rows, dict) and (rows.get("error") or rows.get("errors") or rows.get("success") is False):
                     raise FetchError(Status.PARSE_ERROR, json_error(rows))
                 if isinstance(rows, dict):
-                    rows = rows.get("Rows", [])
+                    rows = rows.get("Rows")
+                if not isinstance(rows, list):
+                    raise FetchError(Status.PARSE_ERROR, "一本道剧照列表格式无效")
                 samples = []
-                for row in rows if isinstance(rows, list) else []:
+                for row in rows:
                     if not isinstance(row, dict) or row.get("Protected"):
                         continue
                     if data.get("Gallery") and row.get("Img"):
@@ -93,7 +95,7 @@ class OnePondo(Uncensored):
                         )
                 images += artwork(self.id, url, [], samples[:100])
             except FetchError as exc:
-                warnings.append(f"剧照获取失败：{exc}")
+                backdrop_errors.append(f"剧照获取失败：{exc}")
         return self.found(
             request,
             SourceMetadata(
@@ -111,7 +113,7 @@ class OnePondo(Uncensored):
                 tags=data.get("UCNAME") or [],
                 artwork=images,
             ),
-            warnings=warnings,
+            backdrop_errors=backdrop_errors,
         )
 
 

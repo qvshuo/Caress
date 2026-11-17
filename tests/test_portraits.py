@@ -85,6 +85,7 @@ async def processor(tmp_path):
         return_value=SimpleNamespace(
             status=Status.FOUND,
             selected_source=SourceId.DMM,
+            results=[],
             warnings=[],
             metadata=SourceMetadata(
                 code="ABC-123",
@@ -155,9 +156,13 @@ async def test_standard_emby_person_receives_portrait_without_javdb_id(processor
         image_info=AsyncMock(return_value=[]),
         upload=AsyncMock(),
     )
+    preparation_warnings = await processor.prepare_write(
+        client, {}, prepared, [], replace=False
+    )
     warnings, changed = await processor.write(
         client, "work", prepared, [], replace=False
     )
+    warnings = preparation_warnings + warnings
     assert changed and not warnings
     client.upload.assert_awaited_once_with("0", "Primary", image_bytes())
     await processor.write(client, "other", prepared, [], replace=False)
@@ -183,9 +188,13 @@ async def test_failed_portrait_keeps_canonical_name_and_other_metadata(processor
         image_info=AsyncMock(return_value=[]),
         upload=AsyncMock(),
     )
+    preparation_warnings = await processor.prepare_write(
+        client, {}, prepared, [], replace=False
+    )
     warnings, changed = await processor.write(
         client, "work", prepared, [], replace=False
     )
+    warnings = preparation_warnings + warnings
     assert changed and warnings == ["演员头像获取失败：offline"]
     assert prepared.metadata.actors[0].name == "黒川さりな"
     client.upload.assert_not_awaited()
