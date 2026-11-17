@@ -571,7 +571,7 @@ async def test_catalog_collection_deduplicates_pages_and_reports_empty_pages(mon
     assert len(rows) == 1 and rows[0]["code"] == "CWP-001"
     report = json.loads(capsys.readouterr().out.splitlines()[-1])
     assert report == {"source": "avsox", "valid_pages": 2, "empty_pages": 1,
-                      "duplicate_pages": 1, "unique_codes": 1, "new_prefixes": 1, "conflict_prefixes": 0}
+                      "duplicate_pages": 1, "unique_codes": 1, "new_prefixes": 1}
 
 
 def test_manual_build_does_not_advance_update_date(tmp_path, monkeypatch):
@@ -589,3 +589,56 @@ def test_manual_build_does_not_advance_update_date(tmp_path, monkeypatch):
     rules.unlink()
     main()
     assert "updated_at" not in json.loads(rules.read_text())
+
+
+def test_identity_is_stricter_than_source_query_format():
+    from caress.catalog import query_code
+    from caress.sources.parsing import source_code
+
+    assert query_code("010115_001") == query_code("010115-001")
+    assert not matches("010115_001", "010115-001")
+    assert matches("010115_001", "010115_001")
+    for alias in ["FC2-123456", "FC2-PPV-123456", "fc2ppv_123456"]:
+        assert matches("FC2PPV-123456", alias)
+    assert query_code("HEYDOUGA-4037-428") == "4037-428"
+    assert not matches("HEYDOUGA-4037-428", "4037-428")
+    assert source_code("4037-428", "heydouga") == "HEYDOUGA-4037-428"
+    assert source_code("4037-428") == source_code("4037-428", "unknown") == "4037-428"
+
+
+@pytest.mark.asyncio
+async def test_avsox_restores_explicit_identity_and_checks_detail_and_page():
+    from unittest.mock import AsyncMock
+
+    from caress.http import Page
+    from caress.sources.avsox import AVSOX
+
+    identity = {"movieId": "a", "movieFanHao": "4037-428", "from": "heydouga"}
+    search_identity = dict(identity)
+
+    class Client:
+        async def post_json(self, source, url, payload):
+            if url.endswith("/search"):
+                assert payload[0]["search"] == "4037-428"
+                data = [search_identity]
+            else:
+                assert payload == ["a", "cn"]
+                data = identity
+            return Page(url, 200, json.dumps({"code": 200, "data": data}).encode())
+
+    source = AVSOX(Client(), Settings())
+    html = '<h1>4037-428 Title</h1><div class="detail-row"><span class="detail-label">识别码</span><span class="detail-value">4037-428</span></div><img alt="4037-428 cover" src="https://image.invalid/a.jpg">'
+    source.document = AsyncMock(return_value=Page("https://avsox.click/cn/movies/a", 200, html.encode()))
+    request = ScrapeRequest(code="HEYDOUGA-4037-428")
+    result = await source.fetch(request)
+    assert result.status == Status.FOUND and result.metadata.code == request.code
+    assert result.metadata.artwork[0].url == "https://image.invalid/a.jpg"
+    source.document.return_value = Page("https://avsox.click/cn/movies/a", 200, html.replace("4037-428", "HEYDOUGA-4037-428").encode())
+    assert (await source.fetch(request)).status == Status.FOUND
+    identity.pop("from")
+    assert (await source.fetch(request)).status == Status.IDENTITY_MISMATCH
+    search_identity.pop("from")
+    assert (await source.fetch(request)).status == Status.NOT_FOUND
+    search_identity["from"] = identity["from"] = "heydouga"
+    source.document.return_value = Page("https://avsox.click/cn/movies/a", 200, html.replace("4037-428", "4037-429").encode())
+    assert (await source.fetch(request)).status == Status.IDENTITY_MISMATCH

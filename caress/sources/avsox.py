@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import re
-from urllib.parse import quote, urljoin
 
-from ..catalog import normalize_code, query_code
+from ..catalog import matches, query_code
 from ..http import FetchError, Page
 from ..models import (
     Actor,
@@ -15,7 +14,7 @@ from ..models import (
     Status,
 )
 from .base import Source
-from .parsing import artwork, parse_date, text, texts
+from .parsing import artwork, parse_date, source_code, text, texts
 
 
 class AVSOX(Source):
@@ -30,41 +29,41 @@ class AVSOX(Source):
                 raise FetchError(Status.UNSUPPORTED, "AVSOX 作品 ID 无效")
             url = self.base + "/cn/movies/" + request.external_id
         else:
-            search = await self.document(
-                self.base + "/cn/search/" + quote(query_code(request.code)),
-                "search",
+            page = await self.client.post_json(
+                self.id, self.base + "/javu/data/api/search",
+                [{"search": query_code(request.code), "lang": "cn"}, 60, 1],
             )
-            candidates = []
-            for node in search.selector().css('a[href*="/movies/"]'):
-                title = str(node.get_all_text()).strip()
-                code = text(node, './/*[contains(@class,"movie-meta")]/span[1]/text()')
-                if code:
-                    candidates.append(
-                        Candidate(
-                            code=code, title=title, url=urljoin(self.base, node.attrib["href"])
-                        )
-                    )
+            data = page.json()
+            if data.get("code") != 200 or not isinstance(data.get("data"), list):
+                raise FetchError(Status.PARSE_ERROR, "AVSOX 搜索数据无效")
+            candidates = [
+                Candidate(code=source_code(work["movieFanHao"], work.get("from")),
+                          url=self.base + "/cn/movies/" + work["movieId"])
+                for work in data["data"]
+            ]
             selected = self.select(request, candidates)
             if not selected:
-                if self.empty(search):
-                    return self.missed(request)
-                raise FetchError(
-                    Status.PARSE_ERROR,
-                    "AVSOX 搜索页面没有可识别的结果或空结果提示",
-                )
+                return self.missed(request)
             url = self.checked_url(selected.url)
-        page = await self.document(url, "detail")
-        return self.parse(request, page)
+        ident = url.rstrip("/").rsplit("/", 1)[-1]
+        identity_page = await self.client.post_json(
+            self.id, self.base + "/javu/data/api/getMovie", [ident, "cn"]
+        )
+        data = identity_page.json()
+        work = data.get("data")
+        if data.get("code") != 200 or not isinstance(work, dict) or work.get("movieId") != ident:
+            raise FetchError(Status.IDENTITY_MISMATCH, "AVSOX 作品身份无法确认")
+        code = source_code(work["movieFanHao"], work.get("from"))
+        if not matches(request.code, code):
+            raise FetchError(Status.IDENTITY_MISMATCH, "AVSOX 作品番号不匹配")
+        page = await self.document(url)
+        return self.parse(request, page, work)
 
-    async def document(self, url: str, mode: str) -> Page:
+    async def document(self, url: str) -> Page:
         try:
             page = await self.client.get(self.id, url)
             selector = page.selector()
-            if (
-                selector.css(".detail-row")
-                if mode == "detail"
-                else selector.css('a[href*="/movies/"]') or self.empty(page)
-            ):
+            if selector.css(".detail-row"):
                 return page
         except FetchError as exc:
             if exc.status not in (Status.NETWORK_ERROR, Status.BLOCKED):
@@ -76,14 +75,7 @@ class AVSOX(Source):
             raise FetchError(Status.TIMEOUT, "AVSOX 页面内容尚未加载完成")
         return page
 
-    @staticmethod
-    def empty(page: Page) -> bool:
-        return any(
-            str(node.get_all_text()).strip() in ("没有结果。", "沒有結果。", "No results.")
-            for node in page.selector().css(".q-banner")
-        )
-
-    def parse(self, request: ScrapeRequest, page: Page) -> SourceResult:
+    def parse(self, request: ScrapeRequest, page: Page, identity) -> SourceResult:
         selector = page.selector()
 
         def row(label: str) -> str | None:
@@ -97,7 +89,11 @@ class AVSOX(Source):
         if not code or not title:
             raise FetchError(Status.PARSE_ERROR, "AVSOX 渲染后的详情页缺少必要信息")
         title = re.sub(r"^" + re.escape(code) + r"\s*", "", title).strip()
-        code = normalize_code(code)
+        raw_code = code
+        namespace = identity.get("from")
+        code = source_code(code, namespace)
+        if not matches(code, source_code(identity["movieFanHao"], namespace)):
+            raise FetchError(Status.IDENTITY_MISMATCH, "AVSOX 页面与作品身份不一致")
         metadata = SourceMetadata(
             code=code,
             title=title,
@@ -115,7 +111,7 @@ class AVSOX(Source):
             artwork=artwork(
                 self.id,
                 page.url,
-                texts(selector, '//img[@alt and @src][starts-with(@alt,"' + code + '")]/@src'),
+                texts(selector, '//img[@alt and @src][starts-with(@alt,"' + raw_code + '")]/@src'),
                 texts(selector, '//*[contains(@class,"sample")]//img/@src'),
             ),
         )

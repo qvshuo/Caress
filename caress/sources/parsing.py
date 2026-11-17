@@ -6,6 +6,7 @@ from urllib.parse import urljoin
 
 from scrapling.parser import Selector
 
+from ..catalog import NUMERIC, normalize_code
 from ..models import ArtworkCandidate, SourceId
 
 
@@ -51,3 +52,13 @@ def artwork(
             seen.add((role, url))
             images.append(ArtworkCandidate(source=source, role=role, url=url, referer=referer))
     return images
+
+
+def source_code(code: str, namespace: str | None = None) -> str:
+    """Restore an explicit provider namespace only in a supported catalog format."""
+    if namespace and NUMERIC.fullmatch(code):
+        try:
+            return normalize_code(f"{namespace}-{code}")
+        except ValueError:
+            pass
+    return normalize_code(code)

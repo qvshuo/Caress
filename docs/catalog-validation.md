@@ -68,3 +68,5 @@ AVSOX：10 个非空有效页，0 空页、0 重复页，541 个唯一番号、2
 单站各自无冲突；与现有样本合并后仍有 DSAM、HAME、HHF 三个冲突前缀，保持 UNKNOWN。最终名单 727 个有码、74 个无码。
 
 HEYDOUGA 补充核验：AVSOX 作品 `4037-428`（https://avsox.click/cn/movies/kjavgjp）明确带有 `from=heydouga` 生产者标识；采集时将此格式表达为 `HEYDOUGA-4037-428`，用于前缀建表，不改变运行时严格番号相等规则。HEYZO 来自实际 AVSOX 作品番号。代表性样本保留两站证据和冲突双方。
+
+单站 collect 汇总仅反映分页与去重；跨来源及历史证据的冲突数只由 build 合并时计算。AVSOX 番号恢复与正式适配器共用 `sources/parsing.py` 中的 `source_code()`，不影响全局严格身份比较。

@@ -36,6 +36,9 @@ def classify(code: str) -> Category:
 
 
 def query_code(code: str) -> str:
+    parts = code.split("-")
+    if len(parts) > 2 and all(part.isdigit() for part in parts[1:]):
+        return "-".join(parts[1:])
     if NUMERIC.fullmatch(code):
         return code.replace("_", "-")
     if code.startswith("FC2PPV-"):
@@ -45,7 +48,7 @@ def query_code(code: str) -> str:
 
 def matches(requested: str, returned: str) -> bool:
     try:
-        return query_code(normalize_code(requested)) == query_code(normalize_code(returned))
+        return normalize_code(requested) == normalize_code(returned)
     except ValueError:
         return False
 

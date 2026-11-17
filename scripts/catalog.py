@@ -12,6 +12,7 @@ import httpx
 from lxml import html
 
 from caress.catalog import NUMERIC, catalog_prefix, normalize_code
+from caress.sources.parsing import source_code
 
 
 def build(rows):
@@ -78,9 +79,7 @@ async def collect(source, pages):
                     raise ValueError("AVSOX listing unavailable; no output written")
                 current = []
                 for work in data["data"]:
-                    code = work["movieFanHao"]
-                    if work.get("from") == "heydouga" and NUMERIC.fullmatch(code):
-                        code = "HEYDOUGA-" + code
+                    code = source_code(work["movieFanHao"], work.get("from"))
                     current.append({"code": code, "category": "uncensored", "url": "https://avsox.click/cn/movies/" + work["movieId"]})
             unique = {}
             for row in current:
@@ -108,7 +107,7 @@ async def collect(source, pages):
             prefixes.update(page_prefixes)
             page_sets.add(codes)
     print(json.dumps({"source": source, **totals, "unique_codes": len(seen),
-                      "new_prefixes": len(prefixes), "conflict_prefixes": len(build(rows)[2])}), flush=True)
+                      "new_prefixes": len(prefixes)}), flush=True)
     return rows
 
 
