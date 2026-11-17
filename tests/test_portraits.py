@@ -227,3 +227,25 @@ async def test_translation_outage_still_composes_standard_actor_title(processor)
     assert prepared.metadata.plot == "Kurokawa Sarina and 黒川さりな"
     assert [a.name for a in prepared.metadata.actors] == ["黒川さりな", "Unknown"]
     assert "offline" in prepared.warnings
+
+
+@pytest.mark.asyncio
+async def test_portrait_programming_error_is_not_reported_as_network_warning(processor):
+    prepared = await processor.prepare("ABC-123")
+
+    async def image_info(ident):
+        if ident == "p":
+            raise TypeError("programming error")
+        return []
+
+    client = SimpleNamespace(
+        write_metadata=AsyncMock(
+            return_value=(
+                {"People": [{"Name": "黒川さりな", "Type": "Actor", "Id": "p"}]},
+                False,
+            )
+        ),
+        image_info=image_info,
+    )
+    with pytest.raises(TypeError, match="programming error"):
+        await processor.write(client, "1", prepared, [], replace=False)

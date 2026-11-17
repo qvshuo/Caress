@@ -1091,7 +1091,8 @@ test("both pages share queued progress and completed detail refreshes", async ({
     route.fulfill({
       json: {
         ...work,
-        status: batch.status === "finished" ? "success" : "pending",
+        status: batch.status === "finished" ? "success" : "failed",
+        error: batch.status === "finished" ? null : "上次处理失败",
         title: batch.status === "finished" ? "已更新的作品" : work.title,
       },
     }),
@@ -1116,6 +1117,11 @@ test("both pages share queued progress and completed detail refreshes", async ({
   const listProgress = await progress.boundingBox();
   await page.getByRole("row", { name: "查看 ABC-123" }).click();
   await expect(progress.getByRole("progressbar")).toBeVisible();
+  await expect(page.getByRole("alert")).toContainText("上次处理失败");
+  batch.current = ["1"];
+  batch.items = batch.items.map(item => item.id === "1" ? { ...item, status: "running" } : { ...item, status: "success" });
+  await expect(page.getByRole("button", { name: "裁剪封面", exact: true })).toBeDisabled();
+  await expect(page.getByRole("alert")).toHaveCount(0);
   const detailProgress = await progress.boundingBox();
   expect(Math.abs(listProgress!.y - detailProgress!.y)).toBeLessThan(1);
   await expect(
@@ -1125,7 +1131,7 @@ test("both pages share queued progress and completed detail refreshes", async ({
   expect(
     await page.evaluate(() => document.documentElement.scrollWidth),
   ).toBeLessThanOrEqual(390);
-  await expect(progress.getByText("等待：ABC-123", { exact: true })).toHaveCSS(
+  await expect(progress.getByText("当前：ABC-123", { exact: true })).toHaveCSS(
     "-webkit-line-clamp",
     "2",
   );
@@ -1406,8 +1412,9 @@ test("version column only shows filename attributes regardless of media source c
     { subtitles: true, uncensored: true },
     { part: 1 },
     { subtitles: true, part: 1 },
+    { subtitles: true, uncensored: true, part: 1 },
   ];
-  const labels = ["", "字幕", "无码破解", "字幕 · 无码破解", "分集", "字幕 · 分集"];
+  const labels = ["", "字幕", "无码破解", "字幕 · 无码破解", "分集", "字幕 · 分集", "字幕 · 无码破解 · 分集"];
   await page.route("**/api/works?**", (route) => route.fulfill({ json: {
     items: versions.map((attributes, index) => ({
       ...work, id: String(index + 1), code: `ABC-${index + 1}`,
@@ -1419,4 +1426,7 @@ test("version column only shows filename attributes regardless of media source c
     await expect(page.getByRole("row", { name: `查看 ABC-${index + 1}`, exact: true }).getByRole("cell").nth(4)).toHaveText(label);
   }
   await expect(page.getByText(/\d+ 个版本/)).toHaveCount(0);
+  await page.setViewportSize({ width: 390, height: 844 });
+  const version = page.getByRole("row", { name: "查看 ABC-7", exact: true }).getByRole("cell").nth(4);
+  expect(await version.evaluate(cell => cell.scrollWidth <= cell.clientWidth)).toBe(true);
 });

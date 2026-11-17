@@ -285,7 +285,7 @@ export function Library({
                         {actors}
                       </span>
                     </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
+                    <TableCell className="whitespace-normal text-xs text-muted-foreground">
                       {mediaLabel(w)}
                     </TableCell>
                     <TableCell>

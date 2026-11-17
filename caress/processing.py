@@ -10,7 +10,7 @@ from pathlib import Path
 import httpx
 from PIL import Image
 
-from .emby import image_pixels_match, pixel_digest, sync_error
+from .emby import ImageWriteError, image_pixels_match, pixel_digest, sync_error
 from .http import FetchError
 from .images import crop_poster, fetch_artwork, image_plan
 from .models import Actor, ScrapeRequest, Status
@@ -248,12 +248,7 @@ class WorkProcessor:
         )
         existing = await client.image_info(ident)
         has_primary = any(row["ImageType"] == "Primary" for row in existing)
-        fatal, warnings = [], list(prepared.warnings)
-        for kind, message in prepared.errors:
-            if kind == "Primary" and (replace or not has_primary):
-                fatal.append(message)
-            else:
-                warnings.append(message)
+        warnings = [*prepared.warnings, *(message for _, message in prepared.errors)]
         if replace and not any(kind == "Backdrop" for kind, _ in prepared.errors):
             try:
                 backdrops = [
@@ -263,6 +258,7 @@ class WorkProcessor:
                 ]
                 changed = await client.replace_backdrops(ident, backdrops) or changed
             except (ValueError, OSError, httpx.HTTPError) as exc:
+                changed = isinstance(exc, ImageWriteError) or changed
                 warnings.append(f"背景图重建未完成，部分图片可能已写入：{exc}")
         signatures = set()
         if not replace and any(kind == "Backdrop" for kind, _ in prepared.images):
@@ -301,6 +297,7 @@ class WorkProcessor:
                         or changed
                     )
                 except (ValueError, OSError, httpx.HTTPError) as exc:
+                    changed = isinstance(exc, ImageWriteError) or changed
                     warnings.append(f"背景图补齐失败：{exc}")
         # Portraits are linked through the Person IDs returned by Emby.
         async with self.people_lock:
@@ -339,13 +336,7 @@ class WorkProcessor:
                         await client.upload(person["Id"], "Primary", data)
                         self.people_done.add(person["Id"])
                         changed = True
-                except (ValueError, OSError, FetchError) as exc:
-                    warnings.append(f"演员头像获取失败：{exc}")
-                except Exception as exc:
-                    warnings.append(sync_error(exc))
-        if fatal:
-            raise ValueError(
-                "部分元数据可能已写入，但图片处理未完成："
-                + "; ".join([*fatal, *warnings])
-            )
+                except (ValueError, OSError, httpx.HTTPError) as exc:
+                    changed = isinstance(exc, ImageWriteError) or changed
+                    warnings.append("演员头像写入失败：" + sync_error(exc))
         return warnings, changed

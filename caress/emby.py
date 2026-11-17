@@ -20,6 +20,10 @@ from .images import validate_image
 FIELDS = "Path,DateCreated,MediaSources,Overview,People,Studios,Genres,Tags,ProviderIds,OriginalTitle"
 
 
+class ImageWriteError(ValueError):
+    """An image mutation may have completed without a verified final result."""
+
+
 def sync_error(exc):
     if isinstance(exc, httpx.HTTPStatusError):
         operation = f"{exc.request.method} {exc.request.url.path}"
@@ -393,25 +397,35 @@ class EmbyClient:
         path = f"Items/{ident}/Images/{kind}" + (
             f"/{index}" if index is not None else ""
         )
-        await self.request(
-            "POST", path, content=base64.b64encode(data), headers={"Content-Type": mime}
-        )
-        saved = await self.image_info(ident)
-        if index is None and kind == "Backdrop":
-            index = max(
-                (row.get("ImageIndex", 0) for row in saved if row["ImageType"] == kind),
-                default=-1,
+        try:
+            await self.request(
+                "POST",
+                path,
+                content=base64.b64encode(data),
+                headers={"Content-Type": mime},
             )
-        index = index or 0
-        if not any(
-            row["ImageType"] == kind and row.get("ImageIndex", 0) == index
-            for row in saved
-        ):
-            raise ValueError("Emby 图片保存验证失败")
-        if not await asyncio.to_thread(
-            image_pixels_match, data, (await self.image(ident, kind, index)).content
-        ):
-            raise ValueError("Emby 保存的图片与上传内容不一致")
+            saved = await self.image_info(ident)
+            if index is None and kind == "Backdrop":
+                index = max(
+                    (
+                        row.get("ImageIndex", 0)
+                        for row in saved
+                        if row["ImageType"] == kind
+                    ),
+                    default=-1,
+                )
+            index = index or 0
+            if not any(
+                row["ImageType"] == kind and row.get("ImageIndex", 0) == index
+                for row in saved
+            ):
+                raise ValueError("Emby 图片保存验证失败")
+            if not await asyncio.to_thread(
+                image_pixels_match, data, (await self.image(ident, kind, index)).content
+            ):
+                raise ValueError("Emby 保存的图片与上传内容不一致")
+        except (ValueError, OSError, httpx.HTTPError) as exc:
+            raise ImageWriteError(sync_error(exc)) from exc
 
     async def write_metadata(self, ident, metadata, media, *, replace):
         original = await self.item(ident)
@@ -465,22 +479,31 @@ class EmbyClient:
             }
             if len(previous) == len(unique) and current == set(unique):
                 return False
+        changed = False
+        try:
             # Keep every old image until all new uploads have passed readback.
             for path in unique.values():
                 await self.upload(
                     ident, "Backdrop", await asyncio.to_thread(path.read_bytes)
                 )
-        for row in sorted(
-            previous, key=lambda row: row.get("ImageIndex", 0), reverse=True
-        ):
-            await self.request(
-                "DELETE", f"Items/{ident}/Images/Backdrop/{row.get('ImageIndex', 0)}"
-            )
-        saved = [
-            row
-            for row in await self.image_info(ident)
-            if row["ImageType"] == "Backdrop"
-        ]
-        if len(saved) != len(unique):
-            raise ValueError("Emby 背景图集合保存验证失败，部分内容可能已写入")
-        return bool(previous or unique)
+                changed = True
+            for row in sorted(
+                previous, key=lambda row: row.get("ImageIndex", 0), reverse=True
+            ):
+                changed = True
+                await self.request(
+                    "DELETE",
+                    f"Items/{ident}/Images/Backdrop/{row.get('ImageIndex', 0)}",
+                )
+            saved = [
+                row
+                for row in await self.image_info(ident)
+                if row["ImageType"] == "Backdrop"
+            ]
+            if len(saved) != len(unique):
+                raise ValueError("Emby 背景图集合保存验证失败，部分内容可能已写入")
+        except (ValueError, OSError, httpx.HTTPError) as exc:
+            if changed and not isinstance(exc, ImageWriteError):
+                raise ImageWriteError(sync_error(exc)) from exc
+            raise
+        return changed

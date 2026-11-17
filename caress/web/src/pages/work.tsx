@@ -175,7 +175,7 @@ export default function Work({
               <p className="wrap-anywhere text-sm text-muted-foreground">
                 原始标题：{work.original_title || empty}
               </p>
-              {work.error && <Alert role="alert">{work.error}</Alert>}
+              {!writing && work.error && <Alert role="alert">{work.error}</Alert>}
               <div className="flex flex-wrap items-center gap-2">
                 {work.status !== "unsupported" && (
                   <Select

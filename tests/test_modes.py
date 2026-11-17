@@ -626,7 +626,9 @@ async def test_failed_scrape_without_changes_preserves_failure(flow):
 
 
 @pytest.mark.asyncio
-async def test_force_clears_missing_fields_preserving_unmanaged_data_and_images(flow):
+async def test_force_clears_missing_fields_and_backdrops_preserving_unmanaged_data(
+    flow,
+):
     original = deepcopy(flow.items["1"])
     pictures = deepcopy(flow.images["1"])
     flow.metadata = SourceMetadata(code="ABC-123", title="new title")
@@ -752,3 +754,88 @@ async def test_unreadable_existing_backdrop_is_nonfatal_and_not_duplicated(
     assert row["status"] == "success" and "invalid image" in str(row["warnings"])
     assert flow.items["1"]["Overview"] == "source plot"
     assert flow.images["1"] == original
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kind,before_write,action",
+    [
+        ("Backdrop", True, "force"),
+        ("Backdrop", False, "force"),
+        ("Backdrop", False, "scrape"),
+        ("Portrait", False, "force"),
+    ],
+)
+async def test_optional_image_readback_failure_never_restores_record_after_write(
+    flow, monkeypatch, kind, before_write, action
+):
+    original = flow.items["1"]
+    flow.metadata = SourceMetadata(
+        code="ABC-123",
+        title=original["Name"],
+        original_title=original["OriginalTitle"],
+        plot=original["Overview"],
+        year=2020,
+        release_date=date(2020, 1, 2),
+        studio="manual studio",
+        actors=[Actor(name="Actor")],
+        directors=["Director"],
+        genres=["manual genre"],
+        tags=["user tag"],
+    )
+    flow.artwork = [
+        ("Backdrop", image_bytes("yellow" if kind == "Backdrop" else "blue"))
+    ]
+    code, identity, _ = identify(original)
+    runtime = flow.service.runtime
+    runtime.save_record(
+        "s", "1", identity, code, "failed", error="previous failure", source="javdb"
+    )
+    previous = runtime.record("s", "1", identity, code)
+    if kind == "Portrait":
+        flow.images["p"] = {"Primary": [image_bytes("red")]}
+        flow.mappings = [
+            {"name": "Actor", "portrait": PortraitMatch("Actor", "https://portrait")}
+        ]
+
+        async def save(self, match):
+            folder = self.output / "actors"
+            folder.mkdir(exist_ok=True)
+            (folder / "Actor.png").write_bytes(image_bytes("yellow"))
+            return {"status": "saved"}
+
+        monkeypatch.setattr("caress.portraits.Gfriends.save", save)
+    image = EmbyClient.image
+
+    async def readback(client, ident, image_kind, index=0, **kwargs):
+        target = ident == ("p" if kind == "Portrait" else "1") and image_kind == (
+            "Primary" if kind == "Portrait" else kind
+        )
+        written = (
+            "Items/p/Images/Primary"
+            if kind == "Portrait"
+            else "Items/1/Images/Backdrop"
+        ) in flow.posts
+        if target and (before_write or written):
+            raise ValueError("image readback failed")
+        return await image(client, ident, image_kind, index, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(EmbyClient, "image", readback)
+        row = (await flow.run(action))[0]
+    assert "Items/1" not in flow.posts  # Metadata is identical in every scenario.
+    assert "image readback failed" in str(row["warnings"])
+    record = runtime.record("s", "1", identity, code)
+    if before_write:
+        assert row["status"] == "skipped" and record == previous and not flow.posts
+    else:
+        assert row["status"] == "success" and record["status"] == "success"
+        assert record["source"] == "dmm" and record != previous
+        if kind == "Backdrop":
+            assert flow.images["1"]["Backdrop"] == [
+                image_bytes("blue"),
+                image_bytes("yellow"),
+            ]
+        assert (await flow.run("force"))[0]["status"] == "success"
+        if kind == "Backdrop":
+            assert flow.images["1"]["Backdrop"] == [image_bytes("yellow")]
