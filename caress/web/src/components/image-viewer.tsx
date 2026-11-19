@@ -88,9 +88,7 @@ export function ImageViewer({
   const frame = useRef<HTMLDivElement>(null);
   const touch = useRef<{ x: number; y: number } | null>(null);
   function move(delta: number) {
-    const next = Math.min(images.length - 1, Math.max(0, index + delta));
-    if (next === 0 || next === images.length - 1) frame.current?.focus();
-    setIndex(next);
+    setIndex((current) => (current + delta + images.length) % images.length);
   }
   return (
     <Dialog
@@ -166,7 +164,7 @@ export function ImageViewer({
             className="text-neutral-100 hover:bg-white/10 hover:text-white dark:hover:bg-white/10"
             data-image-navigation=""
             aria-label="上一张"
-            disabled={index === 0}
+            disabled={images.length < 2}
             onClick={() => move(-1)}
           >
             <ArrowLeft />
@@ -186,7 +184,7 @@ export function ImageViewer({
             className="text-neutral-100 hover:bg-white/10 hover:text-white dark:hover:bg-white/10"
             data-image-navigation=""
             aria-label="下一张"
-            disabled={index === images.length - 1}
+            disabled={images.length < 2}
             onClick={() => move(1)}
           >
             <ArrowRight />

@@ -41,7 +41,6 @@ export function BatchProgress({
     (i) => i.error || i.warnings?.length || i.note,
   );
   const cancelled = batch.items.filter((i) => i.status === "cancelled").length;
-  const warned = new Set(details.filter((i) => i.warnings?.length).map((i) => i.id)).size;
   const interrupted = batch.status === "interrupted";
   const heading = busy
     ? `处理中 · ${done}/${batch.items.length}`
@@ -60,7 +59,6 @@ export function BatchProgress({
           {heading}
           {` · ${batch.items.filter((i) => i.status === "success").length} 成功 · ${batch.items.filter((i) => i.status === "failed").length} 失败 · ${batch.items.filter((i) => i.status === "skipped").length} 跳过`}
           {cancelled > 0 && ` · ${cancelled} ${interrupted ? "中断" : "取消"}`}
-          {warned > 0 && ` · ${warned} 部作品有警告`}
         </p>
         {busy && (
           <Button size="sm" variant="outline" onClick={cancel} disabled={stopping}>
@@ -102,7 +100,7 @@ export function BatchProgress({
               {batch.error}
             </p>
           )}
-          <ul className="mt-2 max-h-48 space-y-2 overflow-auto wrap-anywhere">
+          <ul className="mt-2 max-h-[min(24rem,55dvh)] space-y-2 overflow-auto wrap-anywhere">
             {details.map((item, index) => {
               const error =
                 item.status === "cancelled"
@@ -123,8 +121,8 @@ export function BatchProgress({
                     </span>
                   )}
                   {item.note && <span>跳过 · {item.note}</span>}
-                  {item.warnings?.map((message, warningIndex) => (
-                    <p key={warningIndex} className="text-muted-foreground">
+                  {Array.from(new Set(item.warnings), (message) => (
+                    <p key={message} className="text-muted-foreground">
                       警告 · {message}
                     </p>
                   ))}

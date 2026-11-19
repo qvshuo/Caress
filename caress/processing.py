@@ -126,7 +126,7 @@ class WorkProcessor:
             metadata,
             result.selected_source.value,
             errors=[
-                ("Backdrop", error)
+                ("Backdrop", f"{source_result.source}：{error}")
                 for source_result in result.results
                 if source_result.source == result.selected_source
                 for error in source_result.backdrop_errors
@@ -175,7 +175,10 @@ class WorkProcessor:
                     prepared.images.extend((kind, path) for kind in kinds)
                 except (FetchError, ValueError, OSError) as exc:
                     prepared.errors.extend(
-                        (kind, f"{'封面' if kind == 'Primary' else '背景图'}：{exc}")
+                        (
+                            kind,
+                            f"{'封面' if kind == 'Primary' else '背景图'}（{candidate.source}）：{exc}",
+                        )
                         for kind in kinds
                     )
             return prepared

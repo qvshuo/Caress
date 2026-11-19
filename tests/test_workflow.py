@@ -1267,6 +1267,31 @@ async def test_cancelled_preparation_removes_partial_image_directory(
 
 
 @pytest.mark.asyncio
+async def test_image_preparation_errors_name_the_source(preparing, monkeypatch):
+    from caress.http import FetchError
+    from caress.models import SourceId, Status
+
+    processor, _ = preparing
+    result = processor.scraper.scrape.return_value
+    result.metadata.artwork = [
+        candidate.model_copy(update={"source": SourceId.JAVBUS})
+        for candidate in result.metadata.artwork
+    ]
+    result.results[0].backdrop_errors = ["剧照获取失败"]
+    failure = "当前网络地区访问受限"
+    monkeypatch.setattr(
+        "caress.processing.fetch_artwork",
+        AsyncMock(side_effect=FetchError(Status.REGION_BLOCKED, failure)),
+    )
+    prepared = await processor.prepare("ABC-123")
+    assert prepared.errors == [
+        ("Backdrop", "dmm：剧照获取失败"),
+        ("Primary", f"封面（javbus）：{failure}"),
+        ("Backdrop", f"背景图（javbus）：{failure}"),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_shared_original_is_downloaded_once_and_primary_is_cropped_only_on_demand(
     preparing, monkeypatch
 ):

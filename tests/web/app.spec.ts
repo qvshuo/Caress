@@ -554,9 +554,10 @@ test("portraits reserve space and gallery supports buttons and keyboard", async 
   await expect(dialog.getByText("2 / 3", { exact: true })).toBeVisible();
   await dialog.getByRole("button", { name: "下一张" }).click();
   await expect(dialog.getByText("3 / 3", { exact: true })).toBeVisible();
-  await expect(dialog.getByRole("button", { name: "下一张" })).toBeDisabled();
+  await dialog.getByRole("button", { name: "下一张" }).click();
+  await expect(dialog.getByText("1 / 3", { exact: true })).toBeVisible();
   await page.keyboard.press("ArrowLeft");
-  await expect(dialog.getByText("2 / 3", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("3 / 3", { exact: true })).toBeVisible();
   await page.setViewportSize({ width: 375, height: 812 });
   expect((await dialog.boundingBox())!.width).toBe(375);
   expect((await dialog.boundingBox())!.height).toBe(812);
@@ -574,7 +575,7 @@ test("portraits reserve space and gallery supports buttons and keyboard", async 
       }),
     );
   });
-  await expect(dialog.getByText("3 / 3", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("1 / 3", { exact: true })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
   await expect(page.getByRole("list", { name: "媒体文件" })).toBeVisible();
@@ -759,7 +760,11 @@ test("completed batch is a compact summary with optional errors", async ({
         status: "finished",
         current: [],
         items: [
-          { id: "1", status: "success", warnings: ["演员查询被拒绝", "未获取到封面"] },
+          { id: "1", status: "success", warnings: [
+            "背景图（javbus）：当前网络地区访问受限",
+            "背景图（javbus）：当前网络地区访问受限",
+            "未获取到封面",
+          ] },
           { id: "2", status: "failed", error: "来源暂不可用" },
           { id: "3", status: "skipped", note: "本次来源数据未产生变更" },
           { id: "1", status: "skipped", warnings: ["未获取到新封面"] },
@@ -769,7 +774,8 @@ test("completed batch is a compact summary with optional errors", async ({
   );
   await page.goto("/");
   const batch = page.getByRole("region", { name: "当前批次" });
-  await expect(batch).toContainText("已结束 · 1 成功 · 1 失败 · 2 跳过 · 1 部作品有警告");
+  await expect(batch).toContainText("已结束 · 1 成功 · 1 失败 · 2 跳过");
+  await expect(batch).not.toContainText("部作品有警告");
   await expect(batch.getByText(/^当前：/)).toHaveCount(0);
   await expect(batch.getByText(/^等待：/)).toHaveCount(0);
   await expect(batch.getByRole("progressbar")).toHaveCount(0);
@@ -778,7 +784,8 @@ test("completed batch is a compact summary with optional errors", async ({
   ).not.toBeVisible();
   await batch.locator("summary").click();
   await expect(batch).toContainText("来源暂不可用");
-  await expect(batch).toContainText("警告 · 演员查询被拒绝");
+  await expect(batch.getByText("警告 · 背景图（javbus）：当前网络地区访问受限", { exact: true })).toHaveCount(1);
+  await expect(batch).toContainText("警告 · 未获取到封面");
   await expect(batch).toContainText("跳过 · 本次来源数据未产生变更");
   await expect(batch.getByRole("button", { name: "关闭", exact: true })).toHaveCount(0);
   await expect(batch).toBeVisible();
@@ -901,6 +908,8 @@ test("image retry bypasses failed cache and a new URL starts cleanly", async ({
   await page.getByRole("button", { name: "查看封面" }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByRole("alert")).toHaveText("图片加载失败");
+  await expect(dialog.getByRole("button", { name: "上一张" })).toBeDisabled();
+  await expect(dialog.getByRole("button", { name: "下一张" })).toBeDisabled();
   const retry = dialog.getByRole("button", { name: "重试加载图片" });
   await retry.focus();
   await page.keyboard.press("Enter");

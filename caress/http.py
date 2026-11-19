@@ -140,7 +140,7 @@ def response_issue(page: Page) -> tuple[Status, str] | None:
     ):
         return Status.IP_BLOCKED, "来源拒绝当前网络访问"
     if "not-available-in-your-region" in path or "not available in your region" in text:
-        return Status.REGION_BLOCKED, "当前网络地区无法访问此来源"
+        return Status.REGION_BLOCKED, "当前网络地区访问受限"
     if "/login" in path or "log in  fc2" in text[:1000] or "此內容需要登入" in text:
         return Status.LOGIN_REQUIRED, "来源要求登录"
     if text.lstrip("\ufeff \t\r\n").startswith("<"):
