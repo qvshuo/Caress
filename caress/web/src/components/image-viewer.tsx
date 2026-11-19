@@ -29,8 +29,8 @@ export function ArtworkImage({
   if (src && failed)
     return (
       <span
-        role="img"
-        aria-label={fallback ? "头像加载失败" : "图片加载失败"}
+        role={retryable ? undefined : "img"}
+        aria-label={retryable ? undefined : fallback ? "头像加载失败" : "图片加载失败"}
         className={cn(
           "inline-flex items-center justify-center bg-muted text-muted-foreground",
           className,
@@ -38,12 +38,13 @@ export function ArtworkImage({
       >
         {fallback || (
           <span className="grid justify-items-center gap-2 text-sm">
-            <ImageOff className="size-6" />
-            <span>图片加载失败</span>
+            <ImageOff aria-hidden="true" className="size-6" />
+            <span role={retryable ? "alert" : undefined}>图片加载失败</span>
             {retryable && (
               <Button
                 size="sm"
                 variant="ghost"
+                aria-label="重试加载图片"
                 onClick={() => {
                   setFailed(false);
                   setRetry((value) => Math.max(value + 1, Date.now()));

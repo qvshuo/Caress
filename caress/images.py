@@ -28,7 +28,6 @@ class ImageData:
     format: str
     width: int
     height: int
-    decoded: bool
 
     @property
     def mime(self):
@@ -44,12 +43,6 @@ class PngOutput(BytesIO):
         return super().write(data)
 
 
-def image_signature(data: bytes) -> bool:
-    return data.startswith(
-        (b"\xff\xd8\xff", b"\x89PNG\r\n\x1a\n", b"GIF87a", b"GIF89a")
-    ) or (data.startswith(b"RIFF") and data[8:12] == b"WEBP")
-
-
 def placeholder_url(source, url):
     if source != SourceId.DMM:
         return False
@@ -60,16 +53,9 @@ def placeholder_url(source, url):
     )
 
 
-def validate_image(data: bytes, source: SourceId | None = None) -> ImageData:
-    """Validate real image bytes; decode JavDB App's key-prefixed XOR envelope."""
+def validate_image(data: bytes) -> ImageData:
     if len(data) > 32 * 1024 * 1024:
         raise ValueError("图片超过 32 MiB")
-    decoded = False
-    if not image_signature(data) and source == SourceId.JAVDB and len(data) > 16:
-        key = data[0]
-        if image_signature(bytes(value ^ key for value in data[1:17])):
-            data = bytes(value ^ key for value in data[1:])
-            decoded = True
     try:
         with Image.open(BytesIO(data), formats=("JPEG", "PNG", "WEBP", "GIF")) as image:
             width, height = image.size
@@ -79,7 +65,7 @@ def validate_image(data: bytes, source: SourceId | None = None) -> ImageData:
             if width * height > 40_000_000:
                 raise ValueError("图片超过 4000 万像素")
             image.load()
-        return ImageData(data, image_format.lower(), width, height, decoded)
+        return ImageData(data, image_format.lower(), width, height)
     except (
         UnidentifiedImageError,
         OSError,
@@ -117,7 +103,6 @@ async def fetch_artwork(client, candidate):
             await client.image_bytes(
                 candidate.source, candidate.url, candidate.referer
             ),
-            candidate.source,
         )
     ).content
 

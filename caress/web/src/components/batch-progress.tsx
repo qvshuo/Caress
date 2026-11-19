@@ -41,6 +41,7 @@ export function BatchProgress({
     (i) => i.error || i.warnings?.length || i.note,
   );
   const cancelled = batch.items.filter((i) => i.status === "cancelled").length;
+  const warned = details.filter((i) => i.warnings?.length).length;
   const heading = busy
     ? `处理中 · ${done}/${batch.items.length}`
     : batch.status === "cancelled"
@@ -58,6 +59,7 @@ export function BatchProgress({
           {heading}
           {` · ${batch.items.filter((i) => i.status === "success").length} 成功 · ${batch.items.filter((i) => i.status === "failed").length} 失败 · ${batch.items.filter((i) => i.status === "skipped").length} 跳过`}
           {cancelled > 0 && ` · ${cancelled} 取消`}
+          {warned > 0 && ` · 有警告 ${warned} 项`}
         </p>
         {busy && (
           <Button size="sm" variant="outline" onClick={cancel} disabled={stopping}>

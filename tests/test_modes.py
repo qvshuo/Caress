@@ -59,6 +59,7 @@ async def flow(tmp_path, monkeypatch):
         prepared=0,
         during=None,
         fail_image=False,
+        image_error=None,
         block_image=None,
         write_started=asyncio.Event(),
     )
@@ -122,6 +123,10 @@ async def flow(tmp_path, monkeypatch):
         if request.method == "POST":
             if state.block_image:
                 await state.block_image.wait()
+            if state.image_error == "timeout":
+                raise httpx.ReadTimeout("image upload timed out", request=request)
+            if state.image_error is not None:
+                return httpx.Response(state.image_error)
             if state.fail_image:
                 return httpx.Response(503)
             state.posts.append(path)
@@ -478,6 +483,25 @@ async def test_failed_poster_is_only_fatal_when_that_poster_is_requested(flow, r
     assert flow.images["1"]["Primary"] == [image_bytes("red", size=(60, 90))]
     if not replace:
         assert "poster: crop failed" in rows[0]["warnings"]
+    else:
+        assert "封面准备失败" in rows[0]["error"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("has_primary", [True, False])
+async def test_force_without_poster_candidate_keeps_existing_primary(flow, has_primary):
+    if not has_primary:
+        del flow.images["1"]["Primary"]
+    primary = deepcopy(flow.images["1"].get("Primary"))
+    flow.artwork = [("Backdrop", image_bytes("yellow"))]
+    row = (await flow.run("force"))[0]
+    assert row["status"] == "success"
+    assert row["warnings"] == [
+        "未获取到新封面，已保留原封面" if has_primary else "未获取到封面"
+    ]
+    assert flow.images["1"].get("Primary") == primary
+    assert flow.images["1"]["Backdrop"] == [image_bytes("yellow")]
+    assert flow.items["1"]["Overview"] == "source plot"
 
 
 def test_fill_merges_only_filename_tags_into_nonempty_user_tags():
@@ -579,7 +603,7 @@ async def test_uncroppable_required_primary_preserves_all_existing_data(
     flow.items["1"]["Overview"] = ""
     flow.artwork = [("Primary", image_bytes(size=(1, 1)))]
     rows = await flow.run("force")
-    assert rows[0]["status"] == "failed" and "Primary" in rows[0]["error"]
+    assert rows[0]["status"] == "failed" and "封面准备失败" in rows[0]["error"]
     assert flow.items["1"]["Overview"] == "" and not flow.posts
     assert flow.images["1"]["Primary"] == [image_bytes("red", size=(60, 90))]
 
@@ -758,16 +782,19 @@ async def test_unreadable_existing_backdrop_is_nonfatal_and_not_duplicated(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "kind,before_write,action",
+    "kind,failure,action,warning,may_write",
     [
-        ("Backdrop", True, "force"),
-        ("Backdrop", False, "force"),
-        ("Backdrop", False, "scrape"),
-        ("Portrait", False, "force"),
+        ("Backdrop", "before", "force", "image readback failed", False),
+        ("Backdrop", 403, "force", "HTTP 403", False),
+        ("Backdrop", "timeout", "force", "Emby 请求超时", True),
+        ("Backdrop", 503, "scrape", "HTTP 503", True),
+        ("Backdrop", "readback", "force", "image readback failed", True),
+        ("Backdrop", "readback", "scrape", "image readback failed", True),
+        ("Portrait", "readback", "force", "image readback failed", True),
     ],
 )
-async def test_optional_image_readback_failure_never_restores_record_after_write(
-    flow, monkeypatch, kind, before_write, action
+async def test_optional_image_failure_preserves_record_only_when_no_write_is_possible(
+    flow, monkeypatch, kind, failure, action, warning, may_write
 ):
     original = flow.items["1"]
     flow.metadata = SourceMetadata(
@@ -816,22 +843,27 @@ async def test_optional_image_readback_failure_never_restores_record_after_write
             if kind == "Portrait"
             else "Items/1/Images/Backdrop"
         ) in flow.posts
-        if target and (before_write or written):
+        if target and (failure == "before" or failure == "readback" and written):
             raise ValueError("image readback failed")
         return await image(client, ident, image_kind, index, **kwargs)
 
     with monkeypatch.context() as patch:
         patch.setattr(EmbyClient, "image", readback)
+        if failure not in ("before", "readback"):
+            flow.image_error = failure
         row = (await flow.run(action))[0]
+        flow.image_error = None
     assert "Items/1" not in flow.posts  # Metadata is identical in every scenario.
-    assert "image readback failed" in str(row["warnings"])
+    assert any(warning in message for message in row["warnings"])
+    if action == "force" and kind == "Backdrop":
+        assert any("可能已写入" in message for message in row["warnings"]) == may_write
     record = runtime.record("s", "1", identity, code)
-    if before_write:
+    if not may_write:
         assert row["status"] == "skipped" and record == previous and not flow.posts
     else:
         assert row["status"] == "success" and record["status"] == "success"
         assert record["source"] == "dmm" and record != previous
-        if kind == "Backdrop":
+        if kind == "Backdrop" and failure == "readback":
             assert flow.images["1"]["Backdrop"] == [
                 image_bytes("blue"),
                 image_bytes("yellow"),

@@ -186,16 +186,13 @@ class WorkProcessor:
 
     async def prepare_write(self, client, item, prepared, images, *, replace):
         warnings = []
-        needs_poster = replace or not any(
-            row["ImageType"] == "Primary" for row in images
-        )
-        if needs_poster:
+        has_primary = any(row["ImageType"] == "Primary" for row in images)
+        if replace or not has_primary:
             errors = [message for kind, message in prepared.errors if kind == "Primary"]
             if errors:
                 raise ValueError("封面准备失败：" + "; ".join(errors))
-            for kind, path in prepared.images:
-                if kind != "Primary":
-                    continue
+            path = next((p for kind, p in prepared.images if kind == "Primary"), None)
+            if path is not None:
                 async with prepared.poster_lock:
                     poster = path.parent / "poster.png"
                     if not poster.exists():
@@ -207,7 +204,11 @@ class WorkProcessor:
                                 poster.write_bytes, result["content"]
                             )
                         except (ValueError, OSError) as exc:
-                            raise ValueError(f"Primary: {exc}") from exc
+                            raise ValueError(f"封面准备失败：{exc}") from exc
+            elif replace:
+                warnings.append(
+                    "未获取到新封面，已保留原封面" if has_primary else "未获取到封面"
+                )
         async with self.people_lock:
             actors = [p for p in item.get("People", []) if p.get("Type") == "Actor"]
             for mapping in prepared.mappings:
@@ -258,8 +259,11 @@ class WorkProcessor:
                 ]
                 changed = await client.replace_backdrops(ident, backdrops) or changed
             except (ValueError, OSError, httpx.HTTPError) as exc:
-                changed = isinstance(exc, ImageWriteError) or changed
-                warnings.append(f"背景图重建未完成，部分图片可能已写入：{exc}")
+                if isinstance(exc, ImageWriteError):
+                    changed = True
+                    warnings.append(f"背景图重建未完成，部分图片可能已写入：{exc}")
+                else:
+                    warnings.append("背景图重建未完成：" + sync_error(exc))
         signatures = set()
         if not replace and any(kind == "Backdrop" for kind, _ in prepared.images):
             try:
@@ -298,7 +302,7 @@ class WorkProcessor:
                     )
                 except (ValueError, OSError, httpx.HTTPError) as exc:
                     changed = isinstance(exc, ImageWriteError) or changed
-                    warnings.append(f"背景图补齐失败：{exc}")
+                    warnings.append("背景图补齐失败：" + sync_error(exc))
         # Portraits are linked through the Person IDs returned by Emby.
         async with self.people_lock:
             for mapping in prepared.mappings:

@@ -4,7 +4,6 @@ import pytest
 from PIL import Image
 
 from caress.images import crop_box, crop_poster, validate_image
-from caress.models import SourceId
 
 
 def image_bytes(color="red", size=(120, 90)):
@@ -46,15 +45,6 @@ def test_crop_is_lossless_two_by_three_without_resampling(format, mode):
 def test_rejects_invalid_image_bytes(data):
     with pytest.raises(ValueError):
         validate_image(data)
-
-
-def test_javdb_envelope_preserves_decoded_bytes():
-    data = image_bytes()
-    key = 42
-    wrapped = bytes([key]) + bytes(value ^ key for value in data)
-    decoded = validate_image(wrapped, SourceId.JAVDB)
-    assert decoded.content == data
-    assert decoded.decoded
 
 
 @pytest.mark.parametrize(

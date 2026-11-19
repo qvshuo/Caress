@@ -756,7 +756,7 @@ test("completed batch is a compact summary with optional errors", async ({
         status: "finished",
         current: [],
         items: [
-          { id: "1", status: "success", warnings: ["演员查询被拒绝"] },
+          { id: "1", status: "success", warnings: ["演员查询被拒绝", "未获取到封面"] },
           { id: "2", status: "failed", error: "来源暂不可用" },
           { id: "3", status: "skipped", note: "本次来源数据未产生变更" },
         ],
@@ -765,7 +765,7 @@ test("completed batch is a compact summary with optional errors", async ({
   );
   await page.goto("/");
   const batch = page.getByRole("region", { name: "当前批次" });
-  await expect(batch).toContainText("已结束 · 1 成功 · 1 失败 · 1 跳过");
+  await expect(batch).toContainText("已结束 · 1 成功 · 1 失败 · 1 跳过 · 有警告 1 项");
   await expect(batch.getByText(/^当前：/)).toHaveCount(0);
   await expect(batch.getByText(/^等待：/)).toHaveCount(0);
   await expect(batch.getByRole("progressbar")).toHaveCount(0);
@@ -896,7 +896,10 @@ test("image retry bypasses failed cache and a new URL starts cleanly", async ({
   await page.goto("/#library/work/1");
   await page.getByRole("button", { name: "查看封面" }).click();
   const dialog = page.getByRole("dialog");
-  await dialog.getByRole("button", { name: "重试", exact: true }).click();
+  await expect(dialog.getByRole("alert")).toHaveText("图片加载失败");
+  const retry = dialog.getByRole("button", { name: "重试加载图片" });
+  await retry.focus();
+  await page.keyboard.press("Enter");
   await expect(
     dialog.getByRole("img", { name: "封面", exact: true }),
   ).toBeVisible();

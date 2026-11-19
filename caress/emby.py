@@ -391,19 +391,29 @@ class EmbyClient:
                     raise ValueError("Emby 图片超过 32 MiB")
         return await asyncio.to_thread(validate_image, bytes(data))
 
+    async def _write_image(self, method, path, **kwargs):
+        try:
+            await self.request(method, path, **kwargs)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code < 500:
+                raise
+            raise ImageWriteError(sync_error(exc)) from exc
+        except (httpx.RequestError, ValueError) as exc:
+            raise ImageWriteError(sync_error(exc)) from exc
+
     async def upload(self, ident, kind, data, index=None):
         info = await asyncio.to_thread(validate_image, data)
         mime = info.mime
         path = f"Items/{ident}/Images/{kind}" + (
             f"/{index}" if index is not None else ""
         )
+        await self._write_image(
+            "POST",
+            path,
+            content=base64.b64encode(data),
+            headers={"Content-Type": mime},
+        )
         try:
-            await self.request(
-                "POST",
-                path,
-                content=base64.b64encode(data),
-                headers={"Content-Type": mime},
-            )
             saved = await self.image_info(ident)
             if index is None and kind == "Backdrop":
                 index = max(
@@ -490,11 +500,11 @@ class EmbyClient:
             for row in sorted(
                 previous, key=lambda row: row.get("ImageIndex", 0), reverse=True
             ):
-                changed = True
-                await self.request(
+                await self._write_image(
                     "DELETE",
                     f"Items/{ident}/Images/Backdrop/{row.get('ImageIndex', 0)}",
                 )
+                changed = True
             saved = [
                 row
                 for row in await self.image_info(ident)
