@@ -111,7 +111,7 @@ def project(item, runtime, server):
         ],
         "media": [m.model_dump(mode="json") for m in media],
         "status": status,
-        "error": error or (record["error"] if record else None),
+        "error": error or (record["error"] if record and record["status"] != "success" else None),
         "last_result": record["status"] if record else None,
         "source": record["source"] if record else None,
         "succeeded_at": record["succeeded_at"] if record else None,

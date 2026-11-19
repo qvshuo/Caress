@@ -688,6 +688,31 @@ async def test_force_source_failure_does_not_clear_existing_metadata(flow, monke
 
 
 @pytest.mark.asyncio
+async def test_scrape_retries_missing_backdrop_after_partial_success(flow, monkeypatch):
+    flow.images["1"]["Backdrop"] = []
+    flow.artwork = [("Backdrop", image_bytes(color)) for color in ("yellow", "green")]
+    upload = EmbyClient.upload
+
+    async def fail_second(client, ident, kind, data, index=None):
+        if data == image_bytes("green"):
+            raise ValueError("upload unavailable")
+        return await upload(client, ident, kind, data, index)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(EmbyClient, "upload", fail_second)
+        first = (await flow.run())[0]
+        assert first["status"] == "success" and "upload unavailable" in str(first["warnings"])
+        assert flow.images["1"]["Backdrop"] == [image_bytes("yellow")]
+        assert (await flow.run())[0]["status"] == "skipped"
+
+    assert (await flow.run())[0]["status"] == "success"
+    assert flow.images["1"]["Backdrop"] == [image_bytes("yellow"), image_bytes("green")]
+    prepared = flow.prepared
+    assert (await flow.run())[0]["status"] == "skipped"
+    assert flow.prepared == prepared
+
+
+@pytest.mark.asyncio
 async def test_rebuild_upload_failure_keeps_old_backdrops_until_retry(
     flow, monkeypatch
 ):

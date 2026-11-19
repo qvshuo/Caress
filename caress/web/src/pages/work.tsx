@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
 import { Empty } from "@/components/ui/empty";
 import { Status } from "@/components/status";
-import { ArtworkImage, ImageViewer } from "@/components/image-viewer";
+import { ArtworkImage, ImageViewer, type ViewerImage } from "@/components/image-viewer";
 import { Select } from "@/components/form-controls";
 import { api } from "@/lib/api";
 import { actions, sourceLabels } from "@/lib/labels";
@@ -54,11 +54,10 @@ export default function Work({
     [action, setAction] = useState<Action>("scrape"),
     [source, setSource] = useState<Source | "">(""),
     [crop, setCrop] = useState(false),
-    [viewer, setViewer] = useState<number | null>(null);
+    [viewer, setViewer] = useState<{ images: ViewerImage[]; index: number } | null>(null);
   useEffect(() => {
     const abort = new AbortController();
     setError("");
-    setWork(null);
     void api<WorkRecord>(`works/${id}`, "GET", undefined, abort.signal)
       .then((value) => {
         if (!abort.signal.aborted) setWork(value);
@@ -139,7 +138,7 @@ export default function Work({
                   type="button"
                   aria-label="查看封面"
                   className="block w-full max-w-40 rounded-lg sm:max-w-full outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  onClick={() => setViewer(0)}
+                  onClick={() => setViewer({ images, index: 0 })}
                 >
                   <ArtworkImage
                     key={work.poster}
@@ -284,7 +283,7 @@ export default function Work({
                     type="button"
                     aria-label={`查看图片 ${index + 1}`}
                     className="overflow-hidden rounded-md bg-muted outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    onClick={() => setViewer(index + (work.poster ? 1 : 0))}
+                    onClick={() => setViewer({ images, index: index + (work.poster ? 1 : 0) })}
                   >
                     <ArtworkImage
                       src={url}
@@ -326,27 +325,27 @@ export default function Work({
               </li>
             ))}
           </ul>
-          {viewer !== null && images.length > 0 && (
-            <ImageViewer
-              images={images}
-              initialIndex={viewer}
-              close={() => setViewer(null)}
-            />
-          )}
-          {crop && (
-            <Suspense fallback={<Empty>正在加载…</Empty>}>
-              <CropEditor
-                id={id}
-                busy={writing}
-                close={() => setCrop(false)}
-                applied={() => {
-                  setCrop(false);
-                  refresh();
-                }}
-              />
-            </Suspense>
-          )}
         </>
+      )}
+      {viewer && (
+        <ImageViewer
+          images={viewer.images}
+          initialIndex={viewer.index}
+          close={() => setViewer(null)}
+        />
+      )}
+      {crop && (
+        <Suspense fallback={<Empty>正在加载…</Empty>}>
+          <CropEditor
+            id={id}
+            busy={writing}
+            close={() => setCrop(false)}
+            applied={() => {
+              setCrop(false);
+              refresh();
+            }}
+          />
+        </Suspense>
       )}
     </div>
   );

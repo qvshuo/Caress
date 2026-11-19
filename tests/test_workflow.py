@@ -281,7 +281,7 @@ class FakeProcessor:
         self.writes.append(ident)
         if ident in self.fail:
             raise ValueError("图片写入失败；元数据可能已写入")
-        return [], True
+        return [], True, False
 
     async def finish(self):
         pass
@@ -364,6 +364,50 @@ async def test_api_secrets_confirmation_and_offline_response(tmp_path, monkeypat
         assert (
             await client.put("/api/works/1", json={"title": "not allowed"})
         ).status_code == 405
+
+
+@pytest.mark.asyncio
+async def test_batch_start_waits_for_settings_to_take_effect(tmp_path, monkeypatch):
+    app = create_app(Settings(
+        database=tmp_path / "db.sqlite3",
+        emby=EmbySettings(url="http://emby", api_key="test", library_ids=["old"]),
+    ))
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://caress") as client,
+    ):
+        service = app.state.service
+        start = Mock(side_effect=lambda *args: {"libraries": service.settings.emby.library_ids})
+        monkeypatch.setattr(service.batches, "start", start)
+        entered = asyncio.Event()
+        configure = service.configure
+
+        async def configure_after_lock(settings):
+            entered.set()
+            await configure(settings)
+
+        monkeypatch.setattr(service, "configure", configure_after_lock)
+        async with service.crop_lock:
+            saving = asyncio.create_task(client.put("/api/settings", json={
+                "emby": {"url": "http://emby", "library_ids": ["new"]},
+            }))
+            await entered.wait()
+            starting = asyncio.create_task(client.post("/api/batch", json={"ids": ["1"]}))
+            await asyncio.sleep(0)
+            start.assert_not_called()
+        assert (await saving).status_code == 200
+        assert (await starting).json() == {"libraries": ["new"]}
+
+
+@pytest.mark.asyncio
+async def test_list_queries_reuse_projection_until_refresh(fake_batch):
+    service = fake_batch
+    initial = await service.works(refresh=True)
+    FakeClient.movies["1"]["Name"] = "Updated in Emby"
+    assert await service.works(refresh=False) is initial
+    refreshed = await service.works(refresh=True)
+    assert refreshed[0]["title"] == "Updated in Emby"
+    assert await service.works(refresh=False) is refreshed
 
 
 @pytest.mark.asyncio
@@ -465,13 +509,13 @@ async def test_crop_opens_local_backdrop_without_source_or_face_detection(
         client.image_info.return_value = []
     calls = []
 
-    def crop(data, box=None, center=False):
-        calls.append(center)
-        return crop_poster(data, box, center)
+    def crop(data, box=None, center=False, *, preview=False):
+        calls.append((center, preview))
+        return crop_poster(data, box, center, preview=preview)
 
     monkeypatch.setattr(service_module, "crop_poster", crop)
     result = await service.crop_source("1", "dmm", fetch_source=fetch_source)
-    assert calls == [True]
+    assert calls == [(True, True)]
     assert result["box"][2] * 3 == result["box"][3] * 2
     if has_backdrop and not fetch_source:
         source.cover.assert_not_awaited()
@@ -917,7 +961,7 @@ async def test_cancellation_after_write_boundary_waits_for_completion(
         await finish.wait()
         if failure:
             raise ValueError("写入失败")
-        return [], True
+        return [], True, False
 
     monkeypatch.setattr(FakeProcessor, "write", write)
     fake_batch.batches.start(["1"], "force", None)
@@ -1827,8 +1871,8 @@ async def test_source_gallery_failure_preserves_backdrops_during_rebuild(
         upload=AsyncMock(),
     )
     await processor.prepare_write(client, {}, prepared, [], replace=True)
-    warnings, changed = await processor.write(client, "1", prepared, [], replace=True)
-    assert changed and "剧照" in str(warnings)
+    warnings, changed, retry_backdrops = await processor.write(client, "1", prepared, [], replace=True)
+    assert changed and retry_backdrops and "剧照" in str(warnings)
     client.replace_backdrops.assert_not_awaited()
     client.upload.assert_awaited_once()
     assert client.upload.await_args.args[1] == "Primary"

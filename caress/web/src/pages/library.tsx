@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useRef,
   useState,
   type Dispatch,
   type SetStateAction,
@@ -69,12 +70,14 @@ export function Library({
     [loading, setLoading] = useState(true),
     [error, setError] = useState(""),
     [action, setAction] = useState<Action>("scrape");
+  const requestedRevision = useRef<number | null>(null);
   useEffect(() => {
     const controller = new AbortController();
     setRows([]);
     setError("");
     setSelected(new Set());
     if (!configured) {
+      requestedRevision.current = null;
       setTotal(0);
       setOrder([]);
       setLoading(false);
@@ -83,14 +86,16 @@ export function Library({
     setLoading(true);
     const timer = setTimeout(
       () => {
+        const refresh = requestedRevision.current !== revision;
         void api<{ items: Work[]; total: number; order: WorkNeighbor[] }>(
-          `works?${new URLSearchParams({ q: query, status: filter, offset: String((page - 1) * pageSize), limit: String(pageSize) })}`,
+          `works?${new URLSearchParams({ q: query, status: filter, offset: String((page - 1) * pageSize), limit: String(pageSize), refresh: String(refresh) })}`,
           "GET",
           undefined,
           controller.signal,
         )
           .then((result) => {
             if (controller.signal.aborted) return;
+            requestedRevision.current = revision;
             setRows(result.items);
             setOrder(result.order || []);
             setTotal(result.total);

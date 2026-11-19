@@ -253,7 +253,8 @@ class WorkProcessor:
         existing = await client.image_info(ident)
         has_primary = any(row["ImageType"] == "Primary" for row in existing)
         warnings = [*prepared.warnings, *(message for _, message in prepared.errors)]
-        if replace and not any(kind == "Backdrop" for kind, _ in prepared.errors):
+        retry_backdrops = any(kind == "Backdrop" for kind, _ in prepared.errors)
+        if replace and not retry_backdrops:
             try:
                 backdrops = [
                     (path, prepared.digests[path])
@@ -262,6 +263,7 @@ class WorkProcessor:
                 ]
                 changed = await client.replace_backdrops(ident, backdrops) or changed
             except (ValueError, OSError, httpx.HTTPError) as exc:
+                retry_backdrops = True
                 if isinstance(exc, ImageWriteError):
                     changed = True
                     warnings.append(f"背景图重建未完成，部分图片可能已写入：{exc}")
@@ -272,6 +274,7 @@ class WorkProcessor:
             try:
                 signatures = await client.backdrop_signatures(ident)
             except (ValueError, OSError, httpx.HTTPError) as exc:
+                retry_backdrops = True
                 warnings.append(f"背景图读取失败，未追加图片：{exc}")
                 signatures = None
         for kind, path in prepared.images:
@@ -304,6 +307,7 @@ class WorkProcessor:
                         or changed
                     )
                 except (ValueError, OSError, httpx.HTTPError) as exc:
+                    retry_backdrops = True
                     changed = isinstance(exc, ImageWriteError) or changed
                     warnings.append("背景图补齐失败：" + sync_error(exc))
         # Portraits are linked through the Person IDs returned by Emby.
@@ -346,4 +350,4 @@ class WorkProcessor:
                 except (ValueError, OSError, httpx.HTTPError) as exc:
                     changed = isinstance(exc, ImageWriteError) or changed
                     warnings.append("演员头像写入失败：" + sync_error(exc))
-        return warnings, changed
+        return warnings, changed, retry_backdrops

@@ -155,7 +155,11 @@ def crop_source_image(data: bytes) -> bytes:
 
 
 def crop_poster(
-    data: bytes, box: tuple[int, int, int, int] | None = None, center: bool = False
+    data: bytes,
+    box: tuple[int, int, int, int] | None = None,
+    center: bool = False,
+    *,
+    preview: bool = False,
 ) -> dict:
     from PIL import ImageOps
 
@@ -216,18 +220,14 @@ def crop_poster(
         ):
             raise ValueError("裁剪区域必须在图片内且比例为 2:3")
         cropped = image.crop((x, y, x + w, y + h))
+        if preview:
+            cropped.thumbnail((640, 960))
         output = PngOutput()
-        # Preserve the selected source pixels; JPEG/WebP encoding would add loss.
+        # Preserve the selected pixels when saving the full-size crop.
         cropped.save(output, format="PNG")
-        preview = BytesIO()
-        cropped.thumbnail((640, 960))
-        cropped.save(preview, format="PNG")
         return {
             "content": output.getvalue(),
-            "preview": preview.getvalue(),
             "box": box,
-            "faces": faces,
             "width": width,
             "height": height,
-            "extension": ".png",
         }

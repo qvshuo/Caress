@@ -21,7 +21,6 @@ const work = {
   original_title: "原始标题",
   plot: "Emby 当前简介",
   status: "success",
-  needs_enrichment: false,
   people: [],
   media: [{ path: "/strm/ABC-123.strm", filename: "ABC-123.strm" }],
   studios: [],
@@ -963,12 +962,12 @@ test("work count hierarchy and invalid source order", async ({ page }) => {
   expect(saves).toBe(0);
 });
 
-for (const [status, missing, expected] of [
-  ["success", true, "scrape"],
-  ["success", false, "force"],
-  ["failed", false, "scrape"],
+for (const [status, expected] of [
+  ["success", "scrape"],
+  ["success", "force"],
+  ["failed", "scrape"],
 ] as const) {
-  test(`detail ${status} missing=${missing} executes ${expected} and reloads`, async ({
+  test(`detail ${status} executes ${expected} and reloads`, async ({
     page,
   }) => {
     let body: Record<string, unknown> | undefined;
@@ -978,7 +977,6 @@ for (const [status, missing, expected] of [
         json: {
           ...work,
           status,
-          needs_enrichment: missing,
           title: changed ? "最新数据" : work.title,
         },
       }),
@@ -1168,6 +1166,13 @@ test("both pages share queued progress and completed detail refreshes", async ({
 
 test("source cover replaces crop only on success and failed acquisition remains savable", async ({ page }) => {
   let acquisitions = 0, uploads = 0;
+  let finished = false;
+  await page.route("**/api/batch", (route) => route.fulfill({ json: finished
+    ? { id: "other", status: "finished", current: [], items: [{ id: "2", status: "success" }] }
+    : null }));
+  await page.route("**/api/works/1", (route) => route.fulfill({
+    json: { ...work, title: finished ? "已刷新作品" : work.title },
+  }));
   await page.route("**/api/works/1/crop/**", async (route) => {
     const url = new URL(route.request().url());
     if (url.pathname.endsWith("/source")) {
@@ -1191,6 +1196,11 @@ test("source cover replaces crop only on success and failed acquisition remains 
   await dialog.getByRole('button', { name: '重新获取封面' }).click();
   await expect(dialog.getByRole('alert')).toContainText('来源暂不可用');
   await expect(dialog.getByRole('img', { name: '裁剪原图' })).toHaveAttribute('src', /session2/);
+  finished = true;
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(page.getByText("已刷新作品", { exact: true })).toBeVisible();
+  await expect(dialog.getByRole('img', { name: '裁剪原图' })).toHaveAttribute('src', /session2/);
+  expect(acquisitions).toBe(3);
   await dialog.getByRole('button', { name: '保存', exact: true }).click();
   await expect(dialog).toHaveCount(0);
   expect(uploads).toBe(1);

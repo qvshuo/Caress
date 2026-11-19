@@ -159,7 +159,7 @@ async def test_standard_emby_person_receives_portrait_without_javdb_id(processor
     preparation_warnings = await processor.prepare_write(
         client, {}, prepared, [], replace=False
     )
-    warnings, changed = await processor.write(
+    warnings, changed, _ = await processor.write(
         client, "work", prepared, [], replace=False
     )
     warnings = preparation_warnings + warnings
@@ -191,7 +191,7 @@ async def test_failed_portrait_keeps_canonical_name_and_other_metadata(processor
     preparation_warnings = await processor.prepare_write(
         client, {}, prepared, [], replace=False
     )
-    warnings, changed = await processor.write(
+    warnings, changed, _ = await processor.write(
         client, "work", prepared, [], replace=False
     )
     warnings = preparation_warnings + warnings

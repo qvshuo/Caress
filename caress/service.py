@@ -9,7 +9,7 @@ from weakref import WeakValueDictionary
 
 import httpx
 
-from .emby import EmbyClient, needs_enrichment
+from .emby import EmbyClient
 from .http import FetchError
 from .images import crop_poster, crop_source_image
 from .library import identify, project
@@ -34,6 +34,8 @@ class Service:
         self.runtime = Runtime(settings.database)
         self.locks = WeakValueDictionary()
         self.writer_lock = asyncio.Lock()
+        self.works_lock = asyncio.Lock()
+        self.works_snapshot = None
         self.batches = BatchRunner(self)
         self.crop: CropSession | None = None
         self.crop_lock = asyncio.Lock()
@@ -94,16 +96,26 @@ class Service:
     async def configure(self, settings):
         async with self.crop_lock:
             self.settings = settings
+            self.works_snapshot = None
             self.crop = None
         async with self.emby_lock:
             await self.retire_clients()
 
-    async def works(self):
-        async with self.emby() as client:
-            return [
-                project(item, self.runtime, client.server)
-                async for item in client.items()
-            ]
+    async def works(self, *, refresh):
+        async with self.works_lock:
+            settings = self.settings
+            if refresh:
+                self.works_snapshot = None
+            if self.works_snapshot is not None:
+                return self.works_snapshot
+            async with self.emby(settings) as client:
+                rows = [
+                    project(item, self.runtime, client.server)
+                    async for item in client.items()
+                ]
+            if settings is self.settings:
+                self.works_snapshot = rows
+            return rows
 
     async def scoped_item(self, client, ident):
         if not await client.contains(ident):
@@ -135,11 +147,6 @@ class Service:
                         "无法确认关联作品属于所选媒体库"
                     )
             result["related"] = related
-            result["needs_enrichment"] = result[
-                "status"
-            ] != "unsupported" and needs_enrichment(
-                item, await client.image_info(ident), identify(item)[2]
-            )
             return result
 
     def crop_session(self, ident, token):
@@ -211,10 +218,10 @@ class Service:
     async def _crop_preview(self, data, box=None, center=False):
         import base64
 
-        crop = await asyncio.to_thread(crop_poster, data, box, center)
+        crop = await asyncio.to_thread(crop_poster, data, box, center, preview=True)
         return {k: crop[k] for k in ("box", "width", "height")} | {
             "preview": "data:image/png;base64,"
-            + base64.b64encode(crop["preview"]).decode()
+            + base64.b64encode(crop["content"]).decode()
         }
 
     async def crop_apply(self, ident, token, box):

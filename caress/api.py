@@ -151,8 +151,9 @@ def create_app(settings: Settings | None = None):
         status: str = "",
         offset: int = Query(0, ge=0),
         limit: int = Query(100, ge=1, le=10000),
+        refresh: bool = True,
     ):
-        rows = await service.works()
+        rows = await service.works(refresh=refresh)
         rows = filter_works(rows, q, status)
         return {
             "items": rows[offset : offset + limit],
@@ -170,18 +171,16 @@ def create_app(settings: Settings | None = None):
 
     @app.post("/api/batch")
     async def start(body: BatchRequest):
-        if not (
-            service.settings.emby.url
-            and service.settings.emby.api_key
-            and service.settings.emby.library_ids
-        ):
-            raise ValueError("请先连接 Emby 并选择媒体库")
         if body.action == "force" and not body.confirmed:
             raise ValueError("请确认替换所有的元数据")
         ids = list(dict.fromkeys(body.ids))
         if any(not i.isalnum() for i in ids):
             raise ValueError("Emby 项目 ID 无效")
-        return service.batches.start(ids, body.action, body.source)
+        async with service.writer_lock:
+            emby = service.settings.emby
+            if not (emby.url and emby.api_key and emby.library_ids):
+                raise ValueError("请先连接 Emby 并选择媒体库")
+            return service.batches.start(ids, body.action, body.source)
 
     @app.post("/api/batch/cancel")
     async def cancel():

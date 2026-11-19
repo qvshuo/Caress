@@ -237,11 +237,11 @@ class BatchRunner:
                                     raise ValueError("Emby 作品番号已变化，请刷新列表")
                                 old = runtime.record(server, row["id"], identity, code)
                                 replace = job["action"] == "force"
-                                retry_failed = bool(old and old["status"] == "failed")
+                                retry = old and (old["status"] == "failed" or old["error"])
                                 images = await client.image_info(row["id"])
                                 if (
                                     not replace
-                                    and not retry_failed
+                                    and not retry
                                     and not needs_enrichment(item, images, media)
                                 ):
                                     row.update(
@@ -294,10 +294,15 @@ class BatchRunner:
                                     )
                                 )
                                 try:
-                                    warnings, changed = await asyncio.shield(write_task)
+                                    outcome = await asyncio.shield(write_task)
                                 except asyncio.CancelledError:
-                                    warnings, changed = await write_task
+                                    outcome = await write_task
+                                warnings, changed, retry_backdrops = outcome
+                                # A successful run can still leave backdrop work to retry.
+                                retry_error = "背景图处理未完成" if retry_backdrops else None
                                 if not changed:
+                                    if old and old["status"] == "success":
+                                        old = {**old, "error": retry_error}
                                     runtime.restore_record(server, row["id"], old)
                                     row.update(
                                         status="skipped",
@@ -312,6 +317,7 @@ class BatchRunner:
                                     identity,
                                     code,
                                     "success",
+                                    error=retry_error,
                                     source=prepared.source,
                                 )
                                 row.update(

@@ -22,7 +22,6 @@ export const sources: Source[] = [
   "avbase",
 ];
 export interface Work {
-  needs_enrichment?: boolean;
   id: string;
   code: string | null;
   title: string;
