@@ -100,6 +100,7 @@ export function ImageViewer({
       }}
     >
       <DialogContent
+        initialFocus={frame}
         aria-describedby={undefined}
         showCloseButton={false}
         className="inset-0 h-dvh w-screen max-w-none translate-x-0 translate-y-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden rounded-none border-0 bg-neutral-950 text-neutral-100 p-3 pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] pt-[max(3.5rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))] shadow-none sm:max-w-none sm:p-6 sm:pl-[max(1.5rem,env(safe-area-inset-left))] sm:pr-[max(1.5rem,env(safe-area-inset-right))] sm:pt-14"
@@ -111,8 +112,8 @@ export function ImageViewer({
           ref={frame}
           role="group"
           aria-label="图片浏览"
-          tabIndex={0}
-          className="grid min-h-0 grid-cols-[36px_minmax(0,1fr)_36px] items-center gap-2 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring sm:gap-4"
+          tabIndex={-1}
+          className="grid min-h-0 grid-cols-[36px_minmax(0,1fr)_36px] items-center gap-2 outline-none sm:gap-4"
           onTouchStart={(event) => {
             if (
               event.touches.length !== 1 ||
