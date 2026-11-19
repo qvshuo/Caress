@@ -89,8 +89,8 @@ test("unconfigured library shows only the setup prompt", async ({ page }) => {
   await expect(page.getByText("请先配置 Emby 地址和 API Key")).toHaveCount(0);
   await expect(page.getByText("没有符合条件的作品")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "刷新作品列表" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "开始执行" })).toHaveCount(0);
-  await expect(page.getByRole("combobox", { name: "刮削方式" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "开始处理" })).toHaveCount(0);
+  await expect(page.getByRole("combobox", { name: "处理方式" })).toHaveCount(0);
   await expect(page.getByRole("textbox", { name: "搜索番号或标题" })).toHaveCount(0);
   await expect(page.getByRole("table")).toHaveCount(0);
   expect(workRequests).toBe(0);
@@ -423,12 +423,12 @@ test("start button is stable when mode changes and grid is absent", async ({
 }) => {
   await page.goto("/");
   await page.getByRole("row", { name: "查看 ABC-123" }).waitFor();
-  await page.getByRole("combobox", { name: "刮削方式" }).click();
+  await page.getByRole("combobox", { name: "处理方式" }).click();
   await page
     .getByRole("option", { name: "重建元数据", exact: true })
     .click();
   await expect(
-    page.getByRole("button", { name: "开始执行", exact: true }),
+    page.getByRole("button", { name: "开始处理", exact: true }),
   ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "重建元数据", exact: true }),
@@ -603,24 +603,27 @@ for (const status of [
     await expect(
       page.getByRole("heading", { name: work.title, exact: true }),
     ).toBeVisible();
-    const primary = page.getByRole("button", { name: "开始执行", exact: true });
+    const primary = page.getByRole("button", { name: "开始处理", exact: true });
     await expect(primary).toHaveCount(status === "unsupported" ? 0 : 1);
     if (status === "unsupported") {
       await expect(page.getByText("不支持", { exact: true })).toBeVisible();
       await expect(page.getByText("不可处理", { exact: true })).toHaveCount(0);
     }
     if (status !== "unsupported") {
-      const mode = page.getByRole("combobox", { name: "刮削方式" });
-      await expect(mode).toHaveText("刮削缺少的元数据");
+      const mode = page.getByRole("combobox", { name: "处理方式" });
+      await expect(mode).toHaveText("补齐元数据");
       await mode.click();
       await page
         .getByRole("option", { name: "重建元数据", exact: true })
         .click();
       if (status === "pending") {
         await primary.click();
-        const dialog = page.getByRole("dialog");
-        await expect(dialog).toContainText("将使用重新获取的作品信息替换现有元数据，缺失字段也会清空。封面、整个背景图集合和演员头像也会重新获取并替换，没有背景图候选时将清空背景图。确定继续吗？");
-        await dialog.getByRole("button", { name: "取消", exact: true }).click();
+        const dialog = page.getByRole("dialog", { name: "重建元数据？" });
+        await expect(dialog).toContainText("来源没有背景图时清空现有背景图");
+        await expect(dialog).toContainText("部分更改可能已保存到 Emby");
+        await expect(dialog.getByRole("button", { name: "重建", exact: true })).toBeVisible();
+        await expect(dialog.getByRole("button", { name: "取消", exact: true })).toBeFocused();
+        await page.keyboard.press("Escape");
         await expect(dialog).toHaveCount(0);
         expect(submissions).toBe(0);
       }
@@ -759,13 +762,14 @@ test("completed batch is a compact summary with optional errors", async ({
           { id: "1", status: "success", warnings: ["演员查询被拒绝", "未获取到封面"] },
           { id: "2", status: "failed", error: "来源暂不可用" },
           { id: "3", status: "skipped", note: "本次来源数据未产生变更" },
+          { id: "1", status: "skipped", warnings: ["未获取到新封面"] },
         ],
       },
     }),
   );
   await page.goto("/");
   const batch = page.getByRole("region", { name: "当前批次" });
-  await expect(batch).toContainText("已结束 · 1 成功 · 1 失败 · 1 跳过 · 有警告 1 项");
+  await expect(batch).toContainText("已结束 · 1 成功 · 1 失败 · 2 跳过 · 1 部作品有警告");
   await expect(batch.getByText(/^当前：/)).toHaveCount(0);
   await expect(batch.getByText(/^等待：/)).toHaveCount(0);
   await expect(batch.getByRole("progressbar")).toHaveCount(0);
@@ -988,14 +992,14 @@ for (const [status, missing, expected] of [
     await page.getByRole("combobox", { name: "数据来源" }).click();
     await page.getByRole("option", { name: "JavDB", exact: true }).click();
     if (expected === "force") {
-      await page.getByRole("combobox", { name: "刮削方式" }).click();
+      await page.getByRole("combobox", { name: "处理方式" }).click();
       await page
         .getByRole("option", { name: "重建元数据", exact: true })
         .click();
     }
-    await page.getByRole("button", { name: "开始执行", exact: true }).click();
+    await page.getByRole("button", { name: "开始处理", exact: true }).click();
     if (expected === "force")
-      await page.getByRole("button", { name: "确认", exact: true }).click();
+      await page.getByRole("button", { name: "重建", exact: true }).click();
     await expect.poll(() => body).toBeDefined();
     expect(body).toMatchObject({
       action: expected,
@@ -1069,7 +1073,7 @@ test("crop failure allows explicit source acquisition retry", async ({
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByRole("alert")).toHaveText("无法获取原图，请检查 Emby 背景图或数据来源");
   await expect(
-    dialog.getByRole("button", { name: "从来源获取封面", exact: true }),
+    dialog.getByRole("button", { name: "重新获取封面", exact: true }),
   ).toBeEnabled();
 });
 
@@ -1112,7 +1116,7 @@ test("both pages share queued progress and completed detail refreshes", async ({
   await page
     .getByRole("checkbox", { name: "选择 ABC-123", exact: true })
     .check();
-  await page.getByRole("button", { name: "开始执行", exact: true }).click();
+  await page.getByRole("button", { name: "开始处理", exact: true }).click();
   await expect(progress).toContainText("等待：ABC-123");
   await expect(progress.getByText("当前：DEF-456", { exact: true })).toBeVisible();
   await expect(page.getByRole("checkbox", { name: "选择 ABC-123", exact: true })).not.toBeChecked();
@@ -1128,7 +1132,7 @@ test("both pages share queued progress and completed detail refreshes", async ({
   const detailProgress = await progress.boundingBox();
   expect(Math.abs(listProgress!.y - detailProgress!.y)).toBeLessThan(1);
   await expect(
-    page.getByRole("button", { name: "开始执行", exact: true }),
+    page.getByRole("button", { name: "开始处理", exact: true }),
   ).toBeEnabled();
   await page.setViewportSize({ width: 390, height: 844 });
   expect(
@@ -1172,10 +1176,10 @@ test("source cover replaces crop only on success and failed acquisition remains 
   await page.getByRole('button', { name: '裁剪封面' }).click();
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByRole('img', { name: '裁剪原图' })).toHaveAttribute('src', /session1/);
-  await dialog.getByRole('button', { name: '从来源获取封面' }).click();
+  await dialog.getByRole('button', { name: '重新获取封面' }).click();
   await expect(dialog.getByRole('img', { name: '裁剪原图' })).toHaveAttribute('src', /session2/);
   expect(uploads).toBe(0);
-  await dialog.getByRole('button', { name: '从来源获取封面' }).click();
+  await dialog.getByRole('button', { name: '重新获取封面' }).click();
   await expect(dialog.getByRole('alert')).toContainText('来源暂不可用');
   await expect(dialog.getByRole('img', { name: '裁剪原图' })).toHaveAttribute('src', /session2/);
   await dialog.getByRole('button', { name: '保存', exact: true }).click();
@@ -1241,7 +1245,7 @@ test("late batch synchronization cannot replace a newly submitted batch", async 
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await expect.poll(() => !!release).toBe(true);
   await page.getByRole('checkbox', { name: '选择 ABC-123', exact: true }).click();
-  await page.getByRole('button', { name: '开始执行', exact: true }).click();
+  await page.getByRole('button', { name: '开始处理', exact: true }).click();
   await expect(page.getByRole('button', { name: '取消', exact: true })).toBeVisible();
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await expect.poll(() => reads).toBe(3);
@@ -1271,13 +1275,14 @@ test("resuming crop clears source errors and retains actual preview failures", a
         return route.fulfill({ status: 400, json: { detail: "预览失败" } });
       return route.fulfill({ json: { ...crop, box: route.request().postDataJSON().box || crop.box } });
     }
-    if (path.endsWith("/apply")) uploads++;
+    if (path.endsWith("/apply") && ++uploads === 1)
+      return route.fulfill({ status: 502, json: { detail: "Emby 请求超时" } });
     return route.fulfill({ json: { success: true } });
   });
   await page.goto("/#library/work/1");
   await page.getByRole("button", { name: "裁剪封面", exact: true }).click();
   const dialog = page.getByRole("dialog");
-  const source = dialog.getByRole("button", { name: "从来源获取封面" });
+  const source = dialog.getByRole("button", { name: "重新获取封面" });
   const save = dialog.getByRole("button", { name: "保存", exact: true });
   await expect(dialog.getByRole("img", { name: "裁剪原图" })).toBeVisible();
   await source.click();
@@ -1306,8 +1311,11 @@ test("resuming crop clears source errors and retains actual preview failures", a
   await dialog.getByRole("button", { name: "重置选框", exact: true }).click();
   await expect(save).toBeEnabled();
   await save.click();
+  await expect(dialog.getByRole("alert")).toHaveText("封面保存失败：Emby 请求超时");
+  await expect(save).toBeEnabled();
+  await save.click();
   await expect(dialog).toHaveCount(0);
-  expect(uploads).toBe(1);
+  expect(uploads).toBe(2);
 });
 
 test("finished batch does not override live work status", async ({ page }) => {
@@ -1368,7 +1376,7 @@ test("retry clears old failure tooltip while running and after success before li
   await expect(badge).toHaveAttribute("title", "上次来源失败");
   const initialReads = workReads;
   await page.getByRole("checkbox", { name: "选择 ABC-123", exact: true }).click();
-  await page.getByRole("button", { name: "开始执行", exact: true }).click();
+  await page.getByRole("button", { name: "开始处理", exact: true }).click();
   await expect(badge).toHaveText("处理中");
   await expect(badge).not.toHaveAttribute("title");
   batch = { ...batch, current: ["2"], items: batch.items.map(item => ({

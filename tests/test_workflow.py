@@ -1517,6 +1517,7 @@ async def test_related_item_merges_matching_queued_submission(fake_batch, monkey
 def test_emby_failure_returns_json_and_logs_operation_without_key(caplog):
     from caress.emby import sync_error
 
+    caplog.set_level("DEBUG", logger="caress.emby")
     request = httpx.Request(
         "POST",
         "http://emby/emby/Items/1429/Images/Primary?api_key=hidden-query",
@@ -1546,6 +1547,7 @@ def test_emby_failure_returns_json_and_logs_operation_without_key(caplog):
 def test_emby_error_log_does_not_expose_html_or_response(caplog):
     from caress.emby import sync_error
 
+    caplog.set_level("DEBUG", logger="caress.emby")
     request = httpx.Request("GET", "http://emby/Items")
     for content in ('<html>private page</html>', '{"password":"secret-value"}'):
         response = httpx.Response(500, request=request, text=content)

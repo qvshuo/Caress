@@ -156,11 +156,7 @@ export function App() {
     try {
       if (action === "force") {
         const accepted = await new Promise<boolean>((resolve) => {
-          const value = {
-            title: "重建元数据",
-            description: "将使用重新获取的作品信息替换现有元数据，缺失字段也会清空。封面、整个背景图集合和演员头像也会重新获取并替换，没有背景图候选时将清空背景图。确定继续吗？",
-            resolve,
-          };
+          const value = { resolve };
           confirmationRef.current = value;
           setConfirmation(value);
         });

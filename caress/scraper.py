@@ -73,26 +73,20 @@ class Scraper:
         async def fetch(source):
             lock = self.source_locks.setdefault(source, asyncio.Lock())
             if lock.locked():
-                seconds = (
-                    self.client.source_wait_seconds(source)
-                    if isinstance(self.client, WebClient)
-                    else 0
-                )
                 report_progress(
-                    "wait", source=source,
-                    message=f"Source cooldown: {seconds} seconds" if seconds else "Waiting for source availability",
+                    "wait", source=source, message="Waiting for source availability"
                 )
+            started = time.monotonic()
             try:
                 await asyncio.wait_for(lock.acquire(), SOURCE_TIMEOUT_SECONDS)
             except TimeoutError:
-                return SourceResult(
+                result = SourceResult(
                     source=source,
                     requested_code=request.code,
                     status=Status.TIMEOUT,
                     message="等待来源可用超时",
                 )
-            try:
-                report_progress("source", source=source)
+            else:
                 started = time.monotonic()
                 try:
                     with (
@@ -109,8 +103,8 @@ class Scraper:
                         status=Status.TIMEOUT,
                         message="超过来源处理时限",
                     )
-            finally:
-                lock.release()
+                finally:
+                    lock.release()
             if result.metadata and not matches(
                 request.code, result.metadata.code
             ):
@@ -122,12 +116,14 @@ class Scraper:
                 )
             result.elapsed_seconds = time.monotonic() - started
             failed = result.status not in (Status.FOUND, Status.NOT_FOUND, Status.UNSUPPORTED)
+            level = logging.INFO if result.status == Status.FOUND else logging.DEBUG
             logger.log(
-                logging.WARNING if failed else logging.INFO,
+                logging.WARNING if failed else level,
                 "Source request failed" if failed else "Source request completed",
                 extra={
                     "event": "source.fetched",
                     "source": source,
+                    "code": request.code,
                     "stage": "fetch",
                     "result": result.status,
                     "elapsed_seconds": result.elapsed_seconds,
@@ -135,7 +131,6 @@ class Scraper:
             )
             if on_result is not None:
                 on_result(result)
-            report_progress("source", result.status.value, source)
             return result
 
         route = (

@@ -27,7 +27,7 @@ class ImageWriteError(ValueError):
 def sync_error(exc):
     if isinstance(exc, httpx.HTTPStatusError):
         operation = f"{exc.request.method} {exc.request.url.path}"
-        logging.getLogger("caress.emby").error(
+        logging.getLogger(__name__).debug(
             "Emby request failed: %s HTTP %s", operation, exc.response.status_code
         )
         try:

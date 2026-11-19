@@ -41,12 +41,13 @@ export function BatchProgress({
     (i) => i.error || i.warnings?.length || i.note,
   );
   const cancelled = batch.items.filter((i) => i.status === "cancelled").length;
-  const warned = details.filter((i) => i.warnings?.length).length;
+  const warned = new Set(details.filter((i) => i.warnings?.length).map((i) => i.id)).size;
+  const interrupted = batch.status === "interrupted";
   const heading = busy
     ? `处理中 · ${done}/${batch.items.length}`
     : batch.status === "cancelled"
       ? "已取消"
-      : batch.status === "interrupted"
+      : interrupted
         ? "已中断"
         : batch.status === "failed" ||
             batch.items.some((i) => i.status === "failed")
@@ -58,8 +59,8 @@ export function BatchProgress({
         <p className="tabular-nums text-muted-foreground">
           {heading}
           {` · ${batch.items.filter((i) => i.status === "success").length} 成功 · ${batch.items.filter((i) => i.status === "failed").length} 失败 · ${batch.items.filter((i) => i.status === "skipped").length} 跳过`}
-          {cancelled > 0 && ` · ${cancelled} 取消`}
-          {warned > 0 && ` · 有警告 ${warned} 项`}
+          {cancelled > 0 && ` · ${cancelled} ${interrupted ? "中断" : "取消"}`}
+          {warned > 0 && ` · ${warned} 部作品有警告`}
         </p>
         {busy && (
           <Button size="sm" variant="outline" onClick={cancel} disabled={stopping}>
@@ -116,7 +117,7 @@ export function BatchProgress({
                       {item.status === "skipped"
                         ? "跳过"
                         : item.status === "cancelled"
-                          ? "已取消"
+                          ? interrupted ? "已中断" : "已取消"
                           : "失败"}{" "}
                       · {error}
                     </span>

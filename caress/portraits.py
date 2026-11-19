@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import time
 import unicodedata
@@ -151,7 +152,6 @@ class Gfriends:
         async with self.save_lock:
             if self.index is not None or self.index_error is not None:
                 return
-            report_progress("portraits", source="gfriends")
             try:
                 tree = json.loads(
                     await self.document(self.base + "Filetree.json", 16 * 1024 * 1024)
@@ -163,6 +163,13 @@ class Gfriends:
                 self.index = self._build_index(tree["Content"])
             except (ValueError, KeyError, TypeError) as exc:
                 self.index_error = str(exc)
+                report_progress(
+                    "portraits",
+                    "error",
+                    source="gfriends",
+                    message="Portrait index unavailable",
+                    level=logging.WARNING,
+                )
 
     async def resolve(self, name: str) -> PortraitMatch | None:
         await self.load_index()
@@ -185,7 +192,12 @@ class Gfriends:
                     result = {"name": name, "status": "saved"}
             except (ValueError, OSError) as exc:
                 result = {"name": name, "status": "error", "error": str(exc)}
-            report_progress(
-                "portraits", result["status"], source="gfriends", message=name
-            )
+            if result["status"] == "error":
+                report_progress(
+                    "portraits",
+                    "error",
+                    source="gfriends",
+                    message="Portrait preparation failed",
+                    level=logging.WARNING,
+                )
             return result

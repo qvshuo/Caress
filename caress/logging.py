@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 
 task_id = ContextVar("task_id", default=None)
 work_code = ContextVar("work_code", default=None)
+progress = logging.getLogger("caress.progress")
 
 
 def report_progress(
@@ -15,10 +16,19 @@ def report_progress(
     status: str = "running",
     source=None,
     message: str | None = None,
+    *,
+    level: int = logging.DEBUG,
 ) -> None:
-    logging.getLogger('caress.progress').info(message or stage, extra={
-        'event': 'processing.progress', 'stage': stage, 'source': source, 'result': status,
-    })
+    progress.log(
+        level,
+        message or stage,
+        extra={
+            "event": "processing.progress",
+            "stage": stage,
+            "source": source,
+            "result": status,
+        },
+    )
 
 
 class JsonFormatter(logging.Formatter):
@@ -33,7 +43,7 @@ class JsonFormatter(logging.Formatter):
             "elapsed_seconds": getattr(record, "elapsed_seconds", None),
             "result": getattr(record, "result", None),
             "task_id": task_id.get(),
-            "code": work_code.get(),
+            "code": getattr(record, "code", work_code.get()),
             "message": record.getMessage(),
         }
         if record.exc_info:

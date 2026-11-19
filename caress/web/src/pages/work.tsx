@@ -179,7 +179,7 @@ export default function Work({
               <div className="flex flex-wrap items-center gap-2">
                 {work.status !== "unsupported" && (
                   <Select
-                    label="刮削方式"
+                    label="处理方式"
                     value={action}
                     onChange={(value) => setAction(value as Action)}
                     options={actions}
@@ -203,7 +203,7 @@ export default function Work({
                       run(() => start([id], action, source || undefined))
                     }
                   >
-                    开始执行
+                    开始处理
                   </Button>
                 )}
               </div>

@@ -1,4 +1,3 @@
-from ..logging import report_progress
 from ..models import SourceId
 from .base import Source
 from .javdb_web import JavDBWeb
@@ -15,5 +14,4 @@ class JavDB(Source):
         self.web = JavDBWeb(*args, **kwargs)
 
     async def fetch(self, request):
-        report_progress("source", source=self.id, message="Opening webpage")
         return await self.web.fetch(request)

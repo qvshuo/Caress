@@ -37,6 +37,7 @@ export default function CropEditor({
     [pending, setPending] = useState<"source" | "preview" | null>("source"),
     [error, setError] = useState(""),
     [sourceError, setSourceError] = useState(""),
+    [saveError, setSaveError] = useState(""),
     [saving, setSaving] = useState(false);
   const session = useRef(""),
     version = useRef(0);
@@ -48,6 +49,7 @@ export default function CropEditor({
       const ticket = ++version.current;
       setPending("source");
       setSourceError("");
+      setSaveError("");
       try {
         const value = await api<Crop>(`${base}/source${fromSource ? "?fetch_source=true" : ""}`, "POST");
         if (!active.current || ticket !== version.current) {
@@ -88,6 +90,7 @@ export default function CropEditor({
     setPending("preview");
     setError("");
     setSourceError("");
+    setSaveError("");
     try {
       const value = await api<Crop>(`${base}/preview`, "POST", {
         token: crop.token,
@@ -151,7 +154,7 @@ export default function CropEditor({
             disabled={!!pending || saving || busy}
             onClick={() => void acquire(true)}
           >
-            从来源获取封面
+            {crop && loadingSource ? "正在获取封面…" : "重新获取封面"}
           </Button>
           <Button
             variant="outline"
@@ -242,16 +245,14 @@ export default function CropEditor({
             className="flex min-h-0 items-center justify-center gap-2 text-sm text-muted-foreground"
           >
             {pending && <LoaderCircle className="size-4 animate-spin" />}
-            {pending ? "正在加载…" : ""}
+            {pending ? "正在获取封面…" : ""}
           </div>
         )}
         <div className="flex flex-wrap items-center justify-end gap-3">
-          {(error || sourceError) && (
-            <div className="mr-auto flex flex-wrap items-center gap-2">
-              <p role="alert" className="text-sm text-destructive">
-                {error || sourceError}
-              </p>
-            </div>
+          {(error || sourceError || saveError) && (
+            <p role="alert" className="mr-auto text-sm text-destructive">
+              {error || sourceError || saveError}
+            </p>
           )}
           <Button variant="outline" disabled={saving} onClick={close}>
             取消
@@ -262,12 +263,14 @@ export default function CropEditor({
             onClick={() => {
               if (!crop) return;
               setSaving(true);
+              setSourceError("");
+              setSaveError("");
               void api<{ success: boolean }>(`${base}/apply`, "POST", {
                 token: crop.token,
                 box: crop.box,
               })
                 .then(() => applied())
-                .catch((e: Error) => setError(e.message))
+                .catch((e: Error) => setSaveError(`封面保存失败：${e.message}`))
                 .finally(() => setSaving(false));
             }}
           >

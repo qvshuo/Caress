@@ -794,7 +794,7 @@ async def test_unreadable_existing_backdrop_is_nonfatal_and_not_duplicated(
     ],
 )
 async def test_optional_image_failure_preserves_record_only_when_no_write_is_possible(
-    flow, monkeypatch, kind, failure, action, warning, may_write
+    flow, monkeypatch, caplog, kind, failure, action, warning, may_write
 ):
     original = flow.items["1"]
     flow.metadata = SourceMetadata(
@@ -855,6 +855,11 @@ async def test_optional_image_failure_preserves_record_only_when_no_write_is_pos
         flow.image_error = None
     assert "Items/1" not in flow.posts  # Metadata is identical in every scenario.
     assert any(warning in message for message in row["warnings"])
+    [outcome] = [
+        entry for entry in caplog.records if getattr(entry, "event", None) == "work.finished"
+    ]
+    assert outcome.levelname == "WARNING" and outcome.result == row["status"]
+    assert outcome.stage == "write" and outcome.source == "dmm"
     if action == "force" and kind == "Backdrop":
         assert any("可能已写入" in message for message in row["warnings"]) == may_write
     record = runtime.record("s", "1", identity, code)

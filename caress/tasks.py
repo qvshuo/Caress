@@ -1,6 +1,8 @@
 """One cancellable execution queue; confirmed successes survive interruption."""
 
 import asyncio
+import logging
+import time
 import uuid
 from collections import Counter, deque
 from tempfile import TemporaryDirectory
@@ -12,6 +14,8 @@ from .library import identify
 from .logging import task_id, work_code
 from .processing import WorkProcessor
 from .runtime import now
+
+logger = logging.getLogger(__name__)
 
 
 class BatchRunner:
@@ -67,6 +71,8 @@ class BatchRunner:
 
     async def _drain(self, batch, settings):
         allowed = set()
+        token = task_id.set(batch["id"])
+        started = time.monotonic()
         try:
             while self.queue:
                 job = self.queue.popleft()
@@ -77,6 +83,7 @@ class BatchRunner:
             batch["status"] = "cancelled"
         except Exception as exc:
             batch.update(status="failed", error=sync_error(exc))
+            logger.error("Batch execution failed (%s)", type(exc).__name__)
         finally:
             self.queue.clear()
             for row in batch["items"]:
@@ -86,7 +93,18 @@ class BatchRunner:
                         error=batch.get("error") or "已取消，未开始写入",
                     )
             batch.update(current=[], finished_at=now())
-            self.service.runtime.save_batch(batch)
+            try:
+                self.service.runtime.save_batch(batch)
+                logger.info(
+                    "Batch ended",
+                    extra={
+                        "event": "batch.finished",
+                        "result": batch["status"],
+                        "elapsed_seconds": time.monotonic() - started,
+                    },
+                )
+            finally:
+                task_id.reset(token)
 
     async def cancel(self):
         if self.running:
@@ -99,14 +117,13 @@ class BatchRunner:
                 batch.update(status="cancelled", current=[], finished_at=now())
                 for row in batch["items"]:
                     if row["status"] in ("pending", "running"):
-                        row.update(status="cancelled", error="任务已取消")
+                        row.update(status="cancelled", error="已取消，未开始写入")
                 self.service.runtime.save_batch(batch)
             if self.task is task:
                 self.queue.clear()
 
     async def _run(self, batch, job, settings, allowed):
         service, runtime = self.service, self.service.runtime
-        task_token = task_id.set(batch["id"])
         lease = service.emby(settings)
         client = None
         processor = None
@@ -207,6 +224,9 @@ class BatchRunner:
                         writing = False
                         reserved_code = row["code"]
                         work_token = work_code.set(row["code"])
+                        started = time.monotonic()
+                        source = job["source"]
+                        failure = None
                         try:
                             async with semaphore, service.item_lock(server, row["id"]):
                                 if row["status"] == "skipped":
@@ -234,6 +254,7 @@ class BatchRunner:
                                 )
                                 save()
                                 prepared = await processor.prepare(code, job["source"])
+                                source = prepared.source
                                 row["warnings"] = [
                                     *row.get("warnings", []),
                                     *await processor.prepare_write(
@@ -315,6 +336,7 @@ class BatchRunner:
                                 )
                             raise
                         except Exception as exc:
+                            failure = type(exc).__name__
                             row.update(
                                 status="failed",
                                 error=("部分内容可能已写入：" if writing else "")
@@ -330,6 +352,27 @@ class BatchRunner:
                                     error=row["error"],
                                 )
                         finally:
+                            status = row["status"]
+                            warnings = len(row.get("warnings", []))
+                            if failure:
+                                level, message = logging.ERROR, f"Work failed ({failure})"
+                            elif warnings:
+                                level = logging.WARNING
+                                message = f"Work ended with {warnings} warnings"
+                            else:
+                                level = logging.DEBUG if status == "skipped" else logging.INFO
+                                message = "Work ended"
+                            logger.log(
+                                level,
+                                message,
+                                extra={
+                                    "event": "work.finished",
+                                    "source": source,
+                                    "stage": "write" if writing else "prepare",
+                                    "result": status,
+                                    "elapsed_seconds": time.monotonic() - started,
+                                },
+                            )
                             work_code.reset(work_token)
                             remaining[reserved_code] -= 1
                             try:
@@ -349,17 +392,16 @@ class BatchRunner:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            batch["error"] = sync_error(exc)
+            error = sync_error(exc)
+            batch["error"] = error
+            logger.error("Batch job failed (%s)", type(exc).__name__)
             for row in job["items"]:
                 if row["status"] in ("pending", "running"):
-                    row.update(status="failed", error=sync_error(exc))
+                    row.update(status="failed", error=error)
         finally:
             for row in job["items"]:
                 if row["status"] in ("pending", "running"):
                     row.update(status="cancelled", error="已取消，未开始写入")
             save()
-            try:
-                if client is not None:
-                    await lease.__aexit__(None, None, None)
-            finally:
-                task_id.reset(task_token)
+            if client is not None:
+                await lease.__aexit__(None, None, None)

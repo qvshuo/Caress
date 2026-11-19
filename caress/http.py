@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import time
 import uuid
@@ -342,15 +343,6 @@ class WebClient:
         finally:
             self._work_scope.reset(token)
 
-    def source_wait_seconds(self, source: SourceId) -> int:
-        previous = self._metadata_last.get(f"source:{source}")
-        interval = SOURCE_INTERVALS[source]
-        remaining = (
-            interval - (time.monotonic() - previous) if previous is not None else 0
-        )
-        # The source queue has no request URL; domain cooldowns are checked per request.
-        return max(0, ceil(remaining))
-
     async def _throttle(
         self, source: SourceId, host: str, binary: bool = False
     ) -> None:
@@ -486,7 +478,10 @@ class WebClient:
                 except CurlError as exc:
                     if attempt < NETWORK_RETRIES:
                         report_progress(
-                            "retry", source=source, message="Network request failed; retrying"
+                            "retry",
+                            source=source,
+                            message="Network request failed; retrying",
+                            level=logging.WARNING,
                         )
                         await asyncio.sleep(RETRY_DELAY_SECONDS)
                         continue
