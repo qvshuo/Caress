@@ -1,5 +1,5 @@
 import { Button } from "@/components/ui/button";
-import { sourceLabels } from "@/lib/labels";
+import { actions, sourceLabels } from "@/lib/labels";
 import type { Batch, BatchItem, WorkNeighbor } from "@/lib/types";
 
 export function BatchProgress({
@@ -29,7 +29,7 @@ export function BatchProgress({
       item.id;
     return [
       code,
-      mixed && item.action === "force" ? "重建元数据" : "",
+      mixed && item.action === "force" ? actions.force : "",
       mixed && item.source ? sourceLabels[item.source] : "",
     ]
       .filter(Boolean)

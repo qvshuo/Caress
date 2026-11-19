@@ -16,8 +16,8 @@ export const statusFilters = {
   pending: statuses.pending,
 };
 export const actions = {
-  scrape: "补齐元数据",
-  force: "重建元数据",
+  scrape: "刮削缺少的元数据",
+  force: "替换所有的元数据",
 };
 export const sourceLabels: Record<Source, string> = {
   dmm: "DMM",

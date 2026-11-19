@@ -425,13 +425,13 @@ test("start button is stable when mode changes and grid is absent", async ({
   await page.getByRole("row", { name: "查看 ABC-123" }).waitFor();
   await page.getByRole("combobox", { name: "处理方式" }).click();
   await page
-    .getByRole("option", { name: "重建元数据", exact: true })
+    .getByRole("option", { name: "替换所有的元数据", exact: true })
     .click();
   await expect(
     page.getByRole("button", { name: "开始处理", exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "重建元数据", exact: true }),
+    page.getByRole("button", { name: "替换所有的元数据", exact: true }),
   ).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "大图", exact: true }),
@@ -611,17 +611,17 @@ for (const status of [
     }
     if (status !== "unsupported") {
       const mode = page.getByRole("combobox", { name: "处理方式" });
-      await expect(mode).toHaveText("补齐元数据");
+      await expect(mode).toHaveText("刮削缺少的元数据");
       await mode.click();
       await page
-        .getByRole("option", { name: "重建元数据", exact: true })
+        .getByRole("option", { name: "替换所有的元数据", exact: true })
         .click();
       if (status === "pending") {
         await primary.click();
-        const dialog = page.getByRole("dialog", { name: "重建元数据？" });
+        const dialog = page.getByRole("dialog", { name: "替换所有的元数据？" });
         await expect(dialog).toContainText("来源没有背景图时清空现有背景图");
         await expect(dialog).toContainText("部分更改可能已保存到 Emby");
-        await expect(dialog.getByRole("button", { name: "重建", exact: true })).toBeVisible();
+        await expect(dialog.getByRole("button", { name: "替换", exact: true })).toBeVisible();
         await expect(dialog.getByRole("button", { name: "取消", exact: true })).toBeFocused();
         await page.keyboard.press("Escape");
         await expect(dialog).toHaveCount(0);
@@ -737,7 +737,7 @@ test("stopping waits for active writes and identifies mixed queued work", async 
   });
   await page.goto("/");
   const progress = page.getByRole("region", { name: "当前批次" });
-  await expect(progress).toContainText("等待：DEF-456 · 重建元数据 · JavDB");
+  await expect(progress).toContainText("等待：DEF-456 · 替换所有的元数据 · JavDB");
   await progress.getByRole("button", { name: "取消", exact: true }).click();
   await expect(progress.getByRole("button", { name: "正在停止…" })).toBeDisabled();
   await expect(progress).toContainText("当前写入完成后停止");
@@ -994,12 +994,12 @@ for (const [status, missing, expected] of [
     if (expected === "force") {
       await page.getByRole("combobox", { name: "处理方式" }).click();
       await page
-        .getByRole("option", { name: "重建元数据", exact: true })
+        .getByRole("option", { name: "替换所有的元数据", exact: true })
         .click();
     }
     await page.getByRole("button", { name: "开始处理", exact: true }).click();
     if (expected === "force")
-      await page.getByRole("button", { name: "重建", exact: true }).click();
+      await page.getByRole("button", { name: "替换", exact: true }).click();
     await expect.poll(() => body).toBeDefined();
     expect(body).toMatchObject({
       action: expected,
