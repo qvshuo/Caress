@@ -237,7 +237,7 @@ export function Library({
                 <TableHead className="w-36">番号</TableHead>
                 <TableHead>标题</TableHead>
                 <TableHead className="w-44">演员</TableHead>
-                <TableHead className="w-24">版本</TableHead>
+                <TableHead className="w-36">版本</TableHead>
                 <TableHead className="w-24">状态</TableHead>
               </TableRow>
             </TableHeader>
@@ -285,7 +285,7 @@ export function Library({
                         {actors}
                       </span>
                     </TableCell>
-                    <TableCell className="whitespace-normal text-xs text-muted-foreground">
+                    <TableCell className="text-xs text-muted-foreground">
                       {mediaLabel(w)}
                     </TableCell>
                     <TableCell>
