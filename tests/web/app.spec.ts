@@ -351,7 +351,7 @@ test("processed work status is shared by list, filter and detail", async ({ page
   await expect(page.getByRole("row", { name: "查看 ABC-123" }).locator("[data-slot=badge]")).toHaveText("已处理");
   await page.getByRole("combobox", { name: "筛选状态" }).click();
   await expect(page.getByRole("option", { name: "处理中" })).toHaveCount(0);
-  await page.getByRole("option", { name: "已处理" }).click();
+  await page.getByRole("option", { name: "处理完成" }).click();
   await expect.poll(() => selected).toBe("success");
   await page.getByRole("row", { name: "查看 ABC-123" }).click();
   await expect(page.getByRole("heading", { name: "Emby 当前标题" })).toBeVisible();

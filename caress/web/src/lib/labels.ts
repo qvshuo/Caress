@@ -10,10 +10,11 @@ export const statuses = {
   running: "处理中",
 };
 export const statusFilters = {
-  unsupported: statuses.unsupported,
-  failed: statuses.failed,
-  success: statuses.success,
-  pending: statuses.pending,
+  "": "全部作品",
+  unsupported: "无法处理",
+  failed: "处理失败",
+  success: "处理完成",
+  pending: "尚未处理",
 };
 export const actions = {
   scrape: "刮削缺少的元数据",

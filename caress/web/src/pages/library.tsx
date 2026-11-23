@@ -216,10 +216,7 @@ export function Library({
               onChange={(filter) =>
                 setState((s) => ({ ...s, filter, page: 1 }))
               }
-              options={{
-                "": "全部状态",
-                ...statusFilters,
-              }}
+              options={statusFilters}
             />
           </div>
         </div>
