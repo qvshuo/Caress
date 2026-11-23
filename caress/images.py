@@ -35,8 +35,6 @@ class ImageData:
 
 
 class PngOutput(BytesIO):
-    """Stop lossless encoding before an expanded image exhausts the output budget."""
-
     def write(self, data):
         if self.tell() + len(data) > 32 * 1024 * 1024:
             raise ValueError("PNG 图像超过 32 MiB")
@@ -223,7 +221,6 @@ def crop_poster(
         if preview:
             cropped.thumbnail((640, 960))
         output = PngOutput()
-        # Preserve the selected pixels when saving the full-size crop.
         cropped.save(output, format="PNG")
         return {
             "content": output.getvalue(),

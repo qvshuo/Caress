@@ -1,5 +1,3 @@
-"""Opt-in source smoke probe. Run in the test Compose container; never writes Emby."""
-
 import asyncio
 import json
 

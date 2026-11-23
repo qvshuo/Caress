@@ -21,9 +21,7 @@ export function useListState<T extends object>(
   useEffect(() => {
     try {
       sessionStorage.setItem(`caress:${key}`, JSON.stringify(value));
-    } catch {
-      /* List preferences remain usable when browser storage is unavailable. */
-    }
+    } catch {}
   }, [key, value]);
   return [value, setValue];
 }

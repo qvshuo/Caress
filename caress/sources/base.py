@@ -70,7 +70,6 @@ class Source:
         return SourceResult(source=self.id, requested_code=request.code, status=Status.NOT_FOUND)
 
     def select(self, request: ScrapeRequest, candidates: list[Candidate]) -> Candidate | None:
-        # All accepted matches identify the same catalog; retain provider ranking on ties.
         return next((candidate for candidate in candidates if matches(request.code, candidate.code)), None)
 
     async def _fetch(self, request: ScrapeRequest) -> SourceResult:

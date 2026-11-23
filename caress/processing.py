@@ -1,5 +1,3 @@
-"""One transient scrape per code in a batch; each Emby Item is written separately."""
-
 import asyncio
 import hashlib
 import shutil
@@ -48,7 +46,6 @@ class WorkProcessor:
         return self
 
     async def __aexit__(self, *args):
-        # All connections are closed even if one close fails.
         try:
             await self.scraper.__aexit__(*args)
         finally:
@@ -82,7 +79,6 @@ class WorkProcessor:
         for task in self.prepared.values():
             if not task.done():
                 task.cancel()
-        # Drain every group even when one directory fails to clean up.
         results = await asyncio.gather(
             *(self.release(*key) for key in list(self.prepared)), return_exceptions=True
         )
@@ -310,7 +306,6 @@ class WorkProcessor:
                     retry_backdrops = True
                     changed = isinstance(exc, ImageWriteError) or changed
                     warnings.append("背景图补齐失败：" + sync_error(exc))
-        # Portraits are linked through the Person IDs returned by Emby.
         async with self.people_lock:
             for mapping in prepared.mappings:
                 match = mapping["portrait"]

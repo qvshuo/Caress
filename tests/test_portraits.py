@@ -13,7 +13,6 @@ from caress.settings import Settings
 from caress.translation import actor_name_rules
 from test_images import image_bytes
 
-# Actual Filetree entries; bank priority and file names belong to Gfriends.
 CONTENT = {
     "z-ラグジュTV": {
         "Kaname Yuuna.jpg": "AI-Fix-黒川さりな.jpg?t=1607433809",

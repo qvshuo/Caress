@@ -169,8 +169,7 @@ def response_issue(page: Page) -> tuple[Status, str] | None:
 
 def is_cloudflare(page: Page) -> bool:
     text = page.text.lower()
-    # Successful pages also embed Cloudflare's challenge-platform JS. A script URL
-    # alone is not evidence that the requested document is a challenge page.
+    # Successful pages also load Cloudflare challenge scripts.
     title = (
         page.selector().css("title::text").get("").strip().lower()
         if "<" in text[:200]
@@ -193,8 +192,6 @@ def is_cloudflare(page: Page) -> bool:
 
 
 class WebClient:
-    """Pooled Scrapling sessions; solver cookies never cross network exits."""
-
     _budgets = WeakKeyDictionary()
 
     def __init__(self, *, runtime=None) -> None:
@@ -216,7 +213,6 @@ class WebClient:
         self._control: httpx.AsyncClient | None = None
 
     def share_limits(self):
-        # Task workers and image previews share the same host pacing budget.
         loop = asyncio.get_running_loop()
         if loop not in self._budgets:
             self._budgets[loop] = (
@@ -229,8 +225,7 @@ class WebClient:
                 asyncio.Semaphore(8),
                 asyncio.Semaphore(1),
             )
-        # Batch scrapers and manual previews share whole-work gates and pacing,
-        # independently of the per-request connection and host locks.
+        # Share whole-work and per-request limits across batches and previews.
         (
             self.source_work_locks,
             self._source_locks,
@@ -244,7 +239,6 @@ class WebClient:
 
     @property
     def cooldowns(self):
-        # Batches and manual previews read the same cooldown state.
         return self.runtime.cooldowns() if self.runtime is not None else self._cooldowns
 
     def _save_cooldown(self, source, row):
@@ -434,7 +428,6 @@ class WebClient:
         if not binary:
             self.check_cooldown(cooldown_key)
         host_lock = self._host_locks.setdefault(parsed.hostname, asyncio.Lock())
-        # Only protocol-specific age/language cookies are used; no user session Cookie setting.
         combined_cookies = {} if binary else (cookies or {})
         source_lock = self._source_locks.setdefault(source, asyncio.Lock())
         async with AsyncExitStack() as locks:
@@ -592,8 +585,7 @@ class WebClient:
                     "session": self._solver_sessions[key],
                     "maxTimeout": SOLVER_TIMEOUT_SECONDS * 1000,
                     "waitInSeconds": wait_seconds,
-                    # Browser-copied CF cookies belong to its original exit/UA.
-                    # Forward login cookies while keeping the solver's own CF state.
+                    # Cloudflare cookies are tied to the solver's IP and user agent.
                     "cookies": [
                         {"name": name, "value": value}
                         for name, value in cookies.items()

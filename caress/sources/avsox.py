@@ -75,8 +75,7 @@ class AVSOX(Source):
         except FetchError as exc:
             if exc.status not in (Status.NETWORK_ERROR, Status.BLOCKED):
                 raise
-        # Current AVSOX is a Vue SPA. The remote browser renders its JSON-driven UI;
-        # Wait for its async JSON response; an initial spinner is not an empty result.
+        # A rendered page can still be waiting for the results API.
         page = await self.client.get(self.id, url, rendered=True, wait_seconds=3)
         if page.selector().css(".list-loading"):
             raise FetchError(Status.TIMEOUT, "AVSOX 页面内容尚未加载完成")

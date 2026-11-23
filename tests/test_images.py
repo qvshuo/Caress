@@ -111,7 +111,6 @@ def test_crop_source_checks_pixel_limit_before_decode(monkeypatch):
             raise AssertionError("decoded before limit check")
         return original(self, *args, **kwargs)
 
-    # A header-only PNG is enough to exercise the resource boundary.
     import struct
     import zlib
 

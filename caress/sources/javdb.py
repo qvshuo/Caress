@@ -4,8 +4,6 @@ from .javdb_web import JavDBWeb
 
 
 class JavDB(Source):
-    """JavDB webpage metadata."""
-
     id = SourceId.JAVDB
     default_url = "https://javdb.com"
 

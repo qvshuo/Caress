@@ -1,5 +1,3 @@
-"""Docker entry point; all long-lived local state is the small SQLite ledger."""
-
 from .settings import Settings
 
 

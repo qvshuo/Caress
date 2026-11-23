@@ -10,7 +10,6 @@ export function SecretInput({
   onChange: (value: string) => void;
 }) {
   const [focused, setFocused] = useState(false);
-  // The mask is presentation only; focusing an unchanged field never clears the stored key.
   return (
     <Input
       type="password"

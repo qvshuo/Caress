@@ -1,5 +1,3 @@
-"""Exercise final Emby DTOs and image bytes through the real write pipeline."""
-
 import asyncio
 import base64
 import hashlib
@@ -878,7 +876,7 @@ async def test_optional_image_failure_preserves_record_only_when_no_write_is_pos
             flow.image_error = failure
         row = (await flow.run(action))[0]
         flow.image_error = None
-    assert "Items/1" not in flow.posts  # Metadata is identical in every scenario.
+    assert "Items/1" not in flow.posts
     assert any(warning in message for message in row["warnings"])
     [outcome] = [
         entry for entry in caplog.records if getattr(entry, "event", None) == "work.finished"

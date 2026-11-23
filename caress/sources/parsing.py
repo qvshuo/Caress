@@ -55,7 +55,6 @@ def artwork(
 
 
 def source_code(code: str, namespace: str | None = None) -> str:
-    """Restore an explicit provider namespace only in a supported catalog format."""
     if namespace and NUMERIC.fullmatch(code):
         try:
             return normalize_code(f"{namespace}-{code}")

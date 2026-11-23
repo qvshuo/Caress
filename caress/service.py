@@ -1,5 +1,3 @@
-"""Application lifecycle, live Emby projections, and explicit crop sessions."""
-
 import asyncio
 import time
 import uuid
@@ -85,7 +83,6 @@ class Service:
                 await self.retire_clients()
 
     async def retire_clients(self):
-        # Active leases retain their snapshot until completion; new requests use new settings.
         current = self.settings.emby
         key = (current.url, current.api_key, tuple(current.library_ids))
         for old, (client, users) in list(self.clients.items()):

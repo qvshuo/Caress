@@ -1,5 +1,3 @@
-"""Small durable processing ledger; media and metadata belong to Emby."""
-
 import json
 import sqlite3
 from datetime import UTC, datetime
@@ -80,7 +78,6 @@ class Runtime:
             )
 
     def restore_record(self, server, item, previous):
-        # A no-op belongs to the current batch; it must not fabricate a successful scrape.
         with self.connection:
             self.connection.execute(
                 "DELETE FROM scrapes WHERE server=? AND item=?", (server, item)

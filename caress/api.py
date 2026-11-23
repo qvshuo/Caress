@@ -1,5 +1,3 @@
-"""HTTP boundary: live reads and a small set of explicit processing operations."""
-
 from contextlib import asynccontextmanager
 from io import BytesIO
 from pathlib import Path

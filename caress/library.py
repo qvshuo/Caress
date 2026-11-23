@@ -1,5 +1,3 @@
-"""Transient projections of live Emby items, never a local media catalogue."""
-
 import hashlib
 import json
 from pathlib import Path, PureWindowsPath

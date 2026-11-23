@@ -1,5 +1,3 @@
-"""One cancellable execution queue; confirmed successes survive interruption."""
-
 import asyncio
 import logging
 import time
@@ -136,7 +134,6 @@ class BatchRunner:
 
         try:
             client = await lease.__aenter__()
-            # Resolve live parts/versions once and deduplicate Item IDs before any write.
             if not allowed:
                 allowed.update({str(i["Id"]) async for i in client.items()})
             expanded = [row for row in job["items"] if row["status"] != "pending"]
@@ -261,7 +258,6 @@ class BatchRunner:
                                         client, item, prepared, images, replace=replace
                                     ),
                                 ]
-                                # Revalidate identity immediately before the write, after potentially slow scraping.
                                 if not await client.contains(row["id"]):
                                     raise ValueError("作品已移出所选媒体库，未写入")
                                 live_code, live_identity, live_media = identify(

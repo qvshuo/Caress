@@ -57,8 +57,6 @@ def actor_image(output: Path, name: str) -> Path | None:
 
 
 class Gfriends:
-    """One transient file tree per task; portraits remain ordinary metadata files."""
-
     base = "https://raw.githubusercontent.com/gfriends/gfriends/master/"
 
     def __init__(self, output: Path, client=None):

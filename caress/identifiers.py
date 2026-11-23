@@ -40,7 +40,6 @@ def parse_filename(path: Path) -> tuple[str, MediaFile]:
 
 
 def validate_code(value: str) -> str:
-    # Only case and supported catalog spelling are normalized; no filename cleanup.
     if not value or value != value.strip() or any(c.isspace() for c in value):
         raise ValueError("无法从文件名识别有效番号")
     try:

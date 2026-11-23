@@ -1046,7 +1046,6 @@ async def test_image_proxy_reuses_validation_and_preserves_mime(tmp_path, monkey
         ) as client,
     ):
         monkeypatch.setattr(app.state.service, "emby", connection)
-        # Revalidating already validated bytes would decode a full image again.
         monkeypatch.setattr(
             "caress.images.validate_image",
             lambda data: pytest.fail("duplicate validation"),
@@ -1690,7 +1689,7 @@ async def test_source_queue_releases_and_times_out_separately(tmp_path, monkeypa
     result = await scraper.scrape(ScrapeRequest(code='ABC-123', source=source))
     assert result.status == Status.TIMEOUT
     assert result.results[0].message == '等待来源可用超时'
-    assert lock.locked()  # The waiting request must not release another owner's lock.
+    assert lock.locked()
     lock.release()
     async def stalled(request):
         await asyncio.Event().wait()

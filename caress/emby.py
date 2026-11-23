@@ -1,5 +1,3 @@
-"""Emby is the library. Every mutation starts with a full read and is verified."""
-
 import asyncio
 import base64
 import hashlib
@@ -153,7 +151,6 @@ def needs_enrichment(item, images, media):
 
 
 def metadata_update(original, metadata, media, *, replace):
-    """Fill missing fields or rebuild managed fields, clearing missing source values."""
     changes = {}
 
     def put(key, value, empty=None):
@@ -440,7 +437,6 @@ class EmbyClient:
     async def write_metadata(self, ident, metadata, media, *, replace):
         original = await self.item(ident)
         changes = metadata_update(original, metadata, media, replace=replace)
-        # Preserve fields outside the managed set by merging into the full DTO.
         changed = not fields_match(original, changes)
         if changed:
             await self.request("POST", f"Items/{ident}", json={**original, **changes})
