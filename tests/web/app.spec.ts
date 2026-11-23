@@ -932,6 +932,31 @@ test("image retry bypasses failed cache and a new URL starts cleanly", async ({
   expect(requests.at(-1)!.searchParams.has("retry")).toBe(false);
 });
 
+test("Shift selects a range of eligible works in display order", async ({ page }) => {
+  await page.route("**/api/works?**", (route) =>
+    route.fulfill({ json: {
+      items: ["1", "2", "3", "4"].map((id) => ({
+        ...work, id, code: `ABC-00${id}`, status: id === "2" ? "unsupported" : "pending",
+      })),
+      total: 4,
+    } }),
+  );
+  const checkbox = (id: number) =>
+    page.getByRole("checkbox", { name: `选择 ABC-00${id}`, exact: true });
+  await page.goto("/");
+  await checkbox(4).click();
+  await checkbox(1).click({ modifiers: ["Shift"] });
+  await expect(checkbox(3)).toBeChecked();
+  await expect(checkbox(2)).toBeDisabled();
+  await expect(checkbox(2)).not.toBeChecked();
+  await expect(page.getByText("· 选中 3", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "清除选择" }).click();
+  await checkbox(3).click({ modifiers: ["Shift"] });
+  await expect(page.getByText("· 选中 1", { exact: true })).toBeVisible();
+  await checkbox(4).press("Space");
+  await expect(checkbox(4)).toBeChecked();
+});
+
 test("work count hierarchy and invalid source order", async ({ page }) => {
   await page.goto("/");
   const count = page.getByText("1 部作品", { exact: true });
@@ -940,7 +965,7 @@ test("work count hierarchy and invalid source order", async ({ page }) => {
     "16px",
   );
   await page.getByRole("checkbox", { name: "选择本页" }).click();
-  const selected = page.getByText(" · 已选 1", { exact: true });
+  const selected = page.getByText(" · 选中 1", { exact: true });
   expect(await selected.evaluate((e) => getComputedStyle(e).fontSize)).toBe(
     "14px",
   );

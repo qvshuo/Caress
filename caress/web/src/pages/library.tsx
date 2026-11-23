@@ -71,11 +71,13 @@ export function Library({
     [error, setError] = useState(""),
     [action, setAction] = useState<Action>("scrape");
   const requestedRevision = useRef<number | null>(null);
+  const selectionAnchor = useRef<string | null>(null);
   useEffect(() => {
     const controller = new AbortController();
     setRows([]);
     setError("");
     setSelected(new Set());
+    selectionAnchor.current = null;
     if (!configured) {
       requestedRevision.current = null;
       setTotal(0);
@@ -136,11 +138,24 @@ export function Library({
   const usable = rows
     .filter((w) => w.status !== "unsupported")
     .map((w) => w.id);
+  function selectRow(id: string, checked: boolean, shift: boolean) {
+    const anchor = selectionAnchor.current;
+    if (shift && anchor !== null) {
+      const first = usable.indexOf(anchor);
+      const last = usable.indexOf(id);
+      if (first >= 0 && last >= 0) {
+        select(usable.slice(Math.min(first, last), Math.max(first, last) + 1), true);
+        return;
+      }
+    }
+    selectionAnchor.current = id;
+    select([id], checked);
+  }
   const checkbox = (w: Work) => (
     <SelectionCheckbox
       ids={w.status === "unsupported" ? [] : [w.id]}
       selected={selected}
-      onChange={select}
+      onChange={(_, checked, shift) => selectRow(w.id, checked, shift)}
       label={`选择 ${w.code || w.title}`}
     />
   );
@@ -148,7 +163,10 @@ export function Library({
     <SelectionCheckbox
       ids={usable}
       selected={selected}
-      onChange={select}
+      onChange={(ids, checked) => {
+        selectionAnchor.current = null;
+        select(ids, checked);
+      }}
       label="选择本页"
     />
   );
@@ -166,7 +184,7 @@ export function Library({
         <p className="text-base tabular-nums">
           {total} 部作品
           {selected.size > 0 && (
-            <span className="text-sm text-muted-foreground"> · 已选 {selected.size}</span>
+            <span className="text-sm text-muted-foreground"> · 选中 {selected.size}</span>
           )}
         </p>
         <RefreshButton
@@ -188,7 +206,11 @@ export function Library({
           disabled={submitting || !selected.size}
           onClick={() => run(async () => {
             const ids = [...selected];
-            if (await start(ids, action)) select(ids, false);
+            if (await start(ids, action)) {
+              if (selectionAnchor.current !== null && ids.includes(selectionAnchor.current))
+                selectionAnchor.current = null;
+              select(ids, false);
+            }
           })}
         >
           开始处理
@@ -197,7 +219,10 @@ export function Library({
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => setSelected(new Set())}
+            onClick={() => {
+              selectionAnchor.current = null;
+              setSelected(new Set());
+            }}
           >
             清除选择
           </Button>

@@ -1,4 +1,4 @@
-import type { KeyboardEvent, MouseEvent } from "react";
+import type { KeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
 import { ChevronLeft, ChevronRight, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -92,7 +92,7 @@ export function SelectionCheckbox({
 }: {
   ids: string[];
   selected: Set<string>;
-  onChange: (ids: string[], checked: boolean) => void;
+  onChange: (ids: string[], checked: boolean, shift: boolean) => void;
   label: string;
 }) {
   const count = ids.filter((id) => selected.has(id)).length;
@@ -102,7 +102,9 @@ export function SelectionCheckbox({
       disabled={!ids.length}
       checked={!!ids.length && count === ids.length}
       indeterminate={count > 0 && count < ids.length}
-      onCheckedChange={(checked) => onChange(ids, checked === true)}
+      onCheckedChange={(checked, { event }) =>
+        onChange(ids, checked === true, event instanceof MouseEvent && event.shiftKey)
+      }
     />
   );
 }
@@ -111,7 +113,7 @@ export function rowNavigation(open: () => void) {
     tabIndex: 0,
     className:
       "cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-    onClick(event: MouseEvent<HTMLElement>) {
+    onClick(event: ReactMouseEvent<HTMLElement>) {
       if (
         (event.target as HTMLElement).closest(
           "button,a,input,label,[role=checkbox],[role=combobox]",
